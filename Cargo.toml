@@ -1,0 +1,84 @@
+# =============================================================================
+#  R E P S   ·   sys-lib
+# =============================================================================
+[package]
+name    = "sys-lib"
+version = "0.1.0"
+
+# Minimum Supported Rust Version (MSRV)
+# 1.89: `std::fs::File::lock` and `File::try_lock` are stable from 1.89.0, so
+# the process guard needs no lock FFI (dev/PLAN.md, D-002).
+rust-version = "1.89"
+edition = "2024"
+
+# License
+license = "Apache-2.0 OR MIT"
+
+# Readme
+readme = "README.md"
+
+# Description
+description = "System facts for Rust services: OS, CPU, memory, disks, network, host, this process, virtualization, power, and device identity, container-aware by default, plus build info, instance info, and a process guard. No subprocesses, zero third-party dependencies."
+
+# Keywords (5 max)
+keywords = ["system", "hardware", "cpu", "memory", "os"]
+
+# Categories
+categories = ["os", "hardware-support"]
+
+# Links
+homepage      = "https://github.com/jamesgober/sys-lib"
+repository    = "https://github.com/jamesgober/sys-lib"
+documentation = "https://docs.rs/sys-lib"
+
+# Authors
+authors = ["James Gober <me@jamesgober.com>"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+# Every platform's items appear on docs.rs, each with its doc(cfg) badge.
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
+
+[lib]
+name = "sys_lib"
+path = "src/lib.rs"
+
+
+# FEATURE FLAGS
+# #################################
+[features]
+default = ["instance", "guard"]
+
+# Instance info: `Instance`, `InstanceId` (brings clock-lib and id-forge).
+instance = []
+
+# Process guard: `process::guard`, `Guard` (brings path-lib).
+guard = []
+
+# Device identity: the `device` module (brings crypt-io). Off by default:
+# device identifiers carry privacy obligations; the caller opts in knowingly.
+device-id = []
+
+
+# DEPENDENCIES
+# #################################
+[dependencies]
+# None yet. Planned first-party dependencies and the reason for each are
+# listed in dev/PLAN.md section 16; each is added, by published version, with
+# the first code that needs it. No third-party runtime dependencies.
+
+
+# DEV DEPENDENCIES
+# #################################
+[dev-dependencies]
+
+
+# RELEASE PROFILE
+# #################################
+[profile.release]
+opt-level     = 3
+lto           = "fat"
+codegen-units = 1
+panic         = "abort"
+strip         = "symbols"
