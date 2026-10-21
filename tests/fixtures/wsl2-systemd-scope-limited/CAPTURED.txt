@@ -1,0 +1,7 @@
+fixture: wsl2-systemd-scope-limited
+captured: 2026-10-21T23:17:24Z
+capture.sh: version 1
+kernel: 6.6.87.2-microsoft-standard-WSL2
+machine: x86_64
+as root: no
+files: 1006

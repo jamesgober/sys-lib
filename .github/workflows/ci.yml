@@ -92,8 +92,13 @@ jobs:
         run: cargo check --target ${{ matrix.target }} --all-features
       - name: Check (no default features)
         run: cargo check --target ${{ matrix.target }} --no-default-features
-      - name: Clippy (all features)
-        run: cargo clippy --target ${{ matrix.target }} --all-features -- -D warnings
+      # --all-targets compiles the unit tests too, and with them the layout
+      # oracles in src/sys/<platform>/ffi.rs (dev/PLAN.md, D-012): every OS
+      # struct is checked against libc or windows-sys for this target.
+      - name: Clippy and layout oracles (all features)
+        run: cargo clippy --target ${{ matrix.target }} --all-targets --all-features -- -D warnings
+      - name: Clippy and layout oracles (no default features)
+        run: cargo clippy --target ${{ matrix.target }} --all-targets --no-default-features -- -D warnings
 
   no-subprocess:
     name: No subprocess at run time

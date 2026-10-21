@@ -11,6 +11,30 @@
 
 ## [Unreleased]
 
+The design lock (0.2.0, in progress). No public API beyond `VERSION` yet.
+
+### Added
+
+- `docs/API.md`: the complete 1.0 public API, every item with its signature,
+  errors, platform behaviour, cost, the version it arrives in, and examples.
+- `docs/SOURCES.md`: for every reading and every OS, the file, system call, or
+  API it comes from, with units, privileges, and quirks.
+- The OS declaration lists in `src/sys/{linux,apple,windows}/ffi.rs` (crate
+  private): every system call, struct, and constant the readings will use,
+  with size and alignment assertions per target and compile-time checks of
+  every field offset against `libc` and `windows-sys` (dev-dependencies only).
+  Windows functions are imported with `raw-dylib`. The checks already caught
+  one difference: musl's `struct rusage` is 128 bytes longer than glibc's.
+- `tests/fixtures/capture.sh` and two fixture machines captured with it:
+  `wsl2` and `wsl2-systemd-scope-limited` (a nested cgroup v2 limit of 256 MiB
+  and 1.5 CPUs). A manual `Fixtures` workflow captures container fixtures on a
+  GitHub runner.
+
+### Changed
+
+- CI's cross-target job compiles the unit tests too, so the layout checks run
+  for musl, 32-bit Windows, Android, and iOS.
+
 ---
 
 ## [0.1.0] - 2026-10-21

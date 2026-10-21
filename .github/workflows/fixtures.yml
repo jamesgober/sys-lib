@@ -1,0 +1,38 @@
+name: Fixtures
+
+# Captures container fixture machines on a GitHub runner (cgroup v2, Docker) with
+# tests/fixtures/capture.sh and uploads them as an artifact. Run by hand; the
+# result is reviewed before it is committed. Nothing here runs on push.
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  capture:
+    name: Capture container fixtures
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: docker-cgroup2-limited
+        run: |
+          mkdir -p out
+          docker run --rm --memory=256m --memory-reservation=200m --cpus=1.5 --cpuset-cpus=0-1 \
+            -v "$PWD/tests/fixtures:/work:ro" -v "$PWD/out:/out" ubuntu:24.04 \
+            bash /work/capture.sh docker-cgroup2-limited /out
+      - name: minimal-scratch
+        # A scratch or distroless image has no shell to run the script in, so this
+        # emulates one: the os-release files and any machine id are removed first.
+        run: |
+          docker run --rm -v "$PWD/tests/fixtures:/work:ro" -v "$PWD/out:/out" ubuntu:24.04 \
+            bash -c 'rm -f /etc/os-release /usr/lib/os-release /etc/machine-id /var/lib/dbus/machine-id && bash /work/capture.sh minimal-scratch /out'
+      - name: Summary
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" out
+          for d in out/*; do echo "== $d"; cat "$d/CAPTURED.txt"; done
+      - uses: actions/upload-artifact@v5
+        with:
+          name: fixtures
+          path: out/
+          retention-days: 7
