@@ -26,7 +26,7 @@
 set -euo pipefail
 export LC_ALL=C
 
-readonly SCRIPT_VERSION=1
+readonly SCRIPT_VERSION=2
 readonly MAX_BYTES=1048576
 
 die() { echo "capture.sh: $*" >&2; exit 1; }
@@ -133,7 +133,9 @@ memory.pressure cpu.max cpuset.cpus.effective"
 cgroup_files_v1="memory.stat memory.usage_in_bytes memory.limit_in_bytes memory.soft_limit_in_bytes \
 memory.memsw.limit_in_bytes cpu.cfs_quota_us cpu.cfs_period_us cpuset.cpus cpuset.effective_cpus"
 while IFS=' ' read -r _ _ _ root mount _ rest; do
-    fstype="${rest#* - }"; fstype="${fstype%% *}"
+    # The optional fields before " - " may be absent (Docker), so match on a
+    # leading space added here rather than on the field after `options`.
+    fstype=" $rest"; fstype="${fstype#* - }"; fstype="${fstype%% *}"
     case "$fstype" in
         cgroup2) files="$cgroup_files_v2" ;;
         cgroup) files="$cgroup_files_v1" ;;
