@@ -4,7 +4,7 @@
 >
 > **Read order:** [`../REPS.md`](../REPS.md) &rarr; [`DIRECTIVES.md`](./DIRECTIVES.md) &rarr; **this file** &rarr; [`ROADMAP.md`](./ROADMAP.md).
 >
-> **Status:** scaffold, `0.1.0`. Design lock is `0.2.0`; the public API is then written out in full in [`../docs/API.md`](../docs/API.md).
+> **Status:** design locked, `0.2.0` (2026-10-22): the public API is written out in full in [`../docs/API.md`](../docs/API.md) and approved. The boot kit is `0.3.0`.
 
 ---
 
@@ -145,12 +145,12 @@ The lock comes before any data file is touched, the umask before any file is cre
 | Build | `build` | compile-time facts of the application (name, version, commit, dirty, build time, profile, target, rustc, features) |
 | Instance | `instance` | start-time facts of this run (ULID, start time, host, pid, user at start) |
 | Process | `process` | this process: memory, CPU time, threads, descriptors, limits, elevation, user; the process guard |
-| Operating system | `os` | kind, name, version, kernel, distribution, edition, form factor |
-| CPU | `cpu` | name, vendor, architecture, counts, frequency, usage, features, topology, caches, NUMA, quota |
+| Operating system | `os` | kind, name, version, kernel, distribution (on every OS), edition, form factor |
+| CPU | `cpu` | name, vendor, architecture and bitness, counts, frequency, usage, load average, features, topology, caches, NUMA, quota |
 | Memory | `mem` | total, used, free, percentages, swap, page size, limits (cgroup, job object), pressure |
 | Disks | `disk` | space for a path, mounted filesystems, kind (SSD, HDD, network, removable) |
-| Network | `net` | interfaces, MAC addresses (permanent or random), addresses, state, speed, counters |
-| Host | `host` | host name, uptime, boot time, load average, time zone name, locale, hardware model |
+| Network | `net` | interfaces, MAC addresses (permanent or random), addresses, state, speed, download and upload traffic, connection counts |
+| Host | `host` | host name, uptime, boot time, time zone name, locale, hardware model |
 | Virtualization | `virt` | VM, hypervisor vendor, container runtime, Kubernetes, WSL |
 | Power | `power` | battery presence, charge, state, AC power |
 | Device identity | `device` (feature `device-id`) | application-scoped device id, fingerprint, stability report |
@@ -174,7 +174,7 @@ The lock comes before any data file is touched, the umask before any file is cre
 | disk SMART health, fan control, CPU governors | privileged, vendor-specific, and changes the system | not planned |
 | TPM, Secure Enclave, hardware attestation, device keys | cryptographic proof of a device: the right tool for authentication | `key-vault` / `shield-sec` (future) |
 | kernel tuning (`sysctl` writes, registry writes) | changes the system | not planned |
-| per-process network connections (`netstat`) | other processes, privacy | not planned |
+| listing network connections (`netstat`: addresses, ports, owning programs) | other processes, privacy | not planned; aggregate counts are `net::connections()` (D-025) |
 | package lists, installed software, drivers | inventory, not runtime facts | not planned |
 
 ---
@@ -237,7 +237,7 @@ The lock comes before any data file is touched, the umask before any file is cre
 
 | Kind | Cached? | Example | Cost after first call | Why |
 |---|---|---|---|---|
-| Compile-time constant | in the binary | `os::kind()`, `cpu::arch()`, `cpu::is_64()` | 0 (folded by the compiler) | fixed when compiled |
+| Compile-time constant | in the binary | `os::kind()`, `cpu::arch()`, `cpu::arch().is_64bit()` | 0 (folded by the compiler) | fixed when compiled |
 | Static fact | `OnceLock`, written once | `os::name()`, `cpu::name()`, `cpu::physical()`, `cpu::features()`, `virt::detect()` | about 1 ns (one atomic load and a pointer) [est.] | cannot change while the process runs, or changes so rarely (OS upgrade) that the process restarts anyway |
 | Live reading | never | `mem::used()`, `host::uptime()`, `disk::space()`, `host::name()` | one file read or system call, 0.2 to 20 µs [est.] | changes at any moment |
 | Sampled value | caller-owned state | `cpu::Sampler`, `net::Sampler` | one reading plus a subtraction | needs two readings |
@@ -696,6 +696,7 @@ Convention in every example: `use sys_lib as sys;`, then `sys::os::name()`.
 | root | ROOT-02 to ROOT-04 | `Error`, `Result`, `Bytes`, `Percent` | 0.3 |
 | root | ROOT-05 | `Mhz` | 0.4 |
 | root | ROOT-06 | `summary()`, `Summary` (no identifiers, no host or user name) | 0.5 |
+| root | ROOT-07 | `Rate` (bytes per second; `.bits()`) | 0.4 |
 | build | BLD-01 to BLD-05 | `build::emit()`, `build_info!()`, `BuildInfo` and `Display`, `write_kv`/`write_json`, `public()` | 0.3 |
 | build | BLD-06 | `build::emitter()` builder | 0.4 |
 | instance | INS-01 to INS-06 | `Instance::start()`, `instance::current()`, accessors, `InstanceId`, writers, `is_current_process` | 0.3 |
@@ -703,9 +704,9 @@ Convention in every example: `use sys_lib as sys;`, then `sys::os::name()`.
 | process | PRC-20 to PRC-23 | `process::guard(name)`, `Guard::builder`, `GuardReport`, lock directory hardening | 0.3 |
 | process | PRC-02 to PRC-04, PRC-06 to PRC-10, PRC-13, PRC-14 | `parent_id`, `memory`, `peak_memory`, `cpu_time`, `threads`, `open_files`, `limits`, `started_at`, `info`, `CpuSampler` | 0.4 |
 | process | PRC-05 | `memory_detail()` | 0.5 |
-| os | OS-01 to OS-07 | `kind`, `is_*` constants, `name`, `version`, `kernel`, `distro`, `info` | 0.3 |
+| os | OS-01 to OS-07 | `kind`, `is_*` constants, `name`, `version`, `kernel`, `distro`/`distro_id`/`is_like`/`os_release` (a distribution name on every OS), `info` | 0.3 |
 | os | OS-08 to OS-13 | `edition`, `is_server_edition`, `codename`, `is_64bit`, `form_factor`, `detect_form_factor`, `is_desktop`/`is_laptop`/`is_mobile`/`is_phone`/`is_tablet`/`is_server` | 0.5 |
-| cpu | CPU-01 to CPU-06 | `arch`/`is_64`/`is_32`, `logical`, `physical`, `available` (affinity, cpuset, quota), `name`/`raw_name`, `vendor` | 0.3 |
+| cpu | CPU-01 to CPU-06 | `arch`, `is_64bit`/`is_32bit` (the processor), `logical`, `physical`, `available` (affinity, cpuset, quota), `name`/`raw_name`, `vendor` | 0.3 |
 | cpu | CPU-07 to CPU-12 | `packages`, `count`, `online`, `quota`, `frequency`, `current_frequency` | 0.4 |
 | cpu | CPU-20 to CPU-25 | `usage`, `usage_over`, `used`, `free`, `Sampler` (total, per core, into a buffer), `Usage`, `times` | 0.4 |
 | cpu | CPU-30, CPU-31 | `has(feature)`, `features()` | 0.4 |
@@ -715,9 +716,11 @@ Convention in every example: `use sys_lib as sys;`, then `sys::os::name()`.
 | disk | DSK-01 to DSK-03 | `space(path)`, `list()`, `list_with(options)` | 0.4 |
 | disk | DSK-04, DSK-05 | `DiskKind` SSD/HDD, `of(path)` | 0.5 |
 | net | NET-01 to NET-03 | `interfaces()`, `Mac`/`MacKind`, `addresses()` | 0.4 |
-| net | NET-04 to NET-06 | `counters()`, `Sampler`, `primary()` | 0.5 |
+| net | NET-04, NET-05, NET-08, NET-09 | `totals()`, `counters()`, `Sampler`, `traffic()`/`traffic_over()` (download and upload), `connections()` (counts only) | 0.4 |
+| net | NET-06 | `primary()` | 0.5 |
 | host | HST-01 | `name()` | 0.3 |
-| host | HST-02 to HST-04 | `uptime`, `boot_time`, `load_average` | 0.4 |
+| host | HST-02, HST-03 | `uptime`, `boot_time` (HST-04 `load_average` became CPU-14 `cpu::load()`) | 0.4 |
+| cpu | CPU-14 | `load()`, `Load::per_cpu()` | 0.4 |
 | host | HST-05 to HST-07 | `timezone`, `locale`, `model` | 0.5 |
 | virt | VRT-01 to VRT-04 | `detect`, `is_vm`/`is_container`/`is_wsl`/`is_kubernetes`, `hypervisor`/`container`, evidence | 0.5 |
 | power | PWR-01 to PWR-03 | `has_battery`, `battery`, `on_ac` | 0.5 |
@@ -994,7 +997,7 @@ Every entry has a test. The ids are stable; the roadmap and the tests refer to t
 
 **OS identity**
 
-- E-47 no os-release (scratch, distroless): `name()` is `"Linux"`, `distro()` None, `info().name_source` is fallback.
+- E-47 no os-release and no legacy release file (scratch, distroless): `name()` and `distro()` are `"Linux"`, `distro_id()` is `linux`, `os_release()` is `None`, `info().name_source` is fallback; with only a legacy file (`/etc/redhat-release`, `/etc/debian_version`, ...), the distribution comes from it and `os_release().source` is `LegacyRelease`.
 - E-48 os-release with single and double quotes, backslash escapes, comments, blank lines, invalid lines, and the `/etc/os-release` symlink to `/usr/lib/os-release`: parsed per os-release(5); invalid lines skipped.
 - E-49 Windows 11 whose registry `ProductName` says "Windows 10": named Windows 11 from the build number (22000 and later); Windows Server named from `wProductType` and build (17763 is 2019, 20348 is 2022, 26100 is 2025).
 - E-50 an executable without a Windows 10 compatibility manifest: `RtlGetVersion` still reports the real version (unlike `GetVersionEx`).
@@ -1098,20 +1101,20 @@ Each has a recommendation. The recommendation stands unless James overrides it; 
 | OD-1 | MSRV: 1.85 with in-house lock calls, or 1.89 | **1.89.** `File::lock` and `File::try_lock` are stable since 1.89.0, removing lock FFI; a new crate has no users to break; clock-lib, path-lib, id-forge, and crypt-io all build on 1.89 | D-002 |
 | OD-2 | How to call the OS: in-house declarations; `libc` + `windows-sys`; build on sysinfo | **In-house**, with `libc` per target as the recorded fallback. sysinfo is rejected: MSRV 1.95, host memory by default, the large `windows` crate | D-003 |
 | OD-3 | Device id hash: keyed BLAKE3 (crypt-io); HMAC-SHA256 like systemd; in-house | **Keyed BLAKE3 through crypt-io.** Cryptography is never written in-house; it is the portfolio's MAC already; faster; compatibility with systemd's value is not a goal | D-006 |
-| OD-4 | Default device-id basis: `Install`, `Hardware`, or a composite | **`Install`.** Unprivileged on Linux, macOS (platform UUID), and Windows; systemd's recommended source; reads no serial numbers; a reinstall is often the right moment for a new device. A composite is rejected: any part changing changes the whole id | open |
-| OD-5 | `Bytes` default `Display` units: IEC ("125.6 GiB"), JEDEC ("125.6 GB", 1024-based, what Windows Explorer shows), SI ("134.9 GB") | **IEC by default**, `{:#}` for SI, `.jedec()` for the "127 GB" style. IEC labels are the only unambiguous choice. Switching the default to JEDEC is a one-line change before 0.3 and a breaking change after 1.0 | open (James) |
-| OD-6 | `os::is_device()`: keep or rename | **Rename to `is_mobile()`.** "Device" is every computer; the intent is phones, tablets, handhelds, wearables. No alias | open |
+| OD-4 | Default device-id basis: `Install`, `Hardware`, or a composite | **`Install`.** Unprivileged on Linux, macOS (platform UUID), and Windows; systemd's recommended source; reads no serial numbers; a reinstall is often the right moment for a new device. A composite is rejected: any part changing changes the whole id | accepted, D-021 |
+| OD-5 | `Bytes` default `Display` units: IEC ("125.6 GiB"), JEDEC ("125.6 GB", 1024-based, what Windows Explorer shows), SI ("134.9 GB") | **IEC by default**, `{:#}` for SI, `.jedec()` for the "127 GB" style. IEC labels are the only unambiguous choice. Switching the default to JEDEC is a one-line change before 0.3 and a breaking change after 1.0 | accepted, D-021 |
+| OD-6 | `os::is_device()`: keep or rename | **Rename to `is_mobile()`.** "Device" is every computer; the intent is phones, tablets, handhelds, wearables. No alias | accepted, D-021 |
 | OD-7 | CPU usage Tier 1: blocking 100 ms, or a psutil-style hidden baseline | **Blocking, 100 ms, named and documented.** A hidden baseline is global mutable state and two callers reset each other's window | D-007 |
 | OD-8 | `mem::total()` in containers: the limit or the host | **The limit.** That is what the process can use and what the OOM killer enforces; `host_total()` gives the host. Differs from sysinfo and psutil; the README says so in its first feature line | D-005 |
-| OD-9 | Default lock location for `process::guard(name)` | **path-lib's runtime directory**, with `.lock_dir(data_dir)` documented as the right choice for databases (two copies under different users still exclude each other) | open |
+| OD-9 | Default lock location for `process::guard(name)` | **path-lib's runtime directory**, with `.lock_dir(data_dir)` documented as the right choice for databases (two copies under different users still exclude each other) | accepted, D-021 |
 | OD-10 | `device-id` default | **Off.** It brings crypt-io and BLAKE3, and device identifiers carry privacy obligations | D-006 |
-| OD-11 | Android and iOS support level | **Build-checked best effort for 1.x.** No portfolio product targets them; emulator CI costs time on every push | open |
-| OD-12 | Instance user field: effective user after the privilege drop, or the user at start | **`user_at_start()` in the instance, `process::user()` for the current user.** The instance is created before the drop | open |
-| OD-13 | `serde` now; a separate units crate | **Neither for 1.0.** Hand-written key-value and JSON writers cover logs and health endpoints; add `serde` behind a non-default feature only when a caller asks | open |
-| OD-14 | Owner-only directories on Windows: sys-lib, path-lib, or shield-sec | **path-lib**, which owns directory creation; until then the guard reports the gap | open |
-| OD-15 | Time types in the public API: std or clock-lib | **std `Duration` and `SystemTime`.** clock-lib types would tie sys-lib's major version to clock-lib's | open |
-| OD-16 | Crate name and import convention | **`sys-lib`, `use sys_lib as sys;` in every example.** Matches the `-lib` taxonomy; the alias gives the `sys::os::name()` shape | open |
-| OD-17 | Collection and visibility | **Public, in `lib-collection`.** Nothing proprietary; a general utility | open |
+| OD-11 | Android and iOS support level | **Build-checked best effort for 1.x.** No portfolio product targets them; emulator CI costs time on every push | accepted, D-021 |
+| OD-12 | Instance user field: effective user after the privilege drop, or the user at start | **`user_at_start()` in the instance, `process::user()` for the current user.** The instance is created before the drop | accepted, D-021 |
+| OD-13 | `serde` now; a separate units crate | **Neither for 1.0.** Hand-written key-value and JSON writers cover logs and health endpoints; add `serde` behind a non-default feature only when a caller asks | accepted, D-021 |
+| OD-14 | Owner-only directories on Windows: sys-lib, path-lib, or shield-sec | **path-lib**, which owns directory creation; until then the guard reports the gap | accepted, D-021 |
+| OD-15 | Time types in the public API: std or clock-lib | **std `Duration` and `SystemTime`.** clock-lib types would tie sys-lib's major version to clock-lib's | accepted, D-021 |
+| OD-16 | Crate name and import convention | **`sys-lib`, `use sys_lib as sys;` in every example.** Matches the `-lib` taxonomy; the alias gives the `sys::os::name()` shape | accepted, D-021 |
+| OD-17 | Collection and visibility | **Public, in `lib-collection`.** Nothing proprietary; a general utility | accepted, D-021 |
 
 ---
 
@@ -1159,3 +1162,10 @@ Other ideas:
 | D-018 | 2026-10-21 | Fixtures store symbolic links as `<path>.link` files; `capture.sh` replaces identifiers (host name, machine id, MACs, ARM serial, user names in paths, time zone) and never copies DMI serials, UUIDs, keys, or service-account files; `tests/fixtures/` is left out of the published crate, and fixture tests skip when the tree is absent | fixtures must survive any checkout and never carry a real identifier; two thousand small files do not belong in every user's download |
 | D-019 | 2026-10-21 | Docker fixtures are captured on a GitHub runner by a manual workflow (`fixtures.yml`); `minimal-scratch` is emulated in a container with the os-release files and machine id removed | the development machine has no Docker; a scratch image has no shell to run the capture in |
 | D-020 | 2026-10-21 | macOS `vm_statistics64` is declared at its long-standing 152-byte length and that count is passed to `host_statistics64` | newer SDKs append fields; the kernel fills at most the count it is given, so the shorter struct is correct on every macOS version and the oracle checks its prefix |
+| D-021 | 2026-10-22 | James approved `docs/API.md` and accepted every open decision as recommended: OD-4 `Basis::Install` by default; OD-5 IEC units by default (`125.6 GiB`), `{:#}` SI, `.jedec()`; OD-6 `is_mobile()`; OD-9 path-lib's runtime directory for the guard, `lock_dir` for databases; OD-11 Android and iOS build-checked best effort; OD-12 `user_at_start()`; OD-13 no `serde` and no units crate for 1.0; OD-14 owner-only Windows directories in path-lib; OD-15 std time types; OD-16 `sys-lib` imported as `sys`; OD-17 public in `lib-collection` | the design lock (0.2.0 exit) |
+| D-022 | 2026-10-22 | `os::distro()` and `os::distro_id()` answer on every OS (Linux: os-release `NAME` and `ID`; elsewhere the OS: "Windows"/`windows`, "macOS"/`macos`, "Android", "iOS", "FreeBSD"), never empty; the os-release struct is `OsRelease` behind `os::os_release()`; `os::is_like(id)` checks `ID` and `ID_LIKE`; systems without os-release fall back to the legacy release files in a fixed order, then "Linux"; tested against a corpus of 40 or more real distributions | James asked for a distribution answer on every OS, accurate on Linux; os-release is what systemd and package managers read, so sys-lib agrees with them |
+| D-023 | 2026-10-22 | The load average is `cpu::load()` (CPU-14, 0.4), with `Load::per_cpu()`; `host::load_average()` (HST-04) is retired. Windows returns `Ok(None)` | James looked for load under CPU, where people expect it; one name only; Windows keeps no load average and none is simulated |
+| D-024 | 2026-10-22 | `cpu::is_64bit()` and `cpu::is_32bit()` (renamed from `is_64`/`is_32`) answer for the processor, so a 32-bit build on a 64-bit machine reports 64-bit; `Arch::is_64bit()` is the build's compile-time constant; `os::is_64bit()` stays the OS bitness | James's names; "the CPU is 64-bit" means the hardware, and the build constant stays one call away |
+| D-025 | 2026-10-22 | Network traffic moves from 0.5 to 0.4 and grows: `net::totals()`, `counters()`, blocking `traffic()`/`traffic_over()` (1 s window), a caller-owned `Sampler` whose `sample()` allocates nothing, `sample_per_interface()`, and the `Rate` type (ROOT-07). `net::connections()` (NET-09) reports TCP and UDP socket counts only | James asked for download, upload, and connections. Aggregate counts are kernel statistics, not other people's data: nothing is listed (no addresses, ports, or owners), so the out-of-scope reason for `netstat` does not apply |
+| D-026 | 2026-10-22 | The documented install line is Cargo's rename, `sys = { package = "sys-lib", version = "..." }`, so code writes `sys::` with no import; `use sys_lib as sys;` stays the alternative and the form doc tests use | `sys` and `system` are taken on crates.io (checked 2026-10-22); James wants `sys::` without underscores |
+| D-027 | 2026-10-22 | The `docker-cgroup1-limited` and `ubuntu-24.04-desktop-amd` fixtures move from 0.2 to 0.3 | both need machines this project does not have yet (a cgroup v1 host; a bare-metal Linux desktop); 0.2 ships no code that reads them, and 0.3's exit (cgroup CPU limits, distribution and topology tests) requires them |

@@ -11,7 +11,9 @@
 //!
 //! ## Tier 1
 //!
-//! The convention in every example is `use sys_lib as sys;`:
+//! Add it with Cargo's rename, `sys = { package = "sys-lib", version = "0.2" }`,
+//! and every file writes `sys::`; without the rename, `use sys_lib as sys;`
+//! does the same (the examples use that form so they compile either way):
 //!
 //! ```
 //! use sys_lib as sys;
@@ -23,22 +25,24 @@
 //!
 //! ```text
 //! sys::os::name()                // "Ubuntu 24.04.1 LTS", "macOS 15.1 Sequoia", "Windows 11 Pro"
+//! sys::os::distro()              // "Ubuntu"; "Windows", "macOS" elsewhere
 //! sys::cpu::name()               // "AMD Ryzen 9 7950X"
 //! sys::cpu::physical()           // cores
 //! sys::cpu::available()          // what this process may use (affinity, cpuset, quota)
 //! sys::mem::total()?             // the container's limit inside a container
 //! sys::mem::used_percent()?      // "32.8%"
 //! sys::cpu::used()?              // blocks for 100 ms
+//! sys::net::traffic()?           // download and upload; blocks for 1 s
 //! sys::disk::space(path)?        // the filesystem holding `path`
 //! sys::process::guard("site")?   // single-instance lock, umask, open-file limit
 //! ```
 //!
 //! ## Status
 //!
-//! Scaffold. The design is written down in `dev/PLAN.md` and the milestone
-//! schedule in `dev/ROADMAP.md` (both in the
-//! [repository](https://github.com/jamesgober/sys-lib)); the public API is
-//! locked in `0.2.0` and the boot kit ships in `0.3.0`.
+//! Design locked (`0.2.0`). The complete API is in `docs/API.md`, the design
+//! in `dev/PLAN.md`, and the schedule in `dev/ROADMAP.md` (all in the
+//! [repository](https://github.com/jamesgober/sys-lib)); the boot kit ships in
+//! `0.3.0`.
 
 #![doc(html_root_url = "https://docs.rs/sys-lib")]
 #![cfg_attr(docsrs, feature(doc_cfg))]

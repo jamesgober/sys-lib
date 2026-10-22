@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>unsafe</code> is denied at the crate root and allowed only in one OS module per platform.
     </p>
     <blockquote>
-        <strong>Status: scaffold (<code>0.1.0</code>).</strong> No functional code yet. The design is written down in <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a> and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>; the public API is locked in <code>0.2.0</code> and the boot kit ships in <code>0.3.0</code>.
+        <strong>Status: design locked (<code>0.2.0</code>).</strong> No functional code yet. The complete API is written down and approved in <a href="./docs/API.md"><code>docs/API.md</code></a>; the boot kit (build info, instance info, process guard, OS identity, CPU counts) ships in <code>0.3.0</code>. Design: <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a>; schedule: <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -40,16 +40,21 @@
 
 Static facts read once and cached (OS name and version, CPU model, core counts, CPU features, caches, topology, virtualization, form factor); live readings read fresh on every call with no allocation for single values (memory, swap, uptime, load, disk space, this process's memory and CPU time); caller-owned samplers for values that need two readings (CPU usage, network rates); the boot kit (build info, instance info, process guard); and an opt-in device id derived with a keyed hash, so raw hardware identifiers never leave the library. It does not inspect other processes, change system settings, or run in the background.
 
-The shape of the Tier 1 API, arriving from `0.3.0`:
+The shape of the Tier 1 API, arriving from `0.3.0`. Cargo's rename makes the crate `sys` in your code:
+
+```toml
+[dependencies]
+sys = { package = "sys-lib", version = "0.2" }
+```
 
 ```rust
-use sys_lib as sys;
-
 println!("{}", sys::os::name());                 // "Ubuntu 24.04.1 LTS", "macOS 15.1 Sequoia", "Windows 11 Pro"
+println!("{}", sys::os::distro());               // "Ubuntu"; "Windows" and "macOS" elsewhere
 println!("{}", sys::cpu::name());                // "AMD Ryzen 9 7950X"
 println!("{} cores, {} threads", sys::cpu::physical(), sys::cpu::logical());
 println!("{} of {}", sys::mem::used()?, sys::mem::total()?);    // "41.2 GiB of 125.6 GiB"
 println!("{}", sys::cpu::used()?);               // "12.4%" (blocks for 100 ms)
+let t = sys::net::traffic()?;                    // download and upload (blocks for 1 s)
 let _guard = sys::process::guard("site")?;      // one copy only; safe permissions
 ```
 

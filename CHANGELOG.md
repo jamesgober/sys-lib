@@ -11,7 +11,12 @@
 
 ## [Unreleased]
 
-The design lock (0.2.0, in progress). No public API beyond `VERSION` yet.
+---
+
+## [0.2.0] - 2026-10-22
+
+The design lock: the complete 1.0 API, written down and approved. No public
+API beyond `VERSION` yet; the boot kit arrives in 0.3.0.
 
 ### Added
 
@@ -28,12 +33,30 @@ The design lock (0.2.0, in progress). No public API beyond `VERSION` yet.
 - `tests/fixtures/capture.sh` and two fixture machines captured with it:
   `wsl2` and `wsl2-systemd-scope-limited` (a nested cgroup v2 limit of 256 MiB
   and 1.5 CPUs). A manual `Fixtures` workflow captures container fixtures on a
-  GitHub runner.
+  GitHub runner, which captured `docker-cgroup2-limited` (256 MiB, 1.5 CPUs,
+  cpuset of two) and `minimal-scratch` (no os-release, no machine id).
+- API additions at the design review: `os::distro()` and `os::distro_id()`
+  answer on every OS ("Ubuntu", "Windows", "macOS"), with `os::is_like()` and
+  `os::os_release()`; `cpu::load()` with `Load::per_cpu()`; `cpu::is_64bit()`
+  and `cpu::is_32bit()` for the processor; network download and upload
+  (`net::traffic()`, `net::Sampler`, `net::totals()`), connection counts
+  (`net::connections()`), and the `Rate` type.
+- The documented install line is Cargo's rename,
+  `sys = { package = "sys-lib", version = "0.2" }`, so code writes `sys::`.
 
 ### Changed
 
 - CI's cross-target job compiles the unit tests too, so the layout checks run
   for musl, 32-bit Windows, Android, and iOS.
+- `host::load_average()` became `cpu::load()`; `cpu::is_64()`/`is_32()` became
+  `cpu::is_64bit()`/`is_32bit()` and now answer for the processor; network
+  traffic moved from 0.5 to 0.4.
+- `tests/fixtures/` and `fuzz/` are left out of the published package.
+
+### Fixed
+
+- `capture.sh` found no cgroup files in Docker, whose mountinfo lines have no
+  optional fields.
 
 ---
 
@@ -63,5 +86,6 @@ The scaffold and the plan. No functional code yet.
   `dev/ROADMAP.md`.
 - `tests/fixtures/` and `fuzz/` skeletons.
 
-[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jamesgober/sys-lib/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/sys-lib/releases/tag/v0.1.0

@@ -57,7 +57,8 @@ First version, written at the `0.2.0` design lock; it grows with each version an
 | `os::name()` | `PRETTY_NAME` in `/etc/os-release`, then `/usr/lib/os-release` (os-release(5) quoting and escapes); fallback `"Linux"` | `"macOS " + kern.osproductversion + codename` (codename table: 11 Big Sur, 12 Monterey, 13 Ventura, 14 Sonoma, 15 Sequoia, 26 Tahoe) | product from the build number (22000 and later: Windows 11; Server: `wProductType` from `RtlGetVersion`, 17763 2019, 20348 2022, 26100 2025), edition from `EditionID` under `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion` |
 | `os::version()` | `VERSION_ID` (dotted numbers; rolling releases have none) | `sysctlbyname("kern.osproductversion")` | `RtlGetVersion` (ntdll): major, minor, build; `UBR` from the same registry key as the revision |
 | `os::kernel()` | `/proc/sys/kernel/osrelease` | `kern.osrelease` (Darwin) | `"10.0.<build>.<UBR>"` |
-| `os::distro()` | os-release `ID`, `ID_LIKE`, `NAME`, `PRETTY_NAME`, `VERSION`, `VERSION_ID`, `VERSION_CODENAME`, `VARIANT_ID`, `BUILD_ID` | `None` | `None` |
+| `os::distro()`, `distro_id()` | os-release `NAME` and `ID` from `/etc/os-release`, then `/usr/lib/os-release`; then the legacy files `/etc/lsb-release` (`DISTRIB_ID`, `DISTRIB_DESCRIPTION`), `/etc/redhat-release` and its CentOS, Fedora, Rocky, AlmaLinux variants, `/etc/SuSE-release`, `/etc/alpine-release`, `/etc/arch-release`, `/etc/gentoo-release`, `/etc/slackware-version`, `/etc/debian_version`; then `"Linux"` / `linux` | `"macOS"` / `macos` (iOS: `"iOS"` / `ios`) | `"Windows"` / `windows` |
+| `os::os_release()`, `is_like()` | os-release `ID`, `ID_LIKE`, `NAME`, `PRETTY_NAME`, `VERSION`, `VERSION_ID`, `VERSION_CODENAME`, `VARIANT_ID`, `BUILD_ID` | `None`; `is_like` matches `macos` | `None`; `is_like` matches `windows` |
 | `os::edition()` | os-release `VARIANT_ID` | `None` | `EditionID` ("Professional", "ServerDatacenter") |
 | `os::is_64bit()` | compile target, or the kernel's machine (`/proc/sys/kernel/arch` [verify]) for a 32-bit process | `hw.optional.x86_64` / `hw.optional.arm64` | `IsWow64Process2` native machine |
 
@@ -96,6 +97,8 @@ SMBIOS chassis types (SMBIOS 3.5.0, 7.4.1, as systemd maps them, plus servers): 
 | `cpu::frequency()` | `cpuinfo_max_freq`, `base_frequency` (kHz) in `/sys/devices/system/cpu/cpu0/cpufreq/` | `hw.cpufrequency`, `hw.cpufrequency_max` (Intel Macs); Apple silicon: `None` | `CallNtPowerInformation(ProcessorInformation)` `MaxMhz`; registry `~MHz` as base |
 | `cpu::current_frequency()` | mean `scaling_cur_freq` over online CPUs | `None` | mean `CurrentMhz` from `CallNtPowerInformation` |
 | `cpu::native_arch()` | the compile target (qemu-user is not detected) | `sysctl.proc_translated` | `IsWow64Process2` native machine |
+| `cpu::load()` | `/proc/loadavg` | `getloadavg` | `Ok(None)`: Windows keeps no load average |
+| `cpu::is_64bit()` | a 64-bit build implies a 64-bit processor (32-bit Linux has no implementation yet) | every supported Mac is 64-bit | `IsWow64Process2` native machine for a 32-bit process |
 | `cpu::has()`, `features()` | `is_x86_feature_detected!` / `is_aarch64_feature_detected!` (std; checks OS support such as XCR0 for AVX state) | same | same |
 | `cpu::topology()` | `topology/{core_id,physical_package_id,core_cpus_list}`; Intel hybrid: `/sys/devices/cpu_core/cpus`, `/sys/devices/cpu_atom/cpus`; ARM: `cpu_capacity` | `hw.nperflevels`, `hw.perflevel0.physicalcpu` (performance), `hw.perflevel1.physicalcpu` (efficiency) | `RelationProcessorCore` with `EfficiencyClass` |
 | `cpu::caches()` | `cache/index*/{level,type,size,coherency_line_size,shared_cpu_list}` per CPU | `hw.l1dcachesize`, `hw.l1icachesize`, `hw.l2cachesize`, `hw.l3cachesize`, `hw.perflevelN.l2cachesize`, `hw.cachelinesize` | `RelationCache` |
@@ -168,7 +171,8 @@ Network filesystems (`nfs`, `nfs4`, `cifs`, `smb3`, `smbfs`, `fuse.sshfs`, `9p`,
 | kind | `type` (ARPHRD), `wireless/` or `phy80211/` present for Wi-Fi | `if_data.ifi_type` | `IfType` |
 | physical | `/sys/class/net/<if>/device` exists | built-in interfaces from IOKit [verify] | `IfType` Ethernet or Wi-Fi and not virtual (`ConnectionType`, the tunnel types) |
 | MTU, speed | `mtu`, `speed` (Mb/s; `-1` or an error means unknown) | `if_data.ifi_mtu`, `ifi_baudrate` | `Mtu`, `TransmitLinkSpeed` (maximum values mean unknown) |
-| counters | `/proc/net/dev` (one read) | `sysctl` `NET_RT_IFLIST2` (`if_data64`; the 32-bit counters wrap) | `GetIfTable2` (`MIB_IF_ROW2`, 64-bit) |
+| `net::totals()`, `counters()`, `traffic()`, `Sampler` | `/proc/net/dev` (one read; loopback left out of totals) | `sysctl` `NET_RT_IFLIST2` (`if_data64`; the 32-bit counters wrap) | `GetIfTable2` (`MIB_IF_ROW2`, 64-bit; software loopback left out) |
+| `net::connections()` | `/proc/net/snmp` `Tcp:` `CurrEstab`; `/proc/net/sockstat` and `/proc/net/sockstat6` `TCP inuse`, `tw`, `UDP inuse` | `net.inet.tcp.pcbcount`, `net.inet.udp.pcbcount` [verify]; established and time-wait `None` | `GetTcpStatisticsEx` (`dwCurrEstab`, `dwNumConns`) and `GetUdpStatisticsEx` (`dwNumAddrs`), IPv4 and IPv6 |
 | default route | `/proc/net/route` (destination 0) and `/proc/net/ipv6_route` | routing socket dump via `sysctl(NET_RT_DUMP)` [verify] | `GetBestInterfaceEx` towards 0.0.0.0 |
 
 Interface names from the OS are validated before they are used in a `/sys` path: no `/`, no `..`, at most 15 bytes on Linux (`IFNAMSIZ` 16 with the NUL).
@@ -180,7 +184,6 @@ Interface names from the OS are validated before they are used in a `/sys` path:
 | `host::name()` | `/proc/sys/kernel/hostname` | `gethostname` | `GetComputerNameExW(ComputerNameDnsHostname)` |
 | `host::uptime()` | `clock_gettime(CLOCK_BOOTTIME)` (includes suspend); fallback `/proc/uptime` | now minus `kern.boottime` | `GetTickCount64` |
 | `host::boot_time()` | `btime` in `/proc/stat` | `kern.boottime` | now minus `GetTickCount64` |
-| `host::load_average()` | `/proc/loadavg` | `getloadavg` | `Ok(None)`: Windows keeps no load average |
 | `host::timezone()` | `TZ` when it is a valid name; else the `/etc/localtime` link target after `zoneinfo/`; else `/etc/timezone`; offset and abbreviation from `localtime_r` (`tm_gmtoff`, `tm_zone`) | same; link target under `/var/db/timezone/zoneinfo/` | `GetDynamicTimeZoneInformation` (`TimeZoneKeyName`, `Bias`, daylight bias); IANA name from an embedded copy of CLDR `windowsZones.xml` |
 | `host::locale()` | `LC_ALL`, then `LC_MESSAGES`, then `LANG`, normalised (`en_US.UTF-8` to `en-US`) | `CFLocaleCopyCurrent` identifier (GUI applications have no `LANG`) | `GetUserDefaultLocaleName` |
 | `host::model()` | `/sys/class/dmi/id/{sys_vendor,product_name,product_family}` (0444); `/proc/device-tree/model` on ARM boards | `hw.model` | SMBIOS type 1 manufacturer, product, family |
