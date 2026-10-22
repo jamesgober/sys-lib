@@ -1,6 +1,6 @@
 fixture: wsl2
-captured: 2026-10-21T23:17:21Z
-capture.sh: version 1
+captured: 2026-10-22T06:50:45Z
+capture.sh: version 2
 kernel: 6.6.87.2-microsoft-standard-WSL2
 machine: x86_64
 as root: no

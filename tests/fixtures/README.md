@@ -31,13 +31,13 @@ Review a capture before committing it.
 |---|---|---|
 | `wsl2` | WSL 2, Ubuntu 24.04, kernel 6.6 (Microsoft), 32 logical CPUs, cgroup v2, systemd | WSL quirks (E-40 to E-46): no DMI, the WSL kernel release, the utility VM's memory |
 | `wsl2-systemd-scope-limited` | the same machine, inside `systemd-run --user --scope -p MemoryMax=256M -p MemoryHigh=200M -p CPUQuota=150%` | a cgroup v2 limit without a cgroup namespace (E-5), nested under ancestors whose limits are `max` (E-2), a fractional CPU quota (E-12) |
+| `docker-cgroup2-limited` | Ubuntu 24.04 container on a GitHub runner (kernel 7.0, Azure), `docker run --memory=256m --memory-reservation=200m --cpus=1.5 --cpuset-cpus=0-1`, captured by the `Fixtures` workflow | a cgroup namespace (path `/`, E-5), `memory.max` 256 MiB, `cpu.max` 1.5 CPUs, a cpuset of 2 CPUs (E-12), an overlay root, `/.dockerenv` |
+| `minimal-scratch` | the same runner, a container with the os-release files and machine id removed first | emulates a scratch or distroless image: no os-release, no machine id (E-47, E-69) |
 
 ## To capture
 
 | Fixture | How |
 |---|---|
-| `docker-cgroup2-limited` | the `Fixtures` workflow (`.github/workflows/fixtures.yml`, run by hand) on a GitHub runner |
-| `minimal-scratch` | the same workflow: a container with the os-release files and machine id removed, emulating a scratch or distroless image |
 | `docker-cgroup1-limited` | a host still on cgroup v1 (GitHub runners are cgroup v2 only) |
 | `ubuntu-24.04-desktop-amd` | a bare-metal Linux desktop |
 

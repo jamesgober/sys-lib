@@ -13,20 +13,23 @@ Exit: CI green on every job; the crate published to claim the name; decision log
 - [x] `dev/PLAN.md`, `dev/DIRECTIVES.md`, `dev/ROADMAP.md`; `tests/fixtures/` and `fuzz/` skeletons.
 - [x] CI: Linux, macOS, Windows on x86_64 and aarch64, stable and 1.89; cross-target `cargo check` (musl, i686 Windows, Android, iOS); security job (audit, deny); no-subprocess job.
 
-## v0.2.0 - Design lock
+## v0.2.0 - Design lock (DONE, 2026-10-22)
 Exit: James approves `docs/API.md`; layout tests pass on every target; every open decision answered.
-- [x] `docs/API.md` written for every item in `PLAN.md` section 13, with signatures, errors, platform tables, and examples; each item marked with the version it arrives in (the crate exposes only what is implemented). Awaiting James's approval.
+- [x] `docs/API.md` written for every item in `PLAN.md` section 13, with signatures, errors, platform tables, and examples; each item marked with the version it arrives in (the crate exposes only what is implemented). Approved by James, 2026-10-22.
 - [x] `docs/SOURCES.md` first version: every reading, every OS, the exact file, call, or API.
 - [x] `src/sys/<platform>/ffi.rs` declaration lists written and reviewed against the platform headers; `#[repr(C)]` layout assertions for every struct, and compile-time oracles against `libc` and `windows-sys` on all ten CI targets (D-012).
 - [x] Fixture capture script `tests/fixtures/capture.sh`.
-- [ ] The first five fixtures. Done: `wsl2` (and `wsl2-systemd-scope-limited`). Next: `docker-cgroup2-limited` and `minimal-scratch` from the `Fixtures` workflow once it is on `main` (D-019). Need a machine from James: `docker-cgroup1-limited` (a cgroup v1 host) and `ubuntu-24.04-desktop-amd` (a bare-metal Linux desktop).
-- [ ] Open decisions OD-4 to OD-6, OD-9, OD-11 to OD-17 answered by James or accepted as recommended, each recorded in the decision log.
+- [x] Fixtures: `wsl2`, `wsl2-systemd-scope-limited`, `docker-cgroup2-limited`, and `minimal-scratch` captured (the last two by the `Fixtures` workflow on a GitHub runner, D-019).
+- Moved to 0.3 (D-027): `docker-cgroup1-limited` and `ubuntu-24.04-desktop-amd`, which need a cgroup v1 host and a bare-metal Linux desktop. 0.3 reads the CPU side of cgroups and the desktop's os-release and topology, so both are needed by 0.3's exit; nothing in 0.2 reads them.
+- [x] Open decisions OD-4 to OD-6, OD-9, OD-11 to OD-17 accepted by James as recommended (D-021); his API additions recorded (D-022 to D-026).
 - [x] One new defence idea recorded (`PLAN.md` section 22: the layout oracle).
 
 ## v0.3.0 - Core: the boot kit (WASP boot phase 0)
 API: ROOT-02, ROOT-03, ROOT-04 · BLD-01 to BLD-05 · INS-01 to INS-06 · PRC-01, PRC-11, PRC-12, PRC-20 to PRC-23 · OS-01 to OS-07 · CPU-01 to CPU-06 · HST-01.
 Exit: WASP's phase 0 can be written against 0.3 (build info first line, instance id in every log line, guard before any file is opened, worker pool sized by `cpu::available()`); every 0.3 item has unit, fixture, live, and edge-case tests; the guard tests pass on all three OSes including `kill -9` recovery.
-- [ ] Bounded reader (`read.rs`); parser layer: `os_release`, `cpu_list`, `cpuinfo`, `proc_status`, `cgroup` (CPU side).
+- [ ] Bounded reader (`read.rs`); parser layer: `os_release` (and the legacy release files), `cpu_list`, `cpuinfo`, `proc_status`, `cgroup` (CPU side).
+- [ ] Fixtures moved from 0.2 (D-027): `docker-cgroup1-limited` (a cgroup v1 host) and `ubuntu-24.04-desktop-amd` (a bare-metal Linux desktop).
+- [ ] Distribution corpus: real os-release and legacy release files from at least 40 distributions, each with its expected `distro()`, `distro_id()`, `version()`, and `is_like()` answers (D-022).
 - [ ] `Error` with every variant and its "do" sentence tested; `Bytes` and `Percent` with the display rules of `PLAN.md` section 6.
 - [ ] `cpu::available()` complete: affinity, cpuset, and the cgroup v1/v2 CPU quota, with E-12 to E-15.
 - [ ] Process guard complete with every protection in `PLAN.md` section 9.3 and E-63 to E-68; first-party dependency path-lib wired.
@@ -36,15 +39,16 @@ Exit: WASP's phase 0 can be written against 0.3 (build info first line, instance
 - [ ] README quick start (Tier 1 first).
 
 ## v0.4.0 - Extended: live readings
-API: ROOT-05 · BLD-06 · PRC-02 to PRC-04, PRC-06 to PRC-10, PRC-13, PRC-14 · CPU-07 to CPU-12, CPU-20 to CPU-25, CPU-30, CPU-31 · MEM-01 to MEM-08 · DSK-01 to DSK-03 · NET-01 to NET-03 · HST-02 to HST-04.
+API: ROOT-05 · BLD-06 · PRC-02 to PRC-04, PRC-06 to PRC-10, PRC-13, PRC-14 · CPU-07 to CPU-12, CPU-14, CPU-20 to CPU-25, CPU-30, CPU-31 · MEM-01 to MEM-08 · DSK-01 to DSK-03 · NET-01 to NET-05, NET-08, NET-09 · HST-02, HST-03 · ROOT-07.
 Exit: tower's memory watermark and metrics-lib's system collector can be built on 0.4; every live reading allocation-free where promised; all container fixtures pass.
 - [ ] cgroup v1 and v2 and job-object memory limits with E-1 to E-12; the container CI job (`--memory`, `--cpus`) asserts real limits; nested job objects verified.
 - [ ] CPU sampler with E-20 to E-27; counting-allocator tests for every scalar reading.
 - [ ] Disk listing with E-36 to E-39; interfaces with E-53 to E-58.
+- [ ] Network traffic (`totals`, `traffic`, `Sampler`) and connection counts, with counter resets and wraps tested; `cpu::load()` (D-023, D-025).
 - [ ] Memory with E-28 to E-35; attack tests T5, T6, T7, T8.
 
 ## v0.5.0 - Feature complete
-API: OS-08 to OS-13 · CPU-13, CPU-32, CPU-40 to CPU-44 · MEM-09 · DSK-04, DSK-05 · NET-04 to NET-06 · HST-05 to HST-07 · VRT-01 to VRT-04 · PWR-01 to PWR-03 · PRC-05 · DEV-01 to DEV-07 · ROOT-06.
+API: OS-08 to OS-13 · CPU-13, CPU-32, CPU-40 to CPU-44 · MEM-09 · DSK-04, DSK-05 · NET-06 · HST-05 to HST-07 · VRT-01 to VRT-04 · PWR-01 to PWR-03 · PRC-05 · DEV-01 to DEV-07 · ROOT-06.
 Exit: every P0 to P2 item is implemented and tested on Linux, macOS, Windows; `docs/SOURCES.md`, `docs/PLATFORM-NOTES.md`, `docs/ARCHITECTURE.md` complete.
 - [ ] Form factor, virtualization (E-79 to E-91), power, time zone and locale (E-92 to E-95), hardware model.
 - [ ] Device identity with E-69 to E-78; crypt-io wired behind `device-id`; `docs/DEVICE-ID.md`; attack tests T1, T2, T3, T13, T14, T15.

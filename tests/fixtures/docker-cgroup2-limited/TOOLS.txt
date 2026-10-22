@@ -1,0 +1,31 @@
+# Output of the OS's tools at capture time (for live-comparison tests).
+## nproc
+2
+
+## nproc --all
+4
+
+## getconf _NPROCESSORS_CONF
+4
+
+## getconf _NPROCESSORS_ONLN
+4
+
+## getconf PAGESIZE
+4096
+
+## getconf CLK_TCK
+100
+
+## free -b
+               total        used        free      shared  buff/cache   available
+Mem:     16766414848  1019535360 13358919680    43601920  2771251200 15746879488
+Swap:     3221221376           0  3221221376
+
+## df -B1 --output=source,fstype,size,used,avail,target /
+Filesystem     Type       1B-blocks        Used       Avail Mounted on
+overlay        overlay 154894188544 62866333696 92011077632 /
+
+## uname -srvmo
+Linux 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 GNU/Linux
+

@@ -35,6 +35,7 @@ Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured
   - [`Bytes` and `Units`](#bytes-and-units)
   - [`Percent`](#percent)
   - [`Mhz`](#mhz)
+  - [`Rate`](#rate)
   - [`summary()`](#summary)
 - [`build`: build info](#build-build-info)
 - [`instance`: instance info](#instance-instance-info)
@@ -48,11 +49,15 @@ Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured
 - [`cpu`: processor](#cpu-processor)
   - [Identity and counts](#identity-and-counts)
   - [Usage](#usage)
+  - [Load](#load)
   - [Features](#features)
   - [Topology, caches, NUMA](#topology-caches-numa)
 - [`mem`: memory](#mem-memory)
 - [`disk`: disks and filesystems](#disk-disks-and-filesystems)
-- [`net`: network interfaces](#net-network-interfaces)
+- [`net`: network interfaces and traffic](#net-network-interfaces-and-traffic)
+  - [Interfaces](#interfaces)
+  - [Traffic: download and upload](#traffic-download-and-upload)
+  - [Connections](#connections)
 - [`host`: the machine and its environment](#host-the-machine-and-its-environment)
 - [`virt`: virtualization and containers](#virt-virtualization-and-containers)
 - [`power`: battery and AC](#power-battery-and-ac)
@@ -69,12 +74,14 @@ Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured
 
 ```toml
 [dependencies]
-sys-lib = "0.2"
+sys = { package = "sys-lib", version = "0.2" }
 # Without instance info and the process guard (no dependencies at all):
-# sys-lib = { version = "0.2", default-features = false }
+# sys = { package = "sys-lib", version = "0.2", default-features = false }
 # With device identity:
-# sys-lib = { version = "0.2", features = ["device-id"] }
+# sys = { package = "sys-lib", version = "0.2", features = ["device-id"] }
 ```
+
+The package is `sys-lib` on crates.io (`sys` and `system` were taken). Cargo's rename makes it `sys` in your code, so every file writes `sys::os::name()` with no import line. Without the rename (`sys-lib = "0.2"`), add `use sys_lib as sys;` at the top of a file and the code is the same.
 
 | Feature | Default | Enables | Brings |
 |---|---|---|---|
@@ -84,11 +91,7 @@ sys-lib = "0.2"
 
 Everything else is always compiled and has no dependencies. No feature brings a third-party crate except `device-id`, whose cryptography comes through crypt-io.
 
-The convention in every example:
-
-```rust
-use sys_lib as sys;
-```
+The examples here start with `use sys_lib as sys;` so they compile as written either way; with the Cargo rename that line is not needed.
 
 ## Conventions
 
@@ -320,6 +323,35 @@ assert_eq!(Mhz(5_700).to_string(), "5.7 GHz");
 assert_eq!(Mhz(800).to_string(), "800 MHz");
 ```
 
+### `Rate`
+
+**Since** 0.4 · ROOT-07
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Rate(/* bytes per second, u64 */);
+
+impl Rate {
+    pub const ZERO: Rate;
+    pub const fn from_bytes_per_sec(n: u64) -> Rate;
+    pub const fn bytes_per_sec(self) -> u64;
+    pub const fn bits_per_sec(self) -> u64;           // saturating
+    pub fn bits(self) -> impl fmt::Display;           // "104.9 Mbit/s": how network links are rated
+}
+impl fmt::Display for Rate;   // "12.5 MiB/s"; {:#} "13.1 MB/s"; the same rules as Bytes
+impl fmt::Debug for Rate;     // Rate(13107200/s)
+```
+
+A transfer rate, used for network download and upload. It prints like `Bytes` with `/s`, and `.bits()` gives the bit rate network links are sold in.
+
+```rust
+use sys_lib::Rate;
+
+let r = Rate::from_bytes_per_sec(13_107_200);
+assert_eq!(r.to_string(), "12.5 MiB/s");
+assert_eq!(r.bits().to_string(), "104.9 Mbit/s");
+```
+
 ### `summary()`
 
 **Since** 0.5 · ROOT-06
@@ -336,6 +368,7 @@ pub struct Summary {
     pub virtualization: &'static virt::Virtualization,
     pub form_factor: os::FormFactor,
     pub uptime: Option<Duration>,
+    pub load: Option<cpu::Load>,
 }
 impl Summary {
     pub fn write_kv(&self, out: &mut impl fmt::Write) -> fmt::Result;
@@ -807,7 +840,10 @@ pub mod os {
     pub fn name() -> &'static str;                  // "Ubuntu 24.04.1 LTS", "macOS 15.1 Sequoia", "Windows 11 Pro"
     pub fn version() -> Option<&'static Version>;
     pub fn kernel() -> &'static str;                // "6.8.0-45-generic", "24.1.0", "10.0.26200.6899"
-    pub fn distro() -> Option<&'static Distro>;     // Linux only
+    pub fn distro() -> &'static str;                // "Ubuntu", "Fedora Linux", "Arch Linux"; "Windows", "macOS", ...
+    pub fn distro_id() -> &'static str;             // "ubuntu", "fedora", "arch"; "windows", "macos", ...
+    pub fn is_like(id: &str) -> bool;               // is_like("debian") on Ubuntu, Mint, Pop!_OS, Debian
+    pub fn os_release() -> Option<&'static OsRelease>;   // every os-release field; Linux only
     pub fn edition() -> Option<&'static str>;       // "Professional", "ServerDatacenter"; Linux VARIANT_ID
     pub fn codename() -> Option<&'static str>;      // "Sequoia", "noble"
     pub fn is_server_edition() -> Option<bool>;     // Windows Server; None where it has no meaning
@@ -830,18 +866,20 @@ impl fmt::Display for Version;   // prints `text`
 
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
-pub struct Distro {
+pub struct OsRelease {
     pub id: &'static str, pub id_like: &'static [&'static str], pub name: &'static str,
     pub pretty_name: &'static str, pub version: Option<&'static str>,
     pub version_id: Option<&'static str>, pub codename: Option<&'static str>,
     pub variant_id: Option<&'static str>, pub build_id: Option<&'static str>,
+    pub source: Source,          // which file the fields came from
 }
 
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct OsInfo {
     pub kind: Kind, pub name: &'static str, pub version: Option<&'static Version>,
-    pub kernel: &'static str, pub distro: Option<&'static Distro>,
+    pub kernel: &'static str, pub distro: &'static str, pub distro_id: &'static str,
+    pub os_release: Option<&'static OsRelease>,
     pub edition: Option<&'static str>, pub codename: Option<&'static str>,
     pub is_64bit: bool,
     pub name_source: Source,     // where `name` came from
@@ -849,7 +887,7 @@ pub struct OsInfo {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[non_exhaustive]
-pub enum Source { OsRelease, UsrLibOsRelease, Sysctl, Registry, SystemProperty, Fallback }
+pub enum Source { OsRelease, UsrLibOsRelease, LegacyRelease, Sysctl, Registry, SystemProperty, Fallback }
 ```
 
 | Id | Item | Since | Cost | Android / iOS |
@@ -859,11 +897,21 @@ pub enum Source { OsRelease, UsrLibOsRelease, Sysctl, Registry, SystemProperty, 
 | OS-03 | `name()` | 0.3 | about 1 ns; first call 10 to 50 µs [est.] | yes / yes |
 | OS-04 | `version()` | 0.3 | about 1 ns | yes / yes |
 | OS-05 | `kernel()` | 0.3 | about 1 ns | yes / yes |
-| OS-06 | `distro()` | 0.3 | about 1 ns | `None` / `None` |
+| OS-06 | `distro()`, `distro_id()`, `is_like()`, `os_release()` | 0.3 | about 1 ns (`is_like` a few ns) | `"Android"` / `"iOS"`; `os_release()` `None` |
 | OS-07 | `info()` | 0.3 | about 1 ns | yes / yes |
 | OS-08 | `edition()`, `is_server_edition()` | 0.5 | about 1 ns | `None` |
 | OS-09 | `codename()` | 0.5 | about 1 ns | `None` |
 | OS-10 | `is_64bit()` | 0.5 | about 1 ns | yes |
+
+**The distribution, on every OS.** `distro()` names the distribution and `distro_id()` gives its lowercase id. On Linux they are the os-release `NAME` and `ID` ("Ubuntu" and `ubuntu`, "Fedora Linux" and `fedora`, "Arch Linux" and `arch`); everywhere else they name the operating system: "Windows" and `windows`, "macOS" and `macos`, "Android" and `android`, "iOS" and `ios`, "FreeBSD" and `freebsd`. They never fail and never return an empty string.
+
+On Linux the answer is the os-release file the system itself ships (os-release(5): `/etc/os-release`, then `/usr/lib/os-release`), parsed with its quoting and escape rules. It is what systemd, package managers, and installers read, so sys-lib agrees with them. A system without os-release falls back to the legacy release files, in this order: `/etc/lsb-release`, `/etc/redhat-release` (and the CentOS, Fedora, Rocky, and AlmaLinux variants), `/etc/SuSE-release`, `/etc/alpine-release`, `/etc/arch-release`, `/etc/gentoo-release`, `/etc/slackware-version`, `/etc/debian_version`; `os_release().source` is then `LegacyRelease`. With none of them (a `scratch` or distroless container), the answer is "Linux" and `linux`: an honest "not known", not a guess. Ids are checked against the os-release rule (lowercase letters, digits, `.`, `_`, `-`); anything else falls through to the next source.
+
+`is_like(id)` is true when the id is the distribution's own `ID` or appears in its `ID_LIKE`: `is_like("debian")` is true on Debian, Ubuntu, Mint, and Pop!_OS, and `is_like("rhel")` on RHEL, Rocky, AlmaLinux, and CentOS. Use it to pick a package manager or a default path by family instead of listing every distribution.
+
+Inside a container the answer is the container image's distribution, which is the userland the program runs on; the host's distribution is not visible and is not guessed. Inside WSL it is the WSL distribution.
+
+Accuracy is tested against a corpus of real os-release and legacy release files from at least 40 distributions and versions (Ubuntu, Debian, Fedora, RHEL, Rocky, AlmaLinux, CentOS Stream, Amazon Linux, Oracle Linux, SUSE, openSUSE Leap and Tumbleweed, Arch, Manjaro, EndeavourOS, Alpine, Gentoo, NixOS, Void, Linux Mint, Pop!_OS, elementary OS, Kali, Raspberry Pi OS, Clear Linux, Photon, Wolfi, Flatcar, Bottlerocket, Azure Linux, Talos, SteamOS, and more), each with its expected `distro()`, `distro_id()`, `version()`, and `is_like()` answers.
 
 `name()` never fails: a minimal container without os-release (`scratch`, distroless) gives `"Linux"`, and `info().name_source` is `Fallback`. On Windows the product comes from the build number, because the registry's `ProductName` still says "Windows 10" on Windows 11; the version comes from `RtlGetVersion`, which reports the real version whatever the executable's manifest declares. On macOS the version comes from `kern.osproductversion`, unaffected by `SYSTEM_VERSION_COMPAT`; a future major without a known codename prints without one. `kind()` maps Android to `Android` (path-lib's `Os` maps it to `OtherUnix`).
 
@@ -874,11 +922,12 @@ println!("{} (kernel {})", sys::os::name(), sys::os::kernel());
 if let Some(v) = sys::os::version() {
     if v.major >= 24 { println!("recent enough: {v}"); }
 }
-if sys::os::is_linux() {
-    if let Some(d) = sys::os::distro() {
-        let debian_family = d.id == "debian" || d.id_like.contains(&"debian");
-        println!("{} ({}), debian family: {debian_family}", d.pretty_name, d.id);
-    }
+println!("{} ({})", sys::os::distro(), sys::os::distro_id());   // "Ubuntu (ubuntu)", "Windows (windows)"
+if sys::os::is_like("debian") {
+    // apt-based: Debian, Ubuntu, Mint, Pop!_OS, ...
+}
+if let Some(r) = sys::os::os_release() {
+    println!("{} {:?} {:?}", r.pretty_name, r.version_id, r.codename);   // "Ubuntu 24.04.1 LTS" Some("24.04") Some("noble")
 }
 const ON_WINDOWS: bool = sys::os::is_windows();   // usable in const context
 ```
@@ -941,9 +990,9 @@ println!("{} (from {}, confidence {:?})", d.value.name(), d.source, d.confidence
 
 ```rust
 pub mod cpu {
-    pub const fn arch() -> Arch;                    // the compile target
-    pub const fn is_64() -> bool;
-    pub const fn is_32() -> bool;
+    pub const fn arch() -> Arch;                    // the architecture this program was compiled for
+    pub fn is_64bit() -> bool;                      // the processor is 64-bit
+    pub fn is_32bit() -> bool;                      // the processor is 32-bit only
     pub fn native_arch() -> Arch;                   // the hardware (under Rosetta 2, WOW64, ARM64 emulation)
     pub fn is_translated() -> bool;                 // this process runs under emulation
 
@@ -966,7 +1015,10 @@ pub mod cpu {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[non_exhaustive]
 pub enum Arch { X86_64, X86, Aarch64, Arm, Riscv64, Powerpc64, S390x, Loongarch64, Wasm32, Other }
-impl Arch { pub const fn name(self) -> &'static str; }   // "x86_64", "aarch64"
+impl Arch {
+    pub const fn name(self) -> &'static str;     // "x86_64", "aarch64"
+    pub const fn is_64bit(self) -> bool;
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[non_exhaustive]
@@ -991,7 +1043,7 @@ pub struct Frequency { pub base: Option<Mhz>, pub max: Option<Mhz> }
 
 | Id | Item | Since | Cost |
 |---|---|---|---|
-| CPU-01 | `arch()`, `is_64()`, `is_32()` | 0.3 | 0 (const) |
+| CPU-01 | `arch()` (const), `is_64bit()`, `is_32bit()` | 0.3 | 0; `is_64bit` about 1 ns (one check on 32-bit Windows, cached) |
 | CPU-02 | `logical()` | 0.3 | about 1 ns |
 | CPU-03 | `physical()` | 0.3 | about 1 ns; first call about 200 µs on 32 CPUs (Linux) [est.] |
 | CPU-04 | `available()` | 0.3 | Linux 3 to 10 µs, others 0.2 µs [est.] |
@@ -1008,6 +1060,8 @@ pub struct Frequency { pub base: Option<Mhz>, pub max: Option<Mhz> }
 **Three counts, three meanings.** `physical()` is cores; `logical()` is hardware threads, the right size for per-CPU arrays (it counts **present** CPUs, not the `possible` count VMs inflate); `available()` is what **this process** may use right now: the affinity mask, intersected with the cpuset, then limited by the cgroup CPU quota (`ceil(quota / period)`, at least 1), or on Windows the group affinity across every processor group and the job object's CPU rate. Size worker pools by `available()`. On Windows with more than 64 logical processors, every count spans all processor groups. `physical <= logical`, `available <= logical`, `available >= 1`, and `online >= 1` always hold.
 
 **The name is cleaned.** "(R)", "(TM)", trailing frequencies (" CPU @ 3.00GHz"), "CPU" as a word, core-count suffixes ("16-Core Processor"), and repeated spaces are removed; `raw_name()` keeps the original. ARM big.LITTLE systems list their core types largest first ("Cortex-X1 + Cortex-A78 + Cortex-A55"). The name is never empty: it falls back to the vendor and architecture ("ARM aarch64"), then "unknown".
+
+**64-bit or 32-bit.** `is_64bit()` and `is_32bit()` answer for the **processor**, so a 32-bit program on a 64-bit machine still sees `is_64bit() == true` (on Windows through `IsWow64Process2`; a 64-bit build implies a 64-bit processor everywhere). For the program itself, `cpu::arch().is_64bit()` is a compile-time constant. For the operating system, `os::is_64bit()`.
 
 There is no "total frequency": a sum of per-core frequencies is not a meaningful quantity. `frequency()` gives base and maximum; Apple silicon reports neither (`None`).
 
@@ -1103,6 +1157,49 @@ loop {
     std::thread::sleep(Duration::from_secs(5));
     let u = cpu.sample_per_core_into(&mut per_core)?;
     println!("used {} (user {}, system {}, steal {:?})", u.used(), u.user, u.system, u.steal);
+}
+# Ok::<(), sys_lib::Error>(())
+```
+
+### Load
+
+**Since** 0.4 · CPU-14
+
+```rust
+pub mod cpu {
+    pub fn load() -> Result<Option<Load>>;     // Ok(None) on Windows, which keeps no load average
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[non_exhaustive]
+pub struct Load { pub one: f32, pub five: f32, pub fifteen: f32 }
+impl Load {
+    pub fn per_cpu(&self) -> Load;   // divided by cpu::logical(): 1.0 means every CPU had work
+}
+impl fmt::Display for Load;          // "2.15 1.98 1.70"
+```
+
+**What load is.** The load average is how many programs, on average, were running or waiting for a CPU over the last 1, 5, and 15 minutes. Compare it with the number of CPUs: on a 16-CPU machine, a load of 4 means a quarter of the machine had work, 16 means every CPU was busy, and 32 means as many programs were waiting as running, so things were slowing down. `per_cpu()` does that division for you: under 1.0 there was spare capacity, over 1.0 there was a queue. The three numbers together show the trend: a 1-minute value well above the 15-minute value means load is rising.
+
+Load differs from `cpu::used()`. Usage says how busy the CPUs were; load says how many programs wanted them, so it shows a queue that a 100% usage figure cannot. Benchmarks record it to show the machine was quiet before a run. On Linux it also counts programs waiting on disk (uninterruptible I/O), so a high load with low CPU usage points at storage.
+
+| OS | Source | Cost [est.] |
+|---|---|---|
+| Linux | `/proc/loadavg` | 2 µs |
+| macOS | `getloadavg` | 0.3 µs |
+| Windows | none: Windows keeps no load average, so the answer is `Ok(None)`; nothing is simulated | 0 |
+
+Inside a container the load is the host's (the kernel keeps one per machine); with LXCFS it is the container's.
+
+```rust
+use sys_lib as sys;
+
+match sys::cpu::load()? {
+    Some(load) => {
+        println!("load {load} ({:.2} per CPU)", load.per_cpu().one);   // "load 2.15 1.98 1.70 (0.13 per CPU)"
+        if load.per_cpu().one > 1.0 { /* programs are queueing for a CPU */ }
+    }
+    None => println!("this OS keeps no load average"),
 }
 # Ok::<(), sys_lib::Error>(())
 ```
@@ -1410,22 +1507,17 @@ let all = disk::list_with(options)?;
 
 ---
 
-## `net`: network interfaces
+## `net`: network interfaces and traffic
 
-**Since** 0.4 (NET-01 to NET-03), 0.5 (NET-04 to NET-06)
+### Interfaces
+
+**Since** 0.4 (NET-01 to NET-03), 0.5 (NET-06)
 
 ```rust
 pub mod net {
     pub fn interfaces() -> Result<Vec<Interface>>;
     pub fn addresses() -> Result<Vec<IpAddr>>;        // non-loopback, non-link-local addresses of up interfaces
     pub fn primary() -> Result<Option<Interface>>;    // the one holding the default route
-    pub fn counters() -> Result<Vec<Counters>>;
-
-    pub struct Sampler { /* previous counters */ }
-    impl Sampler {
-        pub fn new() -> Result<Sampler>;
-        pub fn sample(&mut self) -> Result<Vec<Rates>>;
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1461,22 +1553,6 @@ pub enum MacKind { Permanent, Random, Unknown }
 pub struct IpNet { pub addr: IpAddr, pub prefix: u8 }
 impl fmt::Display for IpNet;   // "192.168.1.20/24"
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct Counters {
-    pub interface: String,
-    pub rx_bytes: u64, pub tx_bytes: u64, pub rx_packets: u64, pub tx_packets: u64,
-    pub rx_errors: u64, pub tx_errors: u64, pub rx_dropped: u64, pub tx_dropped: u64,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct Rates {
-    pub interface: String,
-    pub rx_bytes_per_sec: f64, pub tx_bytes_per_sec: f64,
-    pub rx_packets_per_sec: f64, pub tx_packets_per_sec: f64,
-    pub interval: Duration,
-}
 ```
 
 | Id | Item | Since | Cost [est.] |
@@ -1484,13 +1560,11 @@ pub struct Rates {
 | NET-01 | `interfaces()` | 0.4 | Linux 30 to 150 µs, macOS 20 to 80 µs, Windows 1 to 5 ms |
 | NET-02 | `Mac`, `MacKind` | 0.4 | 0 |
 | NET-03 | `addresses()` | 0.4 | Linux 10 to 30 µs |
-| NET-04 | `counters()` | 0.5 | 5 to 20 µs / 10 µs / 200 µs |
-| NET-05 | `Sampler` | 0.5 | as `counters()` |
 | NET-06 | `primary()` | 0.5 | 10 to 50 µs |
 
 **Permanent or random MAC.** Phones, Apple devices, Windows, and NetworkManager randomize Wi-Fi addresses. `MacKind::Random` marks them: on Linux from the kernel's `addr_assign_type`, elsewhere from the locally administered bit. A MAC address is an identifier: for device identity use [`device`](#device-device-identity), never a raw MAC.
 
-Interfaces are sorted by index, then name. More than 4 096 interfaces is `TooLarge`. Names from the OS are validated before they are used to build a path. Counters are 64-bit on every platform (macOS's 32-bit counters wrap and are not used). A counter that goes backwards between two samples (an interface re-created) re-bases that interface instead of reporting a negative rate.
+Interfaces are sorted by index, then name. More than 4 096 interfaces is `TooLarge`. Names from the OS are validated before they are used to build a path.
 
 ```rust
 use sys_lib as sys;
@@ -1504,26 +1578,148 @@ println!("addresses: {:?}", sys::net::addresses()?);
 # Ok::<(), sys_lib::Error>(())
 ```
 
+### Traffic: download and upload
+
+**Since** 0.4 · NET-04, NET-05, NET-08
+
+```rust
+pub mod net {
+    pub const DEFAULT_WINDOW: Duration;                        // 1 s
+    pub fn totals() -> Result<Totals>;                         // since boot, every interface but loopback
+    pub fn counters() -> Result<Vec<Counters>>;                // Tier 2: the same, per interface
+    pub fn traffic() -> Result<Traffic>;                       // BLOCKS for DEFAULT_WINDOW
+    pub fn traffic_over(window: Duration) -> Result<Traffic>;  // BLOCKS for `window`, clamped to 100 ms ..= 60 s
+
+    pub struct Sampler { /* previous counters and Instant */ }
+    impl Sampler {
+        pub fn new() -> Result<Sampler>;                                      // the first reading
+        pub fn sample(&mut self) -> Result<Traffic>;                          // never blocks; no allocation
+        pub fn sample_per_interface(&mut self) -> Result<Vec<InterfaceTraffic>>;  // allocates the Vec
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
+pub struct Totals {
+    pub received: Bytes, pub sent: Bytes,
+    pub packets_received: u64, pub packets_sent: u64,
+    pub errors: u64, pub dropped: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[non_exhaustive]
+pub struct Traffic {
+    pub download: Rate, pub upload: Rate,
+    pub packets_in_per_sec: f64, pub packets_out_per_sec: f64,
+    pub interval: Duration,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct InterfaceTraffic { pub interface: String, pub traffic: Traffic }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Counters {
+    pub interface: String,
+    pub received: Bytes, pub sent: Bytes,
+    pub packets_received: u64, pub packets_sent: u64,
+    pub errors_in: u64, pub errors_out: u64, pub dropped_in: u64, pub dropped_out: u64,
+}
+```
+
+| Id | Item | Tier | Cost [est.] |
+|---|---|---|---|
+| NET-04 | `totals()`, `counters()` | 1 / 2 | Linux 5 to 20 µs (`/proc/net/dev`, one read), macOS 10 µs, Windows 200 µs |
+| NET-05 | `Sampler` | 2 | as `totals()`; `sample()` allocates nothing |
+| NET-08 | `traffic()`, `traffic_over()` | 1 | 1 s of wall time (the window); two readings |
+
+How much this machine is downloading and uploading right now, as `Rate` values ("12.5 MiB/s", or `.bits()` for "104.9 Mbit/s"). Like CPU usage, a rate needs two readings: `traffic()` takes both itself and blocks for one second, which its name and documentation say; a monitor keeps a `Sampler`, which never blocks and measures the time since its previous sample. `totals()` gives the bytes and packets moved since boot, one cheap read, no waiting.
+
+Loopback is left out of the totals (it is the machine talking to itself). Counters are 64-bit on every platform; macOS's 32-bit counters wrap and are not used. A counter that goes backwards between two samples (an interface removed and re-created, a driver reset) re-bases that interface instead of reporting a negative or huge rate. Inside a container the counters are the container's network namespace, which is the traffic the process can see.
+
+```rust
+use sys_lib as sys;
+
+let t = sys::net::traffic()?;            // blocks 1 s
+println!("down {} up {}", t.download, t.upload);                   // "down 12.5 MiB/s up 1.2 MiB/s"
+println!("down {}", t.download.bits());                           // "down 104.9 Mbit/s"
+let total = sys::net::totals()?;
+println!("since boot: {} received, {} sent", total.received, total.sent);
+# Ok::<(), sys_lib::Error>(())
+```
+
+```rust,no_run
+use sys_lib as sys;
+use std::time::Duration;
+
+// A monitor loop: non-blocking, caller-owned.
+let mut net = sys::net::Sampler::new()?;
+loop {
+    std::thread::sleep(Duration::from_secs(5));
+    let t = net.sample()?;
+    println!("down {} up {}", t.download, t.upload);
+    for i in net.sample_per_interface()? {
+        println!("  {}: down {} up {}", i.interface, i.traffic.download, i.traffic.upload);
+    }
+}
+# Ok::<(), sys_lib::Error>(())
+```
+
+### Connections
+
+**Since** 0.4 · NET-09
+
+```rust
+pub mod net {
+    pub fn connections() -> Result<Connections>;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
+pub struct Connections {
+    pub tcp_established: Option<u64>,   // open TCP connections
+    pub tcp_time_wait: Option<u64>,     // closed, waiting out the TIME_WAIT period
+    pub tcp_total: Option<u64>,         // every TCP socket, listening ones included
+    pub udp: Option<u64>,               // UDP sockets
+}
+```
+
+How many network connections the machine has open, as counts. Only counts: sys-lib never lists connections, addresses, ports, or which program owns them (that is other people's data and a different tool). A value an OS does not report is `None`.
+
+| OS | Source | Cost [est.] |
+|---|---|---|
+| Linux | `/proc/net/snmp` (`CurrEstab`), `/proc/net/sockstat` and `sockstat6` (`inuse`, `tw`) | 5 to 10 µs |
+| macOS | `net.inet.tcp.pcbcount`, `net.inet.udp.pcbcount` (total and UDP; established and time-wait are `None`) [verify] | 1 µs |
+| Windows | `GetTcpStatisticsEx` (`dwCurrEstab`, `dwNumConns`) for IPv4 and IPv6, `GetUdpStatisticsEx` (`dwNumAddrs`); time-wait is `None` | 5 µs |
+
+Inside a container the counts are the container's network namespace.
+
+```rust
+use sys_lib as sys;
+
+let c = sys::net::connections()?;
+if let Some(open) = c.tcp_established {
+    println!("{open} TCP connections open");
+}
+# Ok::<(), sys_lib::Error>(())
+```
+
 ---
 
 ## `host`: the machine and its environment
 
-**Since** 0.3 (HST-01), 0.4 (HST-02 to HST-04), 0.5 (HST-05 to HST-07)
+**Since** 0.3 (HST-01), 0.4 (HST-02, HST-03), 0.5 (HST-05 to HST-07). The load average is [`cpu::load()`](#load).
 
 ```rust
 pub mod host {
     pub fn name() -> Result<String>;                      // live
     pub fn uptime() -> Result<Duration>;                  // includes time suspended
     pub fn boot_time() -> Result<SystemTime>;
-    pub fn load_average() -> Result<Option<LoadAverage>>; // Ok(None) on Windows
     pub fn timezone() -> Result<TimeZone>;
     pub fn locale() -> Option<&'static Locale>;          // static: the environment at the first call
     pub fn model() -> Option<&'static Model>;            // static
 }
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-#[non_exhaustive]
-pub struct LoadAverage { pub one: f32, pub five: f32, pub fifteen: f32 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1548,14 +1744,12 @@ pub struct Model { pub vendor: Option<&'static str>, pub name: &'static str, pub
 | HST-01 | `name()` | 0.3 | 2 µs / 0.5 µs / 1 µs |
 | HST-02 | `uptime()` | 0.4 | 0.05 to 2 µs |
 | HST-03 | `boot_time()` | 0.4 | 2 to 4 µs / 0.5 µs / 0.1 µs |
-| HST-04 | `load_average()` | 0.4 | 2 µs / 0.3 µs / 0 |
 | HST-05 | `timezone()` | 0.5 | 5 to 15 µs |
 | HST-06 | `locale()` | 0.5 | about 1 ns after the first call |
 | HST-07 | `model()` | 0.5 | about 1 ns after the first call |
 
 - `name()` is live: DHCP and `hostnamectl` change it while processes run. A name that is not UTF-8 is converted lossily; longer than 255 bytes is truncated.
 - `uptime()` is monotonic; `boot_time()` is stable when the wall clock steps.
-- `load_average()` is `Ok(None)` on Windows, which keeps no load average; nothing is simulated.
 - `timezone()` returns the zone **name** and the current offset, not zone arithmetic (that is a calendar crate's job). `TZ` is used only when it is a valid name (at most 64 bytes, no `..`, no control characters, a leading `:` stripped); it is never opened as a path. When `/etc/localtime` is a copy rather than a link, the name comes from `/etc/timezone` or is `None`: zone files are not compared to guess. On Windows the IANA name comes from an embedded copy of the CLDR Windows-zone table.
 - `locale()` is `None` for `C`, `POSIX`, and `C.UTF-8` (no language preference expressed).
 - `model()` is the hardware model from DMI, SMBIOS, the device tree ("Raspberry Pi 5"), or `hw.model` on macOS ("Mac14,9"; no marketing-name table is shipped).
@@ -1566,10 +1760,6 @@ The host name, time zone, and locale are identifying values; keep them out of ou
 use sys_lib as sys;
 
 println!("{} up {:?}", sys::host::name()?, sys::host::uptime()?);
-match sys::host::load_average()? {
-    Some(l) => println!("load {:.2} {:.2} {:.2}", l.one, l.five, l.fifteen),
-    None => println!("no load average on this OS"),
-}
 let tz = sys::host::timezone()?;
 println!("zone {:?}, offset {} s", tz.iana, tz.utc_offset_seconds);
 # Ok::<(), sys_lib::Error>(())
