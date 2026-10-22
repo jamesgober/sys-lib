@@ -15,12 +15,13 @@ Exit: CI green on every job; the crate published to claim the name; decision log
 
 ## v0.2.0 - Design lock
 Exit: James approves `docs/API.md`; layout tests pass on every target; every open decision answered.
-- [ ] `docs/API.md` written for every item in `PLAN.md` section 13, with signatures, errors, platform tables, and examples; each item marked with the version it arrives in (the crate exposes only what is implemented).
-- [ ] `docs/SOURCES.md` first version: every reading, every OS, the exact file, call, or API.
-- [ ] `src/sys/<platform>/ffi.rs` declaration lists written and reviewed against the platform headers; `#[repr(C)]` layout assertions for every struct on every CI target.
-- [ ] Fixture capture script `tests/fixtures/capture.sh` and the first five fixtures: `ubuntu-24.04-desktop-amd`, `docker-cgroup2-limited`, `docker-cgroup1-limited`, `wsl2`, `minimal-scratch`.
+- [x] `docs/API.md` written for every item in `PLAN.md` section 13, with signatures, errors, platform tables, and examples; each item marked with the version it arrives in (the crate exposes only what is implemented). Awaiting James's approval.
+- [x] `docs/SOURCES.md` first version: every reading, every OS, the exact file, call, or API.
+- [x] `src/sys/<platform>/ffi.rs` declaration lists written and reviewed against the platform headers; `#[repr(C)]` layout assertions for every struct, and compile-time oracles against `libc` and `windows-sys` on all ten CI targets (D-012).
+- [x] Fixture capture script `tests/fixtures/capture.sh`.
+- [ ] The first five fixtures. Done: `wsl2` (and `wsl2-systemd-scope-limited`). Next: `docker-cgroup2-limited` and `minimal-scratch` from the `Fixtures` workflow once it is on `main` (D-019). Need a machine from James: `docker-cgroup1-limited` (a cgroup v1 host) and `ubuntu-24.04-desktop-amd` (a bare-metal Linux desktop).
 - [ ] Open decisions OD-4 to OD-6, OD-9, OD-11 to OD-17 answered by James or accepted as recommended, each recorded in the decision log.
-- [ ] One new defence idea recorded (`PLAN.md` section 22).
+- [x] One new defence idea recorded (`PLAN.md` section 22: the layout oracle).
 
 ## v0.3.0 - Core: the boot kit (WASP boot phase 0)
 API: ROOT-02, ROOT-03, ROOT-04 · BLD-01 to BLD-05 · INS-01 to INS-06 · PRC-01, PRC-11, PRC-12, PRC-20 to PRC-23 · OS-01 to OS-07 · CPU-01 to CPU-06 · HST-01.

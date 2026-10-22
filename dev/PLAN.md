@@ -783,13 +783,15 @@ src/
                       cpuinfo, uevent, smbios, kv, numbers (all fuzzed, all run under Miri)
   read.rs             bounded file reader: one open, one read into a caller or stack buffer
   sys/
-    mod.rs            the platform boundary (pub(crate) functions, no unsafe here)
-    linux/            /proc and /sys files; a few libc symbols (sysconf, statvfs, getifaddrs,
-                      getrlimit/setrlimit, umask, getrusage, geteuid, getpwuid_r, localtime_r)
-    android/          linux/ plus __system_property_get
-    macos/            sysctlbyname, mach, IOKit and CoreFoundation, getifaddrs, getfsstat, proc_pidinfo
-    ios/              a macos/ subset plus uname
-    windows/          kernel32, advapi32, iphlpapi, powrprof, ntdll (RtlGetVersion only)
+    mod.rs            the platform boundary (pub(crate) functions, no unsafe here) and the
+                      layout and layout-oracle macros
+    linux/            /proc and /sys files; ffi.rs: 13 libc calls (sysconf, statvfs, statfs,
+                      getifaddrs, getrlimit/setrlimit, umask, getrusage, geteuid, getpwuid_r,
+                      localtime_r, clock_gettime) and, on Android, __system_property_get
+    apple/            macOS and iOS; ffi.rs: sysctl, Mach, libproc, CoreFoundation, and (macOS only)
+                      IOKit, getfsstat, gethostuuid
+    windows/          ffi.rs: kernel32, advapi32, iphlpapi, powrprof, ntdll (RtlGetVersion,
+                      NtQuerySystemInformation), imported with raw-dylib
     unsupported.rs    every function returns Error::Unsupported
 ```
 
@@ -1119,6 +1121,7 @@ At least one new defence idea per version, as hypothesis, method, and expected c
 
 | Version | Hypothesis | Method | Expected cost |
 |---|---|---|---|
+| 0.2 | a `#[repr(C)]` struct whose layout differs from the platform headers on one target corrupts memory or reads garbage, silently, only on that target | compare size, alignment, and every field offset with `libc` and `windows-sys` at compile time, on every CI target including the cross targets (D-012); it found musl's 272-byte `struct rusage` before any code used it (D-015) | none at run time; dev-dependency compile time in CI |
 | 0.3 | a lock directory on a filesystem without reliable locking (NFS, drvfs, 9p) silently allows two copies | refuse network and WSL host filesystems by `statfs` magic or type name | one `statfs` at start |
 | 0.4 | a hostile cgroup tree can make sys-lib walk forever (a bind-mounted fake tree with deep nesting) | cap the ancestor walk at 64 levels and the path at 4 096 bytes | none |
 | 0.5 | a device id derived from a shared container image identifies every container as the same device | `CloneRisk::SharedImageLikely` when the machine id file's modification time predates the container's start and the container has no private `/etc` mount | one `stat` |
@@ -1147,3 +1150,12 @@ Other ideas:
 | D-009 | 2026-10-21 | CI covers macOS on both architectures: `macos-latest` (aarch64) and `macos-15-intel` (x86_64), next to `ubuntu-24.04-arm` and `windows-11-arm` | the definition of done requires x86_64 and aarch64 on all three OSes, and `macos-latest` alone is aarch64 only |
 | D-010 | 2026-10-21 | CI builds the documentation with default features and with all features, both under `-D warnings` | a doc link to a feature-gated item breaks only when that feature is off; checking one mode misses it |
 | D-011 | 2026-10-21 | The fuzz crate (`fuzz/`) is its own workspace with no targets until the first parser lands in 0.3; corpora stay outside the repository | no placeholder targets in shipped files; a corpus written into the tree once swept fuzzer output into a commit in another repository |
+| D-012 | 2026-10-21 | Struct layouts are verified against `libc` (Unix) and `windows-sys` (Windows), used as target-specific dev-dependencies only: compile-time checks of size, alignment, and every field offset, plus the constants both define; CI compiles them for every target with `cargo clippy --all-targets --target ...`, cross targets included | a hand-written layout is checked against an independent, widely used definition on each target without running anything there; the oracles never reach the runtime dependency tree |
+| D-013 | 2026-10-21 | One `apple` module for macOS and iOS (macOS-only items gated inside it); Android inside the `linux` module; the Linux and Apple modules exist only on 64-bit targets until a 32-bit layout is verified | the iOS surface is a subset of macOS and Android's is Linux plus one call; duplicated declarations would drift; unverified layouts get no implementation (D-003) |
+| D-014 | 2026-10-21 | Windows functions are imported with `raw-dylib` (undecorated names on 32-bit x86) | no import library is needed at link time, on any toolchain; the same mechanism `windows-link` uses |
+| D-015 | 2026-10-21 | `struct rusage` carries musl's 16 reserved longs on musl targets (272 bytes, against 144 on glibc and bionic) | found by the D-012 oracle: a 144-byte buffer passed to musl's `getrusage` may be written past its end |
+| D-016 | 2026-10-21 | Design-lock refinements of the API (recorded in `docs/API.md`): `Error::NoIdentifierSource` exists only with `device-id` (its `Basis` lives there) and `Error::is_unavailable()` is added; `Percent` is `Eq + Ord + Hash` (its value is never NaN) with `from_value`; `Bytes` gains `MAX`, `checked_add`, and `u64` conversions; `os::Version` keeps the original text and is `#[non_exhaustive]`; `BuildInfo` is `#[non_exhaustive]` and the macro builds it through a hidden const constructor; `GuardWarning` has three variants; `process::info_with(InfoOptions)` and `ProcessInfo` are defined; `net::Sampler` returns `Rates`; `cpu::Package`, `os::Source`, and `name()` on `Kind`, `Arch`, `FormFactor` are added | each closes a gap the specification left open or makes a type usable the way callers will use it (sorting percentages, matching on errors, building a non-exhaustive struct from a macro in another crate) |
+| D-017 | 2026-10-21 | `cpu::Feature` has no `Sha512`; AArch64 `Sha3` is std's `sha3`, which covers FEAT_SHA512 and FEAT_SHA3 together | features std cannot detect separately are left out rather than detected differently |
+| D-018 | 2026-10-21 | Fixtures store symbolic links as `<path>.link` files; `capture.sh` replaces identifiers (host name, machine id, MACs, ARM serial, user names in paths, time zone) and never copies DMI serials, UUIDs, keys, or service-account files; `tests/fixtures/` is left out of the published crate, and fixture tests skip when the tree is absent | fixtures must survive any checkout and never carry a real identifier; two thousand small files do not belong in every user's download |
+| D-019 | 2026-10-21 | Docker fixtures are captured on a GitHub runner by a manual workflow (`fixtures.yml`); `minimal-scratch` is emulated in a container with the os-release files and machine id removed | the development machine has no Docker; a scratch image has no shell to run the capture in |
+| D-020 | 2026-10-21 | macOS `vm_statistics64` is declared at its long-standing 152-byte length and that count is passed to `host_statistics64` | newer SDKs append fields; the kernel fills at most the count it is given, so the shorter struct is correct on every macOS version and the oracle checks its prefix |

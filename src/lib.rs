@@ -69,6 +69,8 @@
 /// Crate version string, populated by Cargo at build time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+mod sys;
+
 #[cfg(test)]
 mod tests {
     use super::VERSION;

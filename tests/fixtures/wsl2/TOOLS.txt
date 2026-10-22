@@ -1,0 +1,37 @@
+# Output of the OS's tools at capture time (for live-comparison tests).
+## nproc
+32
+
+## nproc --all
+32
+
+## getconf _NPROCESSORS_CONF
+32
+
+## getconf _NPROCESSORS_ONLN
+32
+
+## getconf PAGESIZE
+4096
+
+## getconf CLK_TCK
+100
+
+## free -b
+               total        used        free      shared  buff/cache   available
+Mem:     67215904768  1253548032 57522749440     3731456  9097408512 65962356736
+Swap:    17179869184           0 17179869184
+
+## df -B1 --output=source,fstype,size,used,avail,target /
+Filesystem     Type     1B-blocks         Used        Avail Mounted on
+/dev/sdd       ext4 1081101176832 563150434304 462958387200 /
+
+## uname -srvmo
+Linux 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 GNU/Linux
+
+## systemd-detect-virt
+wsl
+
+## systemd-detect-virt --container
+wsl
+

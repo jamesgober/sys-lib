@@ -53,7 +53,7 @@ println!("{}", sys::cpu::used()?);               // "12.4%" (blocks for 100 ms)
 let _guard = sys::process::guard("site")?;      // one copy only; safe permissions
 ```
 
-See [`dev/PLAN.md`](./dev/PLAN.md) for the full scope, what is deliberately left to other crates, and the decision log.
+The complete planned API, with the version each item arrives in, is in [`docs/API.md`](./docs/API.md); where every value comes from on each operating system is in [`docs/SOURCES.md`](./docs/SOURCES.md). See [`dev/PLAN.md`](./dev/PLAN.md) for the full scope, what is deliberately left to other crates, and the decision log.
 
 <hr>
 <br>
