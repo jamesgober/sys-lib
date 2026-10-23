@@ -46,10 +46,12 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
+      # install-action's cargo-fuzz is a musl build, and cargo-fuzz defaults to
+      # its own target, where AddressSanitizer cannot run: name the target.
       - name: Fuzz
         run: |
           mkdir -p "$RUNNER_TEMP/corpus"
-          cargo fuzz run ${{ matrix.target }} "$RUNNER_TEMP/corpus" tests/fixtures -- \
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} "$RUNNER_TEMP/corpus" tests/fixtures -- \
             -max_total_time=${{ inputs.seconds || '600' }}
       - uses: actions/upload-artifact@v5
         if: failure()

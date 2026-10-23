@@ -132,6 +132,8 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
+      # install-action's cargo-fuzz is a musl build, and cargo-fuzz defaults to
+      # its own target, where AddressSanitizer cannot run: name the target.
       - name: Run every target
         shell: bash
         run: |
