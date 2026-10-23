@@ -697,6 +697,10 @@ pub(crate) const DRIVE_RAMDISK: u32 = 6;
 pub(crate) const FILE_READ_ONLY_VOLUME: u32 = 0x0008_0000;
 pub(crate) const SEM_FAILCRITICALERRORS: u32 = 0x0001;
 
+// File attributes and flags (winnt.h, fileapi.h).
+pub(crate) const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+pub(crate) const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
 // CreateFileW (fileapi.h, winnt.h).
 pub(crate) const FILE_SHARE_READ: u32 = 0x1;
 pub(crate) const FILE_SHARE_WRITE: u32 = 0x2;
@@ -752,6 +756,7 @@ dll!("kernel32.dll" {
         kernel: *mut FileTime,
         user: *mut FileTime,
     ) -> Bool;
+    pub(crate) fn GetProcessAffinityMask(process: Handle, process_mask: *mut usize, system_mask: *mut usize) -> Bool;
     pub(crate) fn GetProcessGroupAffinity(process: Handle, group_count: *mut u16, groups: *mut u16) -> Bool;
     pub(crate) fn GetProcessHandleCount(process: Handle, count: *mut u32) -> Bool;
     pub(crate) fn IsWow64Process2(process: Handle, process_machine: *mut u16, native_machine: *mut u16) -> Bool;
@@ -1087,6 +1092,14 @@ mod tests {
         assert!(TH32CS_SNAPTHREAD == th::TH32CS_SNAPTHREAD);
         assert!(TOKEN_ELEVATION_CLASS == sec::TokenElevation);
         assert!(TOKEN_QUERY == sec::TOKEN_QUERY);
+        assert!(
+            FILE_ATTRIBUTE_REPARSE_POINT
+                == windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+        );
+        assert!(
+            FILE_FLAG_OPEN_REPARSE_POINT
+                == windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT
+        );
         assert!(IOCTL_STORAGE_QUERY_PROPERTY == io::IOCTL_STORAGE_QUERY_PROPERTY);
         assert!(STORAGE_DEVICE_SEEK_PENALTY_PROPERTY == io::StorageDeviceSeekPenaltyProperty);
         assert!(PROPERTY_STANDARD_QUERY == io::PropertyStandardQuery);

@@ -228,6 +228,14 @@ pub(crate) const IFF_UP: c_uint = 0x1;
 pub(crate) const IFF_LOOPBACK: c_uint = 0x8;
 pub(crate) const IFF_RUNNING: c_uint = 0x40;
 
+/// `O_NOFOLLOW` (fcntl.h): its value differs between architectures.
+#[cfg(any(target_arch = "aarch64", target_arch = "powerpc64"))]
+pub(crate) const O_NOFOLLOW: c_int = 0o100_000;
+#[cfg(not(any(target_arch = "aarch64", target_arch = "powerpc64")))]
+pub(crate) const O_NOFOLLOW: c_int = 0o400_000;
+/// `ERANGE` (errno.h): a buffer was too small.
+pub(crate) const ERANGE: c_int = 34;
+
 /// `CLOCK_MONOTONIC` (time.h).
 pub(crate) const CLOCK_MONOTONIC: ClockId = 1;
 /// `CLOCK_BOOTTIME` (time.h): monotonic, and counts time suspended.
@@ -351,6 +359,8 @@ mod tests {
         assert!(IFF_LOOPBACK as c_int == libc::IFF_LOOPBACK);
         assert!(IFF_RUNNING as c_int == libc::IFF_RUNNING);
         assert!(CLOCK_MONOTONIC == libc::CLOCK_MONOTONIC);
+        assert!(O_NOFOLLOW == libc::O_NOFOLLOW);
+        assert!(ERANGE == libc::ERANGE);
         assert!(CLOCK_BOOTTIME == libc::CLOCK_BOOTTIME);
         assert!(SC_CLK_TCK == libc::_SC_CLK_TCK);
         assert!(SC_PAGESIZE == libc::_SC_PAGESIZE);

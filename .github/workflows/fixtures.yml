@@ -5,6 +5,12 @@ name: Fixtures
 # result is reviewed before it is committed. Nothing here runs on push.
 on:
   workflow_dispatch:
+    inputs:
+      job:
+        description: Which fixtures to capture
+        type: choice
+        options: [containers, distros]
+        default: containers
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -12,6 +18,7 @@ env:
 jobs:
   capture:
     name: Capture container fixtures
+    if: inputs.job == 'containers'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -35,4 +42,18 @@ jobs:
         with:
           name: fixtures
           path: out/
+          retention-days: 7
+
+  distros:
+    name: Capture the distribution corpus
+    if: inputs.job == 'distros'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Capture
+        run: bash tests/fixtures/capture_distros.sh tests/fixtures/distros.list out/distros
+      - uses: actions/upload-artifact@v5
+        with:
+          name: distros
+          path: out/distros/
           retention-days: 7

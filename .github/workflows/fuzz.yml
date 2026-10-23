@@ -1,0 +1,59 @@
+name: Fuzz
+
+# Ten minutes per parser every night (dev/PLAN.md section 19.1); 24 hours per
+# target is run by hand before 0.8. Crashes are uploaded as artifacts and fixed
+# test-first (fuzz/README.md).
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target
+        default: "600"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - os_release
+          - release
+          - version
+          - cpu_list
+          - cpuinfo
+          - cpu_name
+          - proc_status
+          - mountinfo
+          - cgroup
+          - pid_file
+          - instance_id
+          - bytes_display
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+          key: ${{ matrix.target }}
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz
+        run: |
+          mkdir -p "$RUNNER_TEMP/corpus"
+          cargo fuzz run ${{ matrix.target }} "$RUNNER_TEMP/corpus" tests/fixtures -- \
+            -max_total_time=${{ inputs.seconds || '600' }}
+      - uses: actions/upload-artifact@v5
+        if: failure()
+        with:
+          name: crash-${{ matrix.target }}
+          path: fuzz/artifacts/
+          retention-days: 30

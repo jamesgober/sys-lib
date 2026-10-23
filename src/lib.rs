@@ -73,7 +73,37 @@
 /// Crate version string, populated by Cargo at build time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod build;
+pub mod cpu;
+pub mod host;
+#[cfg(feature = "instance")]
+#[cfg_attr(docsrs, doc(cfg(feature = "instance")))]
+pub mod instance;
+pub mod os;
+pub mod process;
+
+mod error;
+mod fmt;
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod __fuzz {
+    //! Parser entry points for `fuzz/`; not part of the API.
+    pub use crate::fuzz::*;
+}
+#[cfg(fuzzing)]
+mod fuzz;
+#[cfg(any(target_os = "linux", target_os = "android", test))]
+mod linux;
+mod parse;
 mod sys;
+mod units;
+
+pub use build::{BuildInfo, PublicBuild};
+pub use error::{Error, Result};
+#[cfg(feature = "instance")]
+#[cfg_attr(docsrs, doc(cfg(feature = "instance")))]
+pub use instance::{Instance, InstanceId};
+pub use units::{Bytes, Percent, Units};
 
 #[cfg(test)]
 mod tests {
