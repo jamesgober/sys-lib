@@ -155,9 +155,11 @@ jobs:
           std_hits=$(grep -rnE 'Command::new|process::Command|process::\{[^}]*\bCommand\b' src --include='*.rs' \
             | grep -vE '^src/build(\.rs|/)' || true)
           # 2. Process-creation calls declared or called in the OS modules.
-          #    Names followed by `(` (a declaration or a call); comment lines are
-          #    skipped so prose such as "a system call" does not match.
-          ffi_hits=$(grep -rnE '\b(CreateProcess(A|W|AsUserW)?|ShellExecute(Ex)?W|WinExec)\b|\b(posix_spawnp?|execv[pe]?|execl[pe]?|popen|v?fork|system)[[:space:]]*\(' src/sys --include='*.rs' 2>/dev/null \
+          #    Names followed by `(` (a declaration or a call), bare or through
+          #    `ffi::` or `libc::`, so a method such as `Root::system()` does not
+          #    match; comment lines are skipped so prose such as "a system call"
+          #    does not either.
+          ffi_hits=$(grep -rnE '\b(CreateProcess(A|W|AsUserW)?|ShellExecute(Ex)?W|WinExec)\b|(^|[^:[:alnum:]_]|ffi::|libc::)(posix_spawnp?|execv[pe]?|execl[pe]?|popen|v?fork|system)[[:space:]]*\(' src/sys --include='*.rs' 2>/dev/null \
             | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
           if [ -n "$std_hits$ffi_hits" ]; then
             echo "sys-lib never runs a program at run time (dev/PLAN.md, D-004)."
