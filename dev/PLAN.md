@@ -144,18 +144,22 @@ The lock comes before any data file is touched, the umask before any file is cre
 |---|---|---|
 | Build | `build` | compile-time facts of the application (name, version, commit, dirty, build time, profile, target, rustc, features) |
 | Instance | `instance` | start-time facts of this run (ULID, start time, host, pid, user at start) |
-| Process | `process` | this process: memory, CPU time, threads, descriptors, limits, elevation, user; the process guard |
+| Process | `process` | this process: memory, CPU time, disk I/O, threads, descriptors, limits, elevation, user, how it was started; the process guard |
 | Operating system | `os` | kind, name, version, kernel, distribution (on every OS), edition, form factor |
 | CPU | `cpu` | name, vendor, architecture and bitness, counts, frequency, usage, load average, features, topology, caches, NUMA, quota |
-| Memory | `mem` | total, used, free, percentages, swap, page size, limits (cgroup, job object), pressure |
-| Disks | `disk` | space for a path, mounted filesystems, kind (SSD, HDD, network, removable) |
-| Network | `net` | interfaces, MAC addresses (permanent or random), addresses, state, speed, download and upload traffic, connection counts |
-| Host | `host` | host name, uptime, boot time, time zone name, locale, hardware model |
+| Memory | `mem` | total, used, free, percentages, swap, page size, limits (cgroup, job object), pressure, out-of-memory events, swap and paging activity, huge pages, memory modules |
+| Disks | `disk` | space for a path, mounted filesystems, kind (SSD, HDD, network, removable), read and write rates, I/O pressure |
+| Network | `net` | interfaces, MAC addresses (permanent or random), addresses, state, speed, download and upload traffic, connection counts, DNS servers |
+| Host | `host` | host name, uptime, boot time, time zone name, locale, hardware model, firmware and motherboard, process and open-file counts, clock synchronization, sessions |
 | Virtualization | `virt` | VM, hypervisor vendor, container runtime, Kubernetes, WSL |
 | Power | `power` | battery presence, charge, state, AC power |
 | Device identity | `device` (feature `device-id`) | application-scoped device id, fingerprint, stability report |
-| Sensors | `sensors` | temperatures, best effort (after 1.0) |
-| GPU | `gpu` | adapters, best effort (after 1.0) |
+| Sensors | `sensors` | temperatures where the OS documents them (0.6) |
+| GPU | `gpu` | adapters (0.6) |
+| Readiness | `readiness` | read-only server readiness report: the OS settings that decide performance and uptime, with the reason and the fix for each (0.6) |
+| Benchmark environment | `bench` | what a benchmark result needs printed beside it: governor, turbo, SMT, throttling, timer, load (0.6) |
+| Security posture | `security` | read-only: Secure Boot, TPM, disk encryption, SELinux/AppArmor, ASLR, lockdown, code integrity, firewall, CPU vulnerability mitigations (0.6) |
+| Probe | `probe` | Linux readings under an explicit root, for monitoring agents (0.6) |
 | Units | crate root | `Bytes`, `Percent`, `Mhz` |
 
 ### 3.2 Out of scope, and where it goes
@@ -170,7 +174,8 @@ The lock comes before any data file is touched, the umask before any file is cre
 | generating ids, random numbers | already solved | `id-forge`, `mod-rand` |
 | listing, inspecting, or signalling other processes | cost (a full `/proc` walk), privacy (other users' command lines), a different threat model | not planned |
 | background collection, history, alerting, dashboards | a `-lib` has no threads; that is a service | metrics-lib, tower, health jobs |
-| DNS lookups (fully qualified host name) | can block on the network | `dns-net` |
+| DNS lookups (fully qualified host name) | can block on the network; sys-lib reads the configured servers only | `dns-net` |
+| cloud instance type, region, zone | needs a call to the cloud's metadata service | a cloud crate; sys-lib reports the vendor from firmware strings |
 | disk SMART health, fan control, CPU governors | privileged, vendor-specific, and changes the system | not planned |
 | TPM, Secure Enclave, hardware attestation, device keys | cryptographic proof of a device: the right tool for authentication | `key-vault` / `shield-sec` (future) |
 | kernel tuning (`sysctl` writes, registry writes) | changes the system | not planned |
@@ -442,7 +447,7 @@ v2 `cpu.max` (`"max 100000"` or `"150000 100000"`: quota and period in microseco
 
 ### 7.5 macOS, iOS, LXCFS
 
-- macOS has no cgroup equivalent: `mem::limit()` is `Ok(None)`. iOS has a per-app memory budget; `os_proc_available_memory()` reports it on iOS 13 and later [unverified], used for `mem::free()` on iOS (after 1.0).
+- macOS has no cgroup equivalent: `mem::limit()` is `Ok(None)`. iOS has a per-app memory budget; `os_proc_available_memory()` reports it on iOS 13 and later [unverified], used for `mem::free()` on iOS (0.5).
 - Some LXC and Kubernetes setups bind-mount LXCFS over `/proc/meminfo`, `/proc/stat`, and `/proc/cpuinfo` so they already show container values. sys-lib detects an LXCFS mount (`fuse.lxcfs` in mountinfo for those paths) and does not apply the cgroup limit a second time. Recorded in `Memory::source`.
 
 ---
@@ -686,7 +691,7 @@ When not to use it (first paragraph of `device::id`'s rustdoc, and `docs/DEVICE-
 
 ## 13. API outline
 
-The full API with signatures, errors, and examples is written in `docs/API.md` at the 0.2.0 design lock. This section fixes the item ids the roadmap refers to. Grades: P0 must ship in the listed version and never moves; P1 and P2 ship by 0.5; P3 after 1.0. Tier 1 is free functions with no configuration; Tier 2 snapshots, samplers, builders; Tier 3 caller buffers, raw counters, explicit roots.
+The full API with signatures, errors, and examples is written in `docs/API.md` at the 0.2.0 design lock. This section fixes the item ids the roadmap refers to. Grades: P0 must ship in the listed version and never moves; every other item ships by 0.6. Nothing is scheduled after 1.0 (D-028). Tier 1 is free functions with no configuration; Tier 2 snapshots, samplers, builders; Tier 3 caller buffers, raw counters, explicit roots.
 
 Convention in every example: `use sys_lib as sys;`, then `sys::os::name()`.
 
@@ -725,9 +730,26 @@ Convention in every example: `use sys_lib as sys;`, then `sys::os::name()`.
 | virt | VRT-01 to VRT-04 | `detect`, `is_vm`/`is_container`/`is_wsl`/`is_kubernetes`, `hypervisor`/`container`, evidence | 0.5 |
 | power | PWR-01 to PWR-03 | `has_battery`, `battery`, `on_ac` | 0.5 |
 | device | DEV-01 to DEV-07 | `id(app)`, `DeviceId`, `report()`, `Builder`, `fingerprint(app)`, `compare`, `to_bytes`/`from_bytes` | 0.5 |
-| after 1.0 | MEM-10, DSK-06, NET-07, HST-08, VRT-05, PWR-04, SNS-01, GPU-01, PRB-01 | huge pages, disk I/O counters, interface options, sessions, cloud vendor, several batteries, temperatures, GPU adapters, `Probe::with_root` | 1.1 / 1.2 |
+| root | ROOT-08 | `Pressure`, `Stall`, `PressureLevel` (shared by cpu, mem, disk) | 0.4 |
+| process | PRC-15 | `io()`: this process's storage reads and writes | 0.4 |
+| cpu | CPU-15 | `pressure()` | 0.4 |
+| mem | MEM-09 to MEM-11, MEM-13 | `pressure()` (from 0.5), `huge_pages()`, `activity()`/`Sampler` (swap and paging), `events()` (out-of-memory) | 0.4 |
+| disk | DSK-06, DSK-07 | `io()`, `io_over()`, `io_totals()`, `io_counters()`, `IoSampler`; `pressure()` | 0.4 |
+| net | NET-07 | `interfaces_with(options)` | 0.4 |
+| host | HST-09, HST-10 | `processes()`, `open_files()` (system-wide counts) | 0.4 |
+| process | PRC-24, PRC-25 | `launch()`, `is_service()`, `is_interactive()` | 0.5 |
+| mem | MEM-12 | `modules()` (SMBIOS type 17) | 0.5 |
+| net | NET-10 | `dns()` | 0.5 |
+| host | HST-08, HST-11 to HST-13 | `sessions()`, `firmware()`, `board()`, `clock_sync()` | 0.5 |
+| virt | VRT-05 | `cloud()` (firmware strings only) | 0.5 |
+| power | PWR-04 | `batteries()` | 0.5 |
+| readiness | RDY-01 to RDY-04 | `report()`, `report_for()`, `Profile`, `Report`/`Check` and writers | 0.6 |
+| bench | BEN-01 to BEN-03 | `environment()`, `Environment`, `Warning` | 0.6 |
+| security | SEC-01 to SEC-05 | `posture()`, `Posture` and its parts | 0.6 |
+| sensors, gpu, probe | SNS-01, GPU-01, PRB-01 | `temperatures()`, `gpu::list()`, `Probe::with_root` | 0.6 |
+| platforms | | FreeBSD implemented (not only build-checked); 32-bit Linux (i686, armv7) with verified layouts | 0.6 |
 
-Counts by grade: P0 33, P1 45, P2 38, P3 10 (by id row). A P3 module appears only when implemented; no stub modules returning `Unsupported` are shipped.
+The specification graded items P0 to P3 and scheduled P3 after 1.0; D-028 retired that: every item ships by 0.6. A module appears only when implemented; no stub modules returning `Unsupported` are shipped.
 
 ---
 
@@ -872,7 +894,7 @@ Where it deliberately does less: other processes (out of scope), temperatures on
 
 ## 18. Performance
 
-All figures are targets [est.] until measured in 0.6; `docs/PERFORMANCE.md` publishes measured numbers with hardware and method.
+All figures are targets [est.] until measured in 0.7; `docs/PERFORMANCE.md` publishes measured numbers with hardware and method.
 
 | Reading | Target | Compared with | Bar |
 |---|---|---|---|
@@ -908,7 +930,7 @@ Why sys-lib can be faster: static facts cached in `OnceLock` (competitors re-rea
 | Fixture conformance | the Linux backend against captured machine trees; Windows SMBIOS and registry parsers against captured tables; macOS sysctl parsing against captured values | `tests/fixtures/`, `tests/linux_fixtures.rs`, `tests/smbios.rs` | every CI job (pure data) |
 | Live comparison | answers compared with the OS's own tools on the runner (`nproc`, `getconf`, `free -b`, `df -B1`, `ip -j addr`, `systemd-detect-virt`; `sysctl -n`, `vm_stat`; `Get-CimInstance`, `Get-NetAdapter`, `Get-Volume`). Tests may spawn tools; the library never does. Exact for counts and names; memory within 2% plus 16 MiB | `tests/live_*.rs` | every CI job on its OS |
 | Property | invariants (5.3), `Bytes` formatting and ordering, `Percent` bounds, parsers never panic or exceed budget, round trips | `tests/prop_*.rs` | every CI job |
-| Fuzz | every parser (19.4) | `fuzz/` | nightly job 10 minutes per target; 24 hours per target before 0.7 |
+| Fuzz | every parser (19.4) | `fuzz/` | nightly job 10 minutes per target; 24 hours per target before 0.8 |
 | Miri | the whole `parse/` module and `units.rs` | CI job (from 0.3) | every push |
 | Counting allocator | every scalar live reading allocates 0 times after warm-up; list functions at most their documented count | `tests/alloc.rs` | every CI job |
 | Concurrency | 64 threads call every static getter at once at first use and see the same value; 16 threads call live readings for 10 s | `tests/concurrency.rs` | every CI job |
@@ -1082,8 +1104,8 @@ Every FR and NFR in section 4 maps to at least one named test in `tests/requirem
 | `docs/PLATFORM-NOTES.md` | per OS and environment: what is supported, what is `Unsupported`, and why | 0.5 |
 | `docs/DEVICE-ID.md` | derivation, anchors, stability, clone risks, privacy and legal notes, when not to use it | 0.5 |
 | `docs/ARCHITECTURE.md` | module tree, platform boundary, static versus live, FFI rules, parser layer | 0.5 |
-| `docs/PERFORMANCE.md` | measured numbers, method, hardware, competitors, cold and warm, container and bare metal | 0.6 |
-| `docs/SECURITY.md` | the threat model, each defence with its test and cost | 0.7 |
+| `docs/PERFORMANCE.md` | measured numbers, method, hardware, competitors, cold and warm, container and bare metal | 0.7 |
+| `docs/SECURITY.md` | the threat model, each defence with its test and cost | 0.8 |
 | `docs/STABILITY-1.0.md` | the 1.0 audit, the requirement-to-test map, and the 1.x guarantees (API, output formats, device id derivation) | 0.9 draft, 1.0 |
 | `CHANGELOG.md` | Keep a Changelog 1.1.0, in the same change as the code | every version |
 | `docs/release/vX.Y.Z.md` | release notes, past tense | every version |
@@ -1128,8 +1150,9 @@ At least one new defence idea per version, as hypothesis, method, and expected c
 | 0.3 | a lock directory on a filesystem without reliable locking (NFS, drvfs, 9p) silently allows two copies | refuse network and WSL host filesystems by `statfs` magic or type name | one `statfs` at start |
 | 0.4 | a hostile cgroup tree can make sys-lib walk forever (a bind-mounted fake tree with deep nesting) | cap the ancestor walk at 64 levels and the path at 4 096 bytes | none |
 | 0.5 | a device id derived from a shared container image identifies every container as the same device | `CloneRisk::SharedImageLikely` when the machine id file's modification time predates the container's start and the container has no private `/etc` mount | one `stat` |
-| 0.6 | timing of `Fingerprint::compare` could reveal which anchor changed to a co-located observer | constant-time per-anchor comparison and a fixed iteration count | about 10 ns |
-| 0.7 | a fuzzer-found class of parser bug repeats across parsers | one shared, fuzzed number and key-value tokenizer used by every parser | none |
+| 0.6 | a readiness or security report reads hundreds of files on a large host; a hostile or broken /sys (a FUSE mount, a stuck driver) could make the start-up check slow or hang | each report has a total read budget (files and bytes) and skips checks past it with `Unknown` and the reason; no check opens a network filesystem path | none in the normal case |
+| 0.7 | timing of `Fingerprint::compare` could reveal which anchor changed to a co-located observer | constant-time per-anchor comparison and a fixed iteration count | about 10 ns |
+| 0.8 | a fuzzer-found class of parser bug repeats across parsers | one shared, fuzzed number and key-value tokenizer used by every parser | none |
 
 Other ideas:
 
@@ -1169,3 +1192,7 @@ Other ideas:
 | D-025 | 2026-10-22 | Network traffic moves from 0.5 to 0.4 and grows: `net::totals()`, `counters()`, blocking `traffic()`/`traffic_over()` (1 s window), a caller-owned `Sampler` whose `sample()` allocates nothing, `sample_per_interface()`, and the `Rate` type (ROOT-07). `net::connections()` (NET-09) reports TCP and UDP socket counts only | James asked for download, upload, and connections. Aggregate counts are kernel statistics, not other people's data: nothing is listed (no addresses, ports, or owners), so the out-of-scope reason for `netstat` does not apply |
 | D-026 | 2026-10-22 | The documented install line is Cargo's rename, `sys = { package = "sys-lib", version = "..." }`, so code writes `sys::` with no import; `use sys_lib as sys;` stays the alternative and the form doc tests use | `sys` and `system` are taken on crates.io (checked 2026-10-22); James wants `sys::` without underscores |
 | D-027 | 2026-10-22 | The `docker-cgroup1-limited` and `ubuntu-24.04-desktop-amd` fixtures move from 0.2 to 0.3 | both need machines this project does not have yet (a cgroup v1 host; a bare-metal Linux desktop); 0.2 ships no code that reads them, and 0.3's exit (cgroup CPU limits, distribution and topology tests) requires them |
+| D-028 | 2026-10-22 | Nothing is scheduled after 1.0: 1.0 is the complete library. Every item the specification graded P3 for 1.1 or 1.2 ships by 0.6, and so does everything added at review. The roadmap gains 0.6 "Environment and reports"; optimisation moves to 0.7, hardening to 0.8, and alpha and beta share 0.9 (0.9.0 alpha integration, 0.9.x beta fixes, then 1.0.0-rc.N) | James will not publish a 1.0 he considers incomplete, and there was no engineering reason for the deferral: it came from the specification's grading, not from a dependency, a risk, or an API that needed real use first |
+| D-029 | 2026-10-22 | API additions at James's review: disk read and write rates with this process's own I/O; system-wide process, thread, and open-file counts; the server readiness report; firmware and motherboard; how the program was started; the security posture report; the benchmark environment report; the configured DNS servers. Decided here: CPU, memory, and I/O pressure with out-of-memory event counts (`Pressure` becomes a root type); swap and paging activity; memory modules; clock synchronization state | James asked for the first eight; pressure and OOM counts are the overload signals tower sheds load on and cost one small read each; paging activity shows thrashing that no total shows; memory modules reuse the SMBIOS parser; clock sync is a host fact clusters depend on (reading time stays in clock-lib) |
+| D-030 | 2026-10-22 | The readiness, benchmark, and security reports are read-only: they never change a setting; every check carries why it matters and the command that fixes it; a value that cannot be read is `Unknown`, never `Pass`; every threshold is a documented constant per profile | sys-lib reports facts (section 1.1); a library that changes kernel settings is a configuration tool, with a different threat model |
+| D-031 | 2026-10-22 | FreeBSD gets a real implementation in 0.6 (CI in a FreeBSD VM), and 32-bit Linux (i686, armv7) gets verified layouts in 0.6, instead of build-checked `Unsupported`; Windows per-core usage above 64 CPUs is verified in 0.4. OD-13 stands: no `serde` for 1.0 | D-028: "complete" covers the platforms sys-lib already compiles for; `serde` stays out because James accepted OD-13 and the hand-written writers cover logs and health endpoints |

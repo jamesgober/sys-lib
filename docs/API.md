@@ -16,9 +16,9 @@
 </div>
 <br>
 
-The complete public API of sys-lib 1.0, locked at `0.2.0`. Every item carries the version it arrives in (**Since**); the published crate exposes only what is implemented, so an item marked `0.4` does not exist in `0.3`. Signatures here are the contract: a change after `0.2.0` is recorded in the decision log of [`../dev/PLAN.md`](../dev/PLAN.md). Where an operating system has no such fact, the item says so and returns `Error::Unsupported`, `None`, or an `Unknown` variant; it never guesses. The exact file, system call, or API behind every reading, per OS, is in [`SOURCES.md`](./SOURCES.md).
+The complete public API of sys-lib 1.0, locked at `0.2.0` and extended at James's review (D-028 to D-031): everything listed here ships before 1.0, nothing waits for a later 1.x. Every item carries the version it arrives in (**Since**); the published crate exposes only what is implemented, so an item marked `0.4` does not exist in `0.3`. Signatures here are the contract: a change after `0.2.0` is recorded in the decision log of [`../dev/PLAN.md`](../dev/PLAN.md). Where an operating system has no such fact, the item says so and returns `Error::Unsupported`, `None`, or an `Unknown` variant; it never guesses. The exact file, system call, or API behind every reading, per OS, is in [`SOURCES.md`](./SOURCES.md).
 
-Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured numbers then replace them, labelled as measured.
+Costs are estimates (marked [est.]) until they are measured in `0.7.0`; measured numbers then replace them, labelled as measured.
 
 <sub>Copyright &copy; 2026 <strong>James Gober</strong>.</sub>
 
@@ -36,12 +36,15 @@ Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured
   - [`Percent`](#percent)
   - [`Mhz`](#mhz)
   - [`Rate`](#rate)
+  - [`Pressure`](#pressure)
   - [`summary()`](#summary)
 - [`build`: build info](#build-build-info)
 - [`instance`: instance info](#instance-instance-info)
 - [`process`: this process](#process-this-process)
   - [Readings](#readings)
   - [`CpuSampler`](#cpusampler)
+  - [Disk I/O of this process](#disk-io-of-this-process)
+  - [How the program was started](#how-the-program-was-started)
   - [The process guard](#the-process-guard)
 - [`os`: operating system](#os-operating-system)
   - [Kind and identity](#kind-and-identity)
@@ -50,24 +53,41 @@ Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured
   - [Identity and counts](#identity-and-counts)
   - [Usage](#usage)
   - [Load](#load)
+  - [CPU pressure](#cpu-pressure)
   - [Features](#features)
   - [Topology, caches, NUMA](#topology-caches-numa)
 - [`mem`: memory](#mem-memory)
+  - [Pressure and out-of-memory events](#pressure-and-out-of-memory-events)
+  - [Swap and paging activity](#swap-and-paging-activity)
+  - [Huge pages](#huge-pages)
+  - [Memory modules](#memory-modules)
 - [`disk`: disks and filesystems](#disk-disks-and-filesystems)
+  - [Disk I/O: read and write](#disk-io-read-and-write)
 - [`net`: network interfaces and traffic](#net-network-interfaces-and-traffic)
   - [Interfaces](#interfaces)
   - [Traffic: download and upload](#traffic-download-and-upload)
   - [Connections](#connections)
+  - [DNS servers](#dns-servers)
+  - [Interface options](#interface-options)
 - [`host`: the machine and its environment](#host-the-machine-and-its-environment)
+  - [System-wide counts](#system-wide-counts)
+  - [Firmware and motherboard](#firmware-and-motherboard)
+  - [Clock synchronization](#clock-synchronization)
+  - [Sessions](#sessions)
 - [`virt`: virtualization and containers](#virt-virtualization-and-containers)
 - [`power`: battery and AC](#power-battery-and-ac)
+- [`sensors`: temperatures](#sensors-temperatures)
+- [`gpu`: graphics adapters](#gpu-graphics-adapters)
+- [`readiness`: server readiness report](#readiness-server-readiness-report)
+- [`bench`: benchmark environment report](#bench-benchmark-environment-report)
+- [`security`: security posture](#security-security-posture)
 - [`device`: device identity](#device-device-identity)
   - [Tier 1](#tier-1)
   - [`Builder`](#builder)
   - [Stability report](#stability-report)
   - [Fingerprint](#fingerprint)
   - [When not to use it](#when-not-to-use-it)
-- [After 1.0](#after-10)
+- [`probe`: explicit roots for monitoring agents](#probe-explicit-roots-for-monitoring-agents)
 - [Errors by variant](#errors-by-variant)
 
 ## Setup
@@ -351,6 +371,31 @@ let r = Rate::from_bytes_per_sec(13_107_200);
 assert_eq!(r.to_string(), "12.5 MiB/s");
 assert_eq!(r.bits().to_string(), "104.9 Mbit/s");
 ```
+
+### `Pressure`
+
+**Since** 0.4 · ROOT-08
+
+```rust
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[non_exhaustive]
+pub struct Pressure {
+    pub level: PressureLevel,
+    pub some: Stall,               // share of time at least one task was stalled
+    pub full: Option<Stall>,       // share of time every non-idle task was stalled (None for CPU at the host level)
+    pub total: Option<Duration>,   // cumulative stall time
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[non_exhaustive]
+pub struct Stall { pub avg10: Percent, pub avg60: Percent, pub avg300: Percent }
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[non_exhaustive]
+pub enum PressureLevel { Normal, Warning, Critical }
+```
+
+How much work is stalled waiting for a resource: the best single signal that a machine (or a container) is overloaded, because it measures waiting rather than busyness. A CPU at 100% with no stall is doing its job; a CPU with 30% of tasks stalled is turning work away. `cpu::pressure()`, `mem::pressure()`, and `disk::pressure()` all return it. On Linux it is the kernel's pressure-stall information (PSI, kernel 4.20 and later), read from the process's own cgroup when it has one (so a container sees its own pressure) and from `/proc/pressure/` otherwise. `level` is `Warning` from 10% `some.avg10` and `Critical` from 40% (or any `full.avg10` above 10%), thresholds documented as constants. Where an OS has no such measure the functions return `Ok(None)`.
 
 ### `summary()`
 
@@ -664,6 +709,83 @@ if sys::process::is_elevated()? {
 }
 println!("running as {}", sys::process::user()?.name);
 # Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+### Disk I/O of this process
+
+**Since** 0.4 · PRC-15
+
+```rust
+pub mod process {
+    pub fn io() -> Result<ProcessIo>;     // since the process started; no allocation
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
+pub struct ProcessIo {
+    pub read: Bytes,                // from storage
+    pub written: Bytes,             // to storage
+    pub read_ops: Option<u64>,
+    pub write_ops: Option<u64>,
+    pub storage_only: bool,         // false where the OS counts all I/O (Windows counts network too)
+}
+```
+
+| OS | Source | Cost [est.] |
+|---|---|---|
+| Linux | `/proc/self/io` (`read_bytes`, `write_bytes`: storage; `syscr`, `syscw`) | 3 µs |
+| macOS | `proc_pid_rusage(RUSAGE_INFO_V2)` (`ri_diskio_bytesread`, `ri_diskio_byteswritten`) | 2 µs |
+| Windows | `GetProcessIoCounters` (all I/O, files and network: `storage_only` is false) | 0.3 µs |
+
+How much this process has read from and written to storage, for a database's own write amplification or a backup tool's throughput. A `process::IoSampler` is not needed: `ProcessIo` values subtract (`Sub` is implemented) and `Rate::per(bytes, interval)` turns a difference into a rate.
+
+### How the program was started
+
+**Since** 0.5 · PRC-24, PRC-25
+
+```rust
+pub mod process {
+    pub fn launch() -> &'static Launch;    // static: decided at the first call
+    pub fn is_service() -> bool;           // started by a service manager or an orchestrator
+    pub fn is_interactive() -> bool;       // standard input and output are a terminal (live)
+}
+
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct Launch {
+    pub by: Launcher,
+    pub unit: Option<&'static str>,        // "site.service", the launchd label, the Windows service name
+    pub notify_socket: bool,               // systemd's NOTIFY_SOCKET is set: readiness can be reported
+    pub evidence: Vec<virt::Evidence>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum Launcher { Systemd, Launchd, WindowsService, ContainerInit, Init, Terminal, Ssh, Cron, Unknown }
+```
+
+| Launcher | Linux | macOS | Windows |
+|---|---|---|---|
+| `Systemd` | `INVOCATION_ID` and the `.service` unit in `/proc/self/cgroup` | | |
+| `Launchd` | | parent pid 1 and `XPC_SERVICE_NAME` set to a label | |
+| `WindowsService` | | | session 0 (`ProcessIdToSessionId`) and no console window |
+| `ContainerInit` | process id 1 inside a container (`virt`) | | |
+| `Init` | process id 1 outside a container | | |
+| `Ssh` | `SSH_CONNECTION` (weak evidence) | same | |
+| `Cron` | `/proc/self/cgroup` in `cron.service` (strong), or the cron environment (weak) | | |
+| `Terminal` | standard input or output is a terminal | same | a console is attached and it is interactive |
+
+How the program was started, so a service can choose its behaviour without configuration: plain JSON logs and readiness reporting under systemd, colour and progress output in a terminal, no console tricks in a Windows service. Each answer carries its evidence (environment variables are weak evidence: any parent can set them). sys-lib reports `notify_socket`; sending the readiness message is the service kernel's job.
+
+```rust
+use sys_lib as sys;
+
+match sys::process::launch().by {
+    sys::process::Launcher::Systemd => { /* JSON logs to the journal; report readiness */ }
+    sys::process::Launcher::Terminal => { /* human-readable logs */ }
+    _ => {}
+}
+if sys::process::is_interactive() { println!("press Ctrl-C to stop"); }
 ```
 
 ### `CpuSampler`
@@ -1204,6 +1326,18 @@ match sys::cpu::load()? {
 # Ok::<(), sys_lib::Error>(())
 ```
 
+### CPU pressure
+
+**Since** 0.4 · CPU-15
+
+```rust
+pub mod cpu {
+    pub fn pressure() -> Result<Option<Pressure>>;   // Ok(None) where the OS has no stall measure
+}
+```
+
+How much runnable work waited for a CPU over the last 10, 60, and 300 seconds ([`Pressure`](#pressure)). It is the direct form of what the load average approximates: load counts programs, pressure measures the time they lost. Linux: the cgroup's `cpu.pressure`, or `/proc/pressure/cpu`. macOS and Windows have no stall measure: `Ok(None)`. Cost: 2 to 5 µs [est.].
+
 ### Features
 
 **Since** 0.4 (CPU-30, CPU-31), 0.5 (CPU-32)
@@ -1323,7 +1457,7 @@ println!("cache line {} bytes, {} NUMA nodes", sys::cpu::cache_line(), sys::cpu:
 
 ## `mem`: memory
 
-**Since** 0.4 (MEM-01 to MEM-08), 0.5 (MEM-09)
+**Since** 0.4 (MEM-01 to MEM-11, MEM-13), 0.5 (MEM-12)
 
 ```rust
 pub mod mem {
@@ -1369,13 +1503,6 @@ pub enum LimitSource { Cgroup1, Cgroup2, JobObject }
 #[non_exhaustive]
 pub struct Swap { pub total: Bytes, pub used: Bytes, pub free: Bytes }
 
-#[derive(Clone, Copy, Debug)]
-#[non_exhaustive]
-pub struct Pressure { pub level: PressureLevel, pub some_avg10: Option<Percent>, pub full_avg10: Option<Percent> }
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-#[non_exhaustive]
-pub enum PressureLevel { Normal, Warning, Critical }
 ```
 
 | Id | Item | Since | Cost per call [est.] |
@@ -1388,7 +1515,7 @@ pub enum PressureLevel { Normal, Warning, Critical }
 | MEM-06 | `limit()` | 0.4 | Linux 4 to 10 µs; Windows 1 µs; macOS 0 (`None`) |
 | MEM-07 | `swap()` | 0.4 | Linux 2 to 4 µs; macOS 0.5 µs; Windows 2 µs |
 | MEM-08 | `page_size()` | 0.4 | about 1 ns |
-| MEM-09 | `pressure()` | 0.5 | Linux 2 µs (`None` on kernels without PSI); macOS 0.5 µs; Windows 1 µs |
+| MEM-09 | `pressure()` | 0.4 | Linux 2 µs (`None` on kernels without PSI); macOS 0.5 µs; Windows 1 µs |
 
 **Container-aware by default.** Inside a container or a systemd unit with a memory limit, `total()` is the limit: what this process can use and what the OOM killer enforces. sysinfo and psutil report the host instead; sys-lib gives the host through `host_total()`. The limit is the smallest `memory.max` over the cgroup and its ancestors (cgroup v2), `hierarchical_memory_limit` (cgroup v1), or the job object's process or job memory limit (Windows). "Used" inside a limit is the cgroup's working set: current usage minus inactive file pages, the definition the kubelet uses for eviction. With LXCFS the limit is not applied twice. The limit can change while a process runs (Kubernetes in-place resize, VM ballooning), so `total()` is a live reading.
 
@@ -1417,16 +1544,121 @@ let cache_bytes = sys::mem::total()?.raw() / 4;
 // Shed load before the OOM killer does.
 if sys::mem::free_percent()?.value() < 5.0 { /* refuse new work */ }
 if let Some(p) = sys::mem::pressure()? {
-    if p.level >= sys::mem::PressureLevel::Warning { /* trim caches */ }
+    if p.level >= sys::PressureLevel::Warning { /* trim caches */ }
 }
 # Ok::<(), sys_lib::Error>(())
 ```
+
+`mem::pressure()` returns the shared [`Pressure`](#pressure) type. On macOS it maps `kern.memorystatus_vm_pressure_level` (normal, warn, critical) to `level` with no stall percentages; on Windows a low-memory resource notification gives `Critical`.
+
+### Pressure and out-of-memory events
+
+**Since** 0.4 · MEM-13
+
+```rust
+pub mod mem {
+    pub fn events() -> Result<Option<MemoryEvents>>;   // counts since the cgroup (or the boot) began
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
+pub struct MemoryEvents {
+    pub oom_kills: u64,        // processes the OOM killer ended
+    pub oom: u64,              // times the limit was reached and reclaim failed
+    pub max: u64,              // times usage hit the hard limit
+    pub high: u64,             // times usage went over the throttle point (memory.high)
+    pub scope: EventScope,     // Cgroup or Host
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum EventScope { Cgroup, Host }
+```
+
+Whether this container (or machine) has been running out of memory: a watchdog compares two readings and sheds load or restarts before the next OOM kill. Linux: cgroup v2 `memory.events`, cgroup v1 `memory.oom_control` (`oom_kill`), and outside a cgroup `/proc/vmstat` `oom_kill` (kernel 4.13 and later; `max` and `high` are then 0). macOS and Windows keep no such counters: `Ok(None)`. Cost: 3 µs [est.].
+
+### Swap and paging activity
+
+**Since** 0.4 · MEM-11
+
+```rust
+pub mod mem {
+    pub fn activity() -> Result<Activity>;                       // BLOCKS for 1 s
+    pub struct Sampler { /* previous counters and Instant */ }
+    impl Sampler {
+        pub fn new() -> Result<Sampler>;
+        pub fn sample(&mut self) -> Result<Activity>;            // never blocks; no allocation
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[non_exhaustive]
+pub struct Activity {
+    pub swap_in: Rate, pub swap_out: Rate,        // memory moved between RAM and swap
+    pub major_faults_per_sec: Option<f64>,        // page faults that had to read from disk
+    pub interval: Duration,
+}
+```
+
+Whether the machine is thrashing: steady swap-out with major faults means memory is too small for the work, which no memory total can show. Linux: `/proc/vmstat` (`pswpin`, `pswpout`, `pgmajfault`, in pages). macOS: `vm_statistics64` (`swapins`, `swapouts`, `pageins`). Windows: no documented system-wide paging counters outside performance counters [verify `NtQuerySystemInformation(SystemPerformanceInformation)` against the headers before 0.4; `Unsupported` if it does not hold]. Cost: 2 to 5 µs per sample [est.].
+
+### Huge pages
+
+**Since** 0.4 · MEM-10
+
+```rust
+pub mod mem {
+    pub fn huge_pages() -> Result<Option<HugePages>>;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub struct HugePages {
+    pub page_size: Bytes,                    // 2 MiB on x86_64
+    pub total: u64, pub free: u64, pub reserved: u64,
+    pub transparent: Option<TransparentHugePages>,   // Linux THP mode
+    pub large_page_minimum: Option<Bytes>,   // Windows GetLargePageMinimum
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum TransparentHugePages { Always, Madvise, Never }
+```
+
+Explicit huge pages and the transparent-huge-page mode, which databases and JIT runtimes care about. Linux: `HugePages_*` and `Hugepagesize` in `/proc/meminfo`, `/sys/kernel/mm/transparent_hugepage/enabled`. Windows: `GetLargePageMinimum`. macOS: `Ok(None)` (superpages are not exposed this way).
+
+### Memory modules
+
+**Since** 0.5 · MEM-12
+
+```rust
+pub mod mem {
+    pub fn modules() -> Result<Vec<MemoryModule>>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MemoryModule {
+    pub size: Bytes,
+    pub kind: MemoryKind,                 // Ddr4, Ddr5, Lpddr5, ...
+    pub form: MemoryForm,                 // Dimm, SoDimm, Soldered, ...
+    pub speed_mts: Option<u32>,           // rated, mega-transfers per second
+    pub configured_speed_mts: Option<u32>,
+    pub locator: Option<String>,          // "DIMM_A1"
+    pub manufacturer: Option<String>,
+    pub part_number: Option<String>,      // never the serial number
+}
+#[non_exhaustive] pub enum MemoryKind { Ddr3, Ddr4, Ddr5, Lpddr4, Lpddr5, Lpddr5x, Hbm, Other, Unknown }
+#[non_exhaustive] pub enum MemoryForm { Dimm, SoDimm, Soldered, Other, Unknown }
+```
+
+The installed memory sticks, from the SMBIOS type 17 records (the same bounded, fuzzed SMBIOS parser device identity uses). Windows reads them unprivileged (`GetSystemFirmwareTable('RSMB')`). Linux keeps the raw table root-only (`/sys/firmware/dmi/tables/DMI`, mode 0400): `PermissionDenied` with a hint unless the process runs as root. macOS: `Unsupported` for slot details on Apple silicon (unified memory, one package); Intel Macs from the IORegistry memory node [verify]. Empty slots are left out. Serial numbers are never read into the result.
 
 ---
 
 ## `disk`: disks and filesystems
 
-**Since** 0.4 (DSK-01 to DSK-03), 0.5 (DSK-04, DSK-05)
+**Since** 0.4 (DSK-01 to DSK-03, DSK-06, DSK-07), 0.5 (DSK-04, DSK-05)
 
 ```rust
 pub mod disk {
@@ -1502,6 +1734,76 @@ use sys_lib::disk::{self, ListOptions};
 let mut options = ListOptions::default();
 options.include_network = true;      // accept the risk of a hang on a dead mount
 let all = disk::list_with(options)?;
+# Ok::<(), sys_lib::Error>(())
+```
+
+### Disk I/O: read and write
+
+**Since** 0.4 · DSK-06, DSK-07
+
+```rust
+pub mod disk {
+    pub const DEFAULT_WINDOW: Duration;                         // 1 s
+    pub fn io() -> Result<DiskIo>;                              // BLOCKS for DEFAULT_WINDOW: every physical disk together
+    pub fn io_over(window: Duration) -> Result<DiskIo>;         // BLOCKS for `window`, clamped to 100 ms ..= 60 s
+    pub fn io_totals() -> Result<IoTotals>;                     // since boot
+    pub fn io_counters() -> Result<Vec<IoCounters>>;            // Tier 2: per physical disk
+    pub fn pressure() -> Result<Option<Pressure>>;              // time tasks waited on I/O
+
+    pub struct IoSampler { /* previous counters and Instant */ }
+    impl IoSampler {
+        pub fn new() -> Result<IoSampler>;
+        pub fn sample(&mut self) -> Result<DiskIo>;                        // never blocks; no allocation
+        pub fn sample_per_disk(&mut self) -> Result<Vec<DeviceIo>>;        // allocates the Vec
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[non_exhaustive]
+pub struct DiskIo {
+    pub read: Rate, pub write: Rate,
+    pub reads_per_sec: f64, pub writes_per_sec: f64,     // operations (IOPS)
+    pub busy: Option<Percent>,                           // share of the interval with I/O in flight
+    pub average_latency: Option<Duration>,               // time per completed operation
+    pub interval: Duration,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
+pub struct IoTotals { pub read: Bytes, pub written: Bytes, pub reads: u64, pub writes: u64, pub io_time: Option<Duration> }
+
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DeviceIo { pub device: String, pub io: DiskIo }       // "nvme0n1", "disk0", "PhysicalDrive0"
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct IoCounters { pub device: String, pub totals: IoTotals }
+```
+
+| Id | Item | Tier | Cost [est.] |
+|---|---|---|---|
+| DSK-06 | `io()`, `io_over()`, `io_totals()`, `io_counters()`, `IoSampler` | 1 / 2 | Linux 10 to 30 µs (`/proc/diskstats`, one read); macOS 50 to 200 µs (IOKit); Windows 20 µs per disk |
+| DSK-07 | `pressure()` | 1 | Linux 2 to 5 µs |
+
+How hard the disks are working right now: read and write speed, operations per second, how busy each disk is, and how long each operation takes. Like network traffic, a rate needs two readings: `io()` blocks for one second; a monitor keeps an `IoSampler`. Only physical disks are counted (partitions, device-mapper and RAID members, loop, RAM, and zram devices are left out), so nothing is counted twice.
+
+| OS | Source |
+|---|---|
+| Linux | `/proc/diskstats`: sectors read and written (512-byte units whatever the device's block size), completed operations, time spent on I/O (`io_ticks`, for `busy`), weighted time (for latency); whole disks only, identified through `/sys/block` |
+| macOS | IOKit `IOBlockStorageDriver` `Statistics` (bytes, operations, total time read and written) |
+| Windows | `IOCTL_DISK_PERFORMANCE` on each `\\.\PhysicalDriveN` opened with no access rights (`BytesRead`, `BytesWritten`, `ReadCount`, `WriteCount`, `IdleTime`, `QueryTime`) [verify unprivileged access on CI] |
+
+`disk::pressure()` is the kernel's I/O pressure (the cgroup's `io.pressure`, or `/proc/pressure/io`): the share of time tasks were stalled on I/O. macOS and Windows: `Ok(None)`. A counter that goes backwards (a disk removed and re-attached) re-bases that disk. Inside a container the disks are the host's (the kernel keeps one set); the cgroup's own I/O is `process::io()` for this process.
+
+```rust
+use sys_lib as sys;
+
+let io = sys::disk::io()?;            // blocks 1 s
+println!("read {} write {} ({:.0} IOPS, busy {:?})", io.read, io.write, io.reads_per_sec + io.writes_per_sec, io.busy);
+if let Some(p) = sys::disk::pressure()? {
+    if p.level >= sys::PressureLevel::Warning { /* postpone compaction */ }
+}
 # Ok::<(), sys_lib::Error>(())
 ```
 
@@ -1705,11 +2007,53 @@ if let Some(open) = c.tcp_established {
 # Ok::<(), sys_lib::Error>(())
 ```
 
+### DNS servers
+
+**Since** 0.5 · NET-10
+
+```rust
+pub mod net {
+    pub fn dns() -> Result<Dns>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Dns {
+    pub servers: Vec<IpAddr>,          // what the system resolver uses
+    pub upstream: Vec<IpAddr>,         // behind a local stub (systemd-resolved 127.0.0.53), the servers it forwards to
+    pub search: Vec<String>,           // search domains
+}
+```
+
+The DNS servers this machine is configured to use, read from configuration only: sys-lib never sends a DNS query. Linux: `/etc/resolv.conf` (`nameserver`, `search`, `domain`), and when it points at the systemd-resolved stub, `/run/systemd/resolve/resolv.conf` for the upstream servers. macOS: the SystemConfiguration dynamic store `State:/Network/Global/DNS` [verify], falling back to `/etc/resolv.conf`. Windows: the DNS server lists of the up adapters from `GetAdaptersAddresses`, in interface-metric order. Bounded: at most 64 servers and 64 search domains; anything longer is `TooLarge`.
+
+### Interface options
+
+**Since** 0.4 · NET-07
+
+```rust
+pub mod net {
+    pub fn interfaces_with(options: InterfaceOptions) -> Result<Vec<Interface>>;
+}
+
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct InterfaceOptions {
+    pub include_down: bool,          // default true
+    pub include_loopback: bool,      // default true
+    pub details: bool,               // default true; false skips the per-interface /sys reads (speed, MTU, kind)
+    pub max_interfaces: usize,       // default 4_096
+}
+impl Default for InterfaceOptions;
+```
+
+A Kubernetes node with thousands of `veth` interfaces lists them all in about a millisecond with `details: false`.
+
 ---
 
 ## `host`: the machine and its environment
 
-**Since** 0.3 (HST-01), 0.4 (HST-02, HST-03), 0.5 (HST-05 to HST-07). The load average is [`cpu::load()`](#load).
+**Since** 0.3 (HST-01), 0.4 (HST-02, HST-03, HST-09, HST-10), 0.5 (HST-05 to HST-08, HST-11 to HST-13). The load average is [`cpu::load()`](#load).
 
 ```rust
 pub mod host {
@@ -1764,6 +2108,105 @@ let tz = sys::host::timezone()?;
 println!("zone {:?}, offset {} s", tz.iana, tz.utc_offset_seconds);
 # Ok::<(), sys_lib::Error>(())
 ```
+
+### System-wide counts
+
+**Since** 0.4 · HST-09, HST-10
+
+```rust
+pub mod host {
+    pub fn processes() -> Result<Processes>;
+    pub fn open_files() -> Result<OpenFiles>;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
+pub struct Processes { pub total: u64, pub threads: Option<u64>, pub running: Option<u64> }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
+pub struct OpenFiles { pub open: Option<u64>, pub max: Option<u64> }   // Windows: handles, no maximum
+```
+
+How many processes and threads the machine runs and how many files are open across it, as totals only: no process is listed or inspected. Inside a container the process count is the container's process namespace.
+
+| OS | Processes | Threads, running | Open files |
+|---|---|---|---|
+| Linux | the numeric directory names in `/proc` (counted, not opened) | `/proc/loadavg` (running/total), `procs_running` in `/proc/stat` | `/proc/sys/fs/file-nr` (open, max) |
+| macOS | `proc_listallpids(NULL, 0)` | `kern.num_threads`; running `None` | `kern.num_files`, `kern.maxfiles` |
+| Windows | `GetPerformanceInfo` `ProcessCount` | `ThreadCount`; running `None` | `HandleCount` (handles), max `None` |
+
+Cost: Linux 20 to 200 µs (scales with processes; bounded at 4 million entries), macOS and Windows 2 to 10 µs [est.].
+
+### Firmware and motherboard
+
+**Since** 0.5 · HST-11, HST-12
+
+```rust
+pub mod host {
+    pub fn firmware() -> Option<&'static Firmware>;    // static
+    pub fn board() -> Option<&'static Board>;          // static
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub struct Firmware {
+    pub kind: FirmwareKind,                  // Uefi, Bios, Unknown
+    pub vendor: Option<&'static str>,        // "American Megatrends International, LLC.", "Apple Inc."
+    pub version: Option<&'static str>,       // "1.40", "11881.41.5"
+    pub date: Option<&'static str>,          // "2025-03-14" (normalised from SMBIOS's MM/DD/YYYY)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub struct Board { pub vendor: Option<&'static str>, pub name: Option<&'static str>, pub version: Option<&'static str> }
+
+#[non_exhaustive] pub enum FirmwareKind { Uefi, Bios, Unknown }
+```
+
+| OS | Firmware | Board |
+|---|---|---|
+| Linux | `/sys/class/dmi/id/{bios_vendor,bios_version,bios_date}` (mode 0444); UEFI when `/sys/firmware/efi` exists | `board_vendor`, `board_name`, `board_version` (0444) |
+| Windows | SMBIOS type 0 from `GetSystemFirmwareTable('RSMB')`; `GetFirmwareType` | SMBIOS type 2 |
+| macOS | vendor "Apple Inc.", version from the IORegistry (`system-firmware-version` on Apple silicon, the boot ROM version on Intel) [verify property names]; always UEFI-class | `board-id` of `IOPlatformExpertDevice` (Intel); Apple silicon: the model identifier |
+
+Placeholder strings ("To be filled by O.E.M.", "Default string") are `None`. Serial numbers are never part of these answers (they are identifiers; see `device`). Inside a VM these describe the virtual firmware, which is correct for the process.
+
+### Clock synchronization
+
+**Since** 0.5 · HST-13
+
+```rust
+pub mod host {
+    pub fn clock_sync() -> Result<Option<ClockSync>>;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub struct ClockSync {
+    pub synchronized: bool,                     // the kernel believes the clock is disciplined
+    pub max_error: Option<Duration>,            // the kernel's error bound
+    pub estimated_error: Option<Duration>,
+}
+```
+
+Whether the system clock is kept in sync (NTP, chrony, PTP, Windows Time), which leases, distributed locks, and hybrid logical clocks depend on: a cluster node with an unsynchronised clock should not take part. Linux and macOS: `ntp_adjtime` in read-only mode (no flags set), `TIME_ERROR` or `STA_UNSYNC` meaning not synchronised. Windows: `GetSystemTimeAdjustmentPrecise` reports whether time adjustment is active; synchronised state from the Windows Time service's last successful sync [verify an unprivileged source before 0.5; `Ok(None)` otherwise]. Reading time itself stays in clock-lib.
+
+### Sessions
+
+**Since** 0.5 · HST-08
+
+```rust
+pub mod host {
+    pub fn sessions() -> Result<Vec<Session>>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Session { pub user: String, pub terminal: Option<String>, pub remote: bool, pub since: Option<SystemTime> }
+```
+
+Who is logged in: Linux and macOS from the utmp database (`getutxent`), Windows from `WTSEnumerateSessionsW` and `WTSQuerySessionInformationW`. The remote host address is not returned (only whether the session is remote). User names are personal data: keep them out of output that leaves the machine.
 
 ---
 
@@ -1833,6 +2276,8 @@ if sys::virt::is_container() {
 for e in &v.evidence { println!("  {} ({:?})", e.check, e.strength); }
 ```
 
+**Cloud vendor** (VRT-05, since 0.5): `virt::cloud() -> Option<Cloud>` with `Cloud { Aws, Gcp, Azure, Oracle, Alibaba, Hetzner, DigitalOcean, Linode, Vultr, Scaleway, Ovh, Other }`, from the DMI and SMBIOS vendor and product strings and the hypervisor leaves only. sys-lib never contacts a metadata service: instance types, regions, and zones need a network call and belong to a cloud crate.
+
 ---
 
 ## `power`: battery and AC
@@ -1879,6 +2324,236 @@ if let Some(b) = sys::power::battery()? {
 if sys::power::on_ac()? == Some(false) { /* on battery */ }
 # Ok::<(), sys_lib::Error>(())
 ```
+
+**Each battery** (PWR-04, since 0.5): `power::batteries() -> Result<Vec<Battery>>` returns every system battery separately (laptops with two packs, UPS-backed devices that report as system batteries), in the order the OS lists them; `battery()` stays the combined value.
+
+---
+
+## `sensors`: temperatures
+
+**Since** 0.6 · SNS-01
+
+```rust
+pub mod sensors {
+    pub fn temperatures() -> Result<Vec<Temperature>>;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Temperature {
+    pub label: String,                  // "Package id 0", "Composite", "edge"
+    pub kind: SensorKind,               // Cpu, Gpu, Storage, Battery, Ambient, Other
+    pub celsius: f32,
+    pub high: Option<f32>, pub critical: Option<f32>,
+}
+```
+
+| OS | Source |
+|---|---|
+| Linux | `/sys/class/hwmon/hwmon*/temp*_{input,label,max,crit}` (millidegrees); kind from the hwmon `name` (`coretemp`, `k10temp`, `zenpower`, `nvme`, `amdgpu`, `acpitz`); `/sys/class/thermal/thermal_zone*` when hwmon is absent |
+| macOS | `Unsupported`: Apple silicon sensors need private HID event APIs and Intel SMC keys are undocumented; nothing undocumented is used |
+| Windows | `Unsupported` for the CPU: the only documented source (`MSAcpi_ThermalZoneTemperature`) needs WMI and Administrator and reports ACPI zones, not the CPU; NVMe drives through `IOCTL_STORAGE_QUERY_PROPERTY` `StorageDeviceTemperatureProperty` (unprivileged) |
+
+Inside Docker and WSL, hwmon is usually absent: an empty list, not an error.
+
+## `gpu`: graphics adapters
+
+**Since** 0.6 · GPU-01
+
+```rust
+pub mod gpu {
+    pub fn list() -> Result<Vec<Gpu>>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Gpu {
+    pub name: String, pub vendor: GpuVendor, pub kind: GpuKind,      // Integrated, Discrete, Virtual, Unknown
+    pub vendor_id: Option<u16>, pub device_id: Option<u16>,
+    pub memory: Option<Bytes>, pub driver: Option<String>,
+}
+#[non_exhaustive] pub enum GpuVendor { Nvidia, Amd, Intel, Apple, Qualcomm, Arm, Microsoft, Vmware, Other }
+```
+
+| OS | Source |
+|---|---|
+| Linux | `/sys/class/drm/card*/device/{vendor,device,uevent,mem_info_vram_total}`; the name from `pci.ids` when installed (`/usr/share/hwdata/pci.ids`, `/usr/share/misc/pci.ids`; a bounded, fuzzed parser), else "Vendor GPU 0x1234" |
+| macOS | IOKit `IOPCIDevice` entries of display class, `model` property; Apple silicon from the `AGXAccelerator` service [verify property names] |
+| Windows | `EnumDisplayDevicesW` (user32) for names; dedicated memory from the adapter's registry key (`HardwareInformation.qwMemorySize`) [verify] |
+
+No GPU usage or memory-in-use: those need vendor libraries (NVML, ROCm SMI, DXGI COM), which sys-lib does not load.
+
+---
+
+## `readiness`: server readiness report
+
+**Since** 0.6 · RDY-01 to RDY-04
+
+```rust
+pub mod readiness {
+    pub fn report(profile: Profile) -> Report;                              // never fails
+    pub fn report_for(profile: Profile, data_dir: impl AsRef<Path>) -> Report;  // adds the data directory's checks
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum Profile { General, Database, WebServer, Benchmark }
+
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct Report { pub profile: Profile, pub checks: Vec<Check> }
+impl Report {
+    pub fn passed(&self) -> bool;                                    // no Fail
+    pub fn warnings(&self) -> impl Iterator<Item = &Check>;
+    pub fn failures(&self) -> impl Iterator<Item = &Check>;
+    pub fn write_kv(&self, out: &mut impl fmt::Write) -> fmt::Result;
+    pub fn write_json(&self, out: &mut impl fmt::Write) -> fmt::Result;
+}
+impl fmt::Display for Report;   // a table: status, check, found, recommended
+
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct Check {
+    pub id: &'static str,             // "linux.thp", "limits.nofile", "fs.noatime"
+    pub title: &'static str,          // "Transparent huge pages"
+    pub status: Status,               // Pass, Warn, Fail, Unknown
+    pub found: String,                // "always"
+    pub recommended: &'static str,    // "madvise or never"
+    pub why: &'static str,            // one sentence
+    pub fix: &'static str,            // the command or setting that changes it
+}
+
+#[non_exhaustive] pub enum Status { Pass, Warn, Fail, Unknown }
+```
+
+A start-up check of the operating-system settings that decide whether a server performs and stays up under load, with the reason and the fix for each, the way enterprise databases warn at boot. **Read-only:** sys-lib reports and never changes a setting; `fix` tells the operator what to run. Every threshold is a documented constant per profile.
+
+| Check | Linux | macOS | Windows | Database profile wants |
+|---|---|---|---|---|
+| transparent huge pages | `/sys/kernel/mm/transparent_hugepage/{enabled,defrag}` | | | `madvise` or `never` |
+| swappiness | `/proc/sys/vm/swappiness` | | | 1 to 10 |
+| memory overcommit | `/proc/sys/vm/overcommit_memory`, `overcommit_ratio` | | | 0 or 2, never 1 for databases |
+| memory map count | `/proc/sys/vm/max_map_count` | | | at least 262 144 |
+| dirty page flushing | `/proc/sys/vm/dirty_ratio`, `dirty_background_ratio` (or `_bytes`) | | | background at most 5%, foreground at most 15% |
+| NUMA balancing and zone reclaim | `/proc/sys/kernel/numa_balancing`, `/proc/sys/vm/zone_reclaim_mode` | | | both 0 on multi-socket hosts |
+| open-file limits | `RLIMIT_NOFILE` of this process; `/proc/sys/fs/file-max`, `nr_open` | `RLIMIT_NOFILE`; `kern.maxfiles`, `kern.maxfilesperproc` | handles are unlimited: Pass | soft at least 65 536 |
+| locked-memory limit | `RLIMIT_MEMLOCK` | same | the lock-pages privilege (`SeLockMemoryPrivilege`) in the token | enough for the buffer pool when it is locked |
+| listen backlog | `/proc/sys/net/core/somaxconn`, `net/ipv4/tcp_max_syn_backlog` | `kern.ipc.somaxconn` | | at least 4 096 |
+| ephemeral ports | `/proc/sys/net/ipv4/ip_local_port_range` | `net.inet.ip.portrange.first`/`last` | dynamic port range from the registry | at least 28 000 ports |
+| CPU frequency policy | `scaling_governor` per CPU | | the active power plan (`PowerGetActiveScheme`) | `performance` / High performance |
+| clock source | `/sys/devices/system/clocksource/clocksource0/current_clocksource` | | | `tsc` (`hpet`, `xen`, `acpi_pm` are slow to read) |
+| clock synchronized | `host::clock_sync()` | same | same | synchronized |
+| swap present | `mem::swap()` | same | pagefile | some swap or zram, small |
+| I/O scheduler of the data disk | `/sys/block/<disk>/queue/scheduler` | | | `none` or `mq-deadline` on SSD and NVMe |
+| data directory filesystem | `disk::of(data_dir)`: type, mount options | `statfs` | `GetVolumeInformationW` | local; ext4 or xfs (Linux), APFS, NTFS or ReFS; `noatime` or `relatime` |
+| data directory space and kind | `disk::space`, `DiskKind` | same | same | SSD; at least 15% free |
+| container limits | `mem::limit()`, `cpu::quota()` | | job object | reported (Pass with the values) |
+
+Each check runs only where it applies; elsewhere it is left out (not reported as passing). A value sys-lib cannot read is `Unknown` with the reason, never a guess. Cost: 0.2 to 2 ms once, at start-up [est.].
+
+```rust
+use sys_lib::readiness::{self, Profile};
+
+let report = readiness::report_for(Profile::Database, "/var/lib/hive");
+println!("{report}");
+// WARN  linux.thp        Transparent huge pages   always    madvise or never
+//       echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
+if !report.passed() { /* refuse to start, or log loudly */ }
+```
+
+## `bench`: benchmark environment report
+
+**Since** 0.6 · BEN-01 to BEN-03
+
+```rust
+pub mod bench {
+    pub fn environment() -> Environment;          // never fails; static parts cached, live parts read now
+}
+
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct Environment {
+    pub governor: Option<String>,          // "performance", "powersave", "schedutil"; Windows power plan name
+    pub turbo: Option<bool>,               // boost enabled
+    pub smt: Option<bool>,                 // hyper-threading active
+    pub invariant_tsc: Option<bool>,       // the CPU's time-stamp counter runs at a constant rate (x86)
+    pub clock_source: Option<String>,      // Linux: "tsc"
+    pub throttled: Option<bool>,           // thermal or power throttling since boot (Linux counters) or now (Windows MhzLimit)
+    pub isolated_cpus: Option<String>,     // Linux isolcpus / nohz_full
+    pub aslr: Option<bool>,
+    pub on_ac: Option<bool>,
+    pub load: Option<cpu::Load>,
+    pub virtualized: bool,
+    pub warnings: Vec<Warning>,
+}
+impl Environment {
+    pub fn is_reproducible(&self) -> bool;   // no warning that makes results noisy
+    pub fn write_kv(&self, out: &mut impl fmt::Write) -> fmt::Result;
+    pub fn write_json(&self, out: &mut impl fmt::Write) -> fmt::Result;
+}
+impl fmt::Display for Environment;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum Warning { PowerSaving, TurboEnabled, Throttled, OnBattery, Busy, Virtualized, UnstableClock }
+```
+
+What a benchmark result needs printed next to it so it can be trusted and repeated: whether the CPU frequency could wander (governor, turbo), whether the machine was busy, on battery, throttled, or a VM, and whether the timer is stable. Benchmark harnesses (rust-benchmark, criterion wrappers) print it at the start of a run. Read-only, like the readiness report.
+
+| Item | Linux | macOS | Windows |
+|---|---|---|---|
+| governor | `cpufreq/scaling_governor` | `None` (no user-visible governor) | active power plan name (`PowerGetActiveScheme`, `PowerReadFriendlyName`) |
+| turbo | `intel_pstate/no_turbo`, `cpufreq/boost` | `None` | the plan's processor maximum state [verify] |
+| SMT | `/sys/devices/system/cpu/smt/active` | `physical != logical` | `LTP_PC_SMT` flag in the core records |
+| invariant TSC | CPUID 0x80000007 EDX bit 8 (x86 only) | same on Intel Macs; Apple silicon `None` | same |
+| throttled | `thermal_throttle/{core,package}_throttle_count` per CPU | `None` | `CallNtPowerInformation` `MhzLimit < MaxMhz` |
+| isolated CPUs | `/sys/devices/system/cpu/{isolated,nohz_full}` | `None` | `None` |
+
+## `security`: security posture
+
+**Since** 0.6 · SEC-01 to SEC-05
+
+```rust
+pub mod security {
+    pub fn posture() -> Posture;                  // never fails; each field None when unknown
+}
+
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct Posture {
+    pub secure_boot: Option<bool>,
+    pub tpm: Option<Tpm>,                          // present, and its version
+    pub disk_encryption: Option<Encryption>,      // of the volume holding the OS
+    pub mandatory_access_control: Option<Mac>,    // SELinux or AppArmor and its mode
+    pub aslr: Option<bool>,
+    pub kernel_lockdown: Option<Lockdown>,         // Linux lockdown, Windows HVCI/VBS
+    pub code_integrity: Option<bool>,             // macOS SIP, Windows HVCI
+    pub firewall: Option<bool>,
+    pub cpu_vulnerabilities: Vec<Vulnerability>,  // name and status, e.g. "spectre_v2: Mitigated"
+    pub elevated: Option<bool>,                   // process::is_elevated()
+}
+#[non_exhaustive] pub struct Tpm { pub version: TpmVersion }                 // V1_2, V2_0
+#[non_exhaustive] pub enum Encryption { Enabled { kind: &'static str }, Disabled }   // "LUKS", "BitLocker", "FileVault"
+#[non_exhaustive] pub struct Mac { pub kind: &'static str, pub enforcing: bool }    // "SELinux", "AppArmor"
+#[non_exhaustive] pub enum Lockdown { None, Integrity, Confidentiality }
+#[non_exhaustive] pub struct Vulnerability { pub name: &'static str, pub status: VulnStatus, pub detail: String }
+#[non_exhaustive] pub enum VulnStatus { NotAffected, Mitigated, Vulnerable, Unknown }
+```
+
+The machine's security settings, read-only, for shield-sec, compliance reports, and a service's start-up log. Like detection, it is a report, not a control: a value is what the OS says, and an administrator controls the OS. Raw identifiers (TPM endorsement keys, volume ids) are never read.
+
+| Item | Linux | macOS | Windows |
+|---|---|---|---|
+| Secure Boot | `/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c` (the fifth byte) | Apple silicon boots with full security by default; the policy is not readable unprivileged: `None` [verify] | `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State` `UEFISecureBootEnabled` |
+| TPM | `/sys/class/tpm/tpm0/tpm_version_major` | `None` (the Secure Enclave is not a TPM) | `Tbsi_GetDeviceInfo` (tbs.dll, unprivileged) |
+| disk encryption | the root filesystem's block device: `dm/uuid` starting `CRYPT-` under `/sys/dev/block/<major:minor>` | `None` unprivileged [verify] | the system drive's BitLocker state from the shell property `System.Volume.BitLockerProtection` [verify an unprivileged, non-COM source; `None` otherwise] |
+| SELinux / AppArmor | `/sys/fs/selinux/enforce`; `/sys/module/apparmor/parameters/enabled` | | |
+| ASLR | `/proc/sys/kernel/randomize_va_space` | always on: `Some(true)` | `GetProcessMitigationPolicy(ProcessASLRPolicy)` for this process |
+| lockdown, code integrity | `/sys/kernel/security/lockdown` | SIP through `csr_get_active_config` [verify it is callable; `None` otherwise] | `HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard` (`EnableVirtualizationBasedSecurity`, HVCI `Enabled`) |
+| firewall | `None` (nftables and iptables state is root-only) | `None` unprivileged | the active profile's `EnableFirewall` under `HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy` |
+| CPU vulnerabilities | `/sys/devices/system/cpu/vulnerabilities/*` (0444) | `None` | `None` (the documented source needs a driver) |
+
+---
 
 ---
 
@@ -2077,23 +2752,29 @@ match now.compare(&stored).verdict {
 
 ---
 
-## After 1.0
+## `probe`: explicit roots for monitoring agents
 
-Room is left in the design (`#[non_exhaustive]` everywhere); these arrive as minor releases. No module appears before it is implemented.
+**Since** 0.6 · PRB-01 · Linux
 
-| Version | Item | What |
-|---|---|---|
-| 1.1 | SNS-01 | `sensors::temperatures()`: Linux hwmon and thermal zones; macOS and Windows `Unsupported` (no documented API) |
-| 1.1 | MEM-10 | huge pages and large-page minimum |
-| 1.1 | DSK-06 | disk I/O counters |
-| 1.1 | HST-08 | `host::users()`: logged-in sessions |
-| 1.1 | PWR-04 | `power::batteries()`: each battery separately |
-| 1.1 | NET-07 | `net::interfaces_with(options)` |
-| 1.1 | VRT-05 | `virt::cloud()`: from DMI vendor strings only; never a metadata-service network call |
-| 1.2 | GPU-01 | `gpu::list()`: adapters, without vendor libraries |
-| 1.2 | PRB-01 | `probe::Probe::with_root(root)` (Linux): read `/proc` and `/sys` under an explicit root, for an agent with the host's trees mounted; explicit in code, never taken from the environment |
+```rust
+#[cfg(target_os = "linux")]
+pub mod probe {
+    pub struct Probe { /* root path, budgets */ }
+    impl Probe {
+        pub fn with_root(root: impl Into<PathBuf>) -> Result<Probe>;   // e.g. "/host", where the host's /proc and /sys are mounted
+        pub fn memory(&self) -> Result<mem::Memory>;
+        pub fn cpu_sampler(&self) -> Result<cpu::Sampler>;
+        pub fn load(&self) -> Result<Option<cpu::Load>>;
+        pub fn uptime(&self) -> Result<Duration>;
+        pub fn disks(&self) -> Result<Vec<disk::Disk>>;
+        pub fn disk_io(&self) -> Result<disk::IoSampler>;
+        pub fn net(&self) -> Result<net::Sampler>;
+        pub fn processes(&self) -> Result<host::Processes>;
+    }
+}
+```
 
----
+A monitoring agent in a container that has the host's `/proc` and `/sys` mounted (say at `/host`) reads the host's values through an explicit root. It is the feature gopsutil offers through `HOST_PROC` and `HOST_SYS` environment variables; sys-lib offers it only as a constructor in code, so no deployment can redirect a normal program's readings through its environment (threat T4). The Linux backend already reads through a root prefix (that is how fixture tests run), so the readings are the same code.
 
 ## Errors by variant
 

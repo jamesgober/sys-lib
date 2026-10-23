@@ -38,6 +38,12 @@ First version, written at the `0.2.0` design lock; it grows with each version an
 - [Process guard](#process-guard)
 - [Virtualization](#virtualization)
 - [Power](#power)
+- [Pressure, memory events, paging](#pressure-memory-events-paging)
+- [Disk I/O](#disk-io)
+- [System-wide counts, firmware, clock, sessions, DNS](#system-wide-counts-firmware-clock-sessions-dns)
+- [Launch context](#launch-context)
+- [Sensors and GPUs](#sensors-and-gpus)
+- [Readiness, benchmark environment, security posture](#readiness-benchmark-environment-security-posture)
 - [Device identity anchors](#device-identity-anchors)
 - [Build info](#build-info)
 - [Android and iOS](#android-and-ios)
@@ -240,6 +246,67 @@ Interface names from the OS are validated before they are used in a `/sys` path:
 | `battery()` | `uevent` per battery (one read each): `POWER_SUPPLY_CAPACITY`, `STATUS`, `ENERGY_NOW`/`ENERGY_FULL`/`ENERGY_FULL_DESIGN` (or `CHARGE_*`), `CYCLE_COUNT` | the IOKit power source dictionary (current and max capacity, charging, time to empty and to full); health and cycles from `AppleSmartBattery` | `GetSystemPowerStatus` (`BatteryLifePercent`, `BatteryLifeTime`, the charging flag) |
 | `on_ac()` | any `Mains` or `USB` supply with `online` = 1 | `IOPSGetProvidingPowerSourceType` | `ACLineStatus` (255 is unknown) |
 
+## Pressure, memory events, paging
+
+| Reading | Linux | macOS | Windows |
+|---|---|---|---|
+| `cpu::pressure()` | the cgroup's `cpu.pressure`, else `/proc/pressure/cpu` (`some`/`full avg10 avg60 avg300 total`) | `Ok(None)` | `Ok(None)` |
+| `mem::pressure()` | the cgroup's `memory.pressure`, else `/proc/pressure/memory` | `kern.memorystatus_vm_pressure_level` (level only) | `QueryMemoryResourceNotification` (level only) |
+| `disk::pressure()` | the cgroup's `io.pressure`, else `/proc/pressure/io` | `Ok(None)` | `Ok(None)` |
+| `mem::events()` | cgroup v2 `memory.events` (`oom_kill`, `oom`, `max`, `high`); v1 `memory.oom_control` (`oom_kill`); else `/proc/vmstat` `oom_kill` | `Ok(None)` | `Ok(None)` |
+| `mem::activity()`, `mem::Sampler` | `/proc/vmstat` `pswpin`, `pswpout`, `pgmajfault` (pages) | `vm_statistics64` `swapins`, `swapouts`, `pageins` | `NtQuerySystemInformation(SystemPerformanceInformation)` [verify against the headers]; `Unsupported` otherwise |
+| `mem::huge_pages()` | `/proc/meminfo` `HugePages_Total`, `_Free`, `_Rsvd`, `Hugepagesize`; `/sys/kernel/mm/transparent_hugepage/enabled` | `Ok(None)` | `GetLargePageMinimum` |
+| `mem::modules()` | SMBIOS type 17 from `/sys/firmware/dmi/tables/DMI` (mode 0400: root only) | Intel: IORegistry memory node [verify]; Apple silicon: `Unsupported` | SMBIOS type 17 from `GetSystemFirmwareTable('RSMB')` |
+
+PSI files need kernel 4.20 or later; without them the readings are `Ok(None)`. cgroup v1 has no per-cgroup pressure, so the host's is used and the result says so.
+
+## Disk I/O
+
+| Reading | Linux | macOS | Windows |
+|---|---|---|---|
+| `disk::io()`, `IoSampler`, `io_totals()`, `io_counters()` | `/proc/diskstats` fields 4 to 14 (reads, sectors read, read ms, writes, sectors written, write ms, in flight, io ms, weighted ms); whole disks only, from `/sys/block/*` minus `loop`, `ram`, `zram`, `dm-*`, `md*`; sectors are 512 bytes | IOKit `IOBlockStorageDriver` `Statistics` dictionary (`Bytes (Read)`, `Bytes (Write)`, `Operations (Read)`, `Operations (Write)`, `Total Time (Read)`, `Total Time (Write)`) | `IOCTL_DISK_PERFORMANCE` (`DISK_PERFORMANCE`: `BytesRead`, `BytesWritten`, `ReadCount`, `WriteCount`, `IdleTime`, `QueryTime`) on `\\.\PhysicalDriveN` opened with no access rights [verify unprivileged] |
+| `process::io()` | `/proc/self/io` (`read_bytes`, `write_bytes`, `syscr`, `syscw`) | `proc_pid_rusage(RUSAGE_INFO_V2)` `ri_diskio_bytesread`, `ri_diskio_byteswritten` | `GetProcessIoCounters` (all I/O) |
+
+## System-wide counts, firmware, clock, sessions, DNS
+
+| Reading | Linux | macOS | Windows |
+|---|---|---|---|
+| `host::processes()` | numeric entries of `/proc` (counted, never opened); `/proc/loadavg` field 4; `procs_running` in `/proc/stat` | `proc_listallpids(NULL, 0)`; `kern.num_threads` | `GetPerformanceInfo` `ProcessCount`, `ThreadCount` |
+| `host::open_files()` | `/proc/sys/fs/file-nr` | `kern.num_files`, `kern.maxfiles` | `GetPerformanceInfo` `HandleCount` |
+| `host::firmware()` | `/sys/class/dmi/id/bios_{vendor,version,date}` (0444); `/sys/firmware/efi` for UEFI | IORegistry firmware version [verify property names] | SMBIOS type 0; `GetFirmwareType` |
+| `host::board()` | `/sys/class/dmi/id/board_{vendor,name,version}` (0444) | `IOPlatformExpertDevice` `board-id` (Intel) | SMBIOS type 2 |
+| `host::clock_sync()` | `ntp_adjtime` with no mode bits (read only): return value `TIME_ERROR`, `STA_UNSYNC` | `ntp_adjtime` (read only) | `GetSystemTimeAdjustmentPrecise`; the Windows Time service's state [verify an unprivileged source] |
+| `host::sessions()` | `getutxent` (utmp) | `getutxent` | `WTSEnumerateSessionsW`, `WTSQuerySessionInformationW` (wtsapi32) |
+| `net::dns()` | `/etc/resolv.conf`; `/run/systemd/resolve/resolv.conf` behind the `127.0.0.53` stub | SystemConfiguration `SCDynamicStoreCopyValue("State:/Network/Global/DNS")` [verify]; `/etc/resolv.conf` | `GetAdaptersAddresses` `FirstDnsServerAddress` of up adapters |
+| `virt::cloud()` | DMI `sys_vendor`, `product_name`, `bios_vendor`, `chassis_asset_tag` (0444) | `Ok(None)` outside a VM | SMBIOS types 0, 1, 3 |
+| `power::batteries()` | each `/sys/class/power_supply/*` with `type` `Battery` and `scope` not `Device` | each internal battery in the IOKit power sources list | `IOCTL_BATTERY_QUERY_INFORMATION` per battery device [verify]; else the combined `GetSystemPowerStatus` as one entry |
+
+## Launch context
+
+| Signal | Linux | macOS | Windows |
+|---|---|---|---|
+| service manager | `INVOCATION_ID`, `JOURNAL_STREAM`, `NOTIFY_SOCKET`; the `.service` unit in `/proc/self/cgroup` | parent pid 1 (`getppid`) and `XPC_SERVICE_NAME` | `ProcessIdToSessionId` session 0 and `GetConsoleWindow() == NULL` |
+| container init | process id 1 and `virt::is_container()` | | |
+| terminal | `isatty` on standard input and output (std `IsTerminal`) | same | same (console handles) |
+| SSH, cron | `SSH_CONNECTION` (weak); `cron.service` in `/proc/self/cgroup` (strong) | `SSH_CONNECTION` (weak) | |
+
+Environment variables are weak evidence: any parent can set them.
+
+## Sensors and GPUs
+
+| Reading | Linux | macOS | Windows |
+|---|---|---|---|
+| `sensors::temperatures()` | `/sys/class/hwmon/hwmon*/{name,temp*_input,temp*_label,temp*_max,temp*_crit}`; `/sys/class/thermal/thermal_zone*/{type,temp}` | `Unsupported` (no documented API) | NVMe drives: `IOCTL_STORAGE_QUERY_PROPERTY` `StorageDeviceTemperatureProperty`; CPU `Unsupported` (no unprivileged documented API) |
+| `gpu::list()` | `/sys/class/drm/card*/device/{vendor,device,uevent,mem_info_vram_total}`; names from `pci.ids` when installed | IOKit `IOPCIDevice` (display class), `AGXAccelerator` [verify] | `EnumDisplayDevicesW`; the adapter's registry key [verify] |
+
+## Readiness, benchmark environment, security posture
+
+The full per-check source tables are in [`API.md`](./API.md#readiness-server-readiness-report). The files and calls they add to the lists above:
+
+- Linux: `/sys/kernel/mm/transparent_hugepage/{enabled,defrag}`; `/proc/sys/vm/{swappiness,overcommit_memory,overcommit_ratio,max_map_count,dirty_ratio,dirty_background_ratio,dirty_bytes,dirty_background_bytes,zone_reclaim_mode}`; `/proc/sys/kernel/{numa_balancing,randomize_va_space}`; `/proc/sys/fs/{file-max,nr_open}`; `/proc/sys/net/core/somaxconn`; `/proc/sys/net/ipv4/{tcp_max_syn_backlog,ip_local_port_range}`; `/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor`; `/sys/devices/system/cpu/intel_pstate/no_turbo`, `cpufreq/boost`; `/sys/devices/system/cpu/smt/active`; `/sys/devices/system/cpu/{isolated,nohz_full}`; `/sys/devices/system/cpu/cpu*/thermal_throttle/*_throttle_count`; `/sys/devices/system/clocksource/clocksource0/current_clocksource`; `/sys/block/*/queue/scheduler`; `/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c`; `/sys/class/tpm/tpm*/tpm_version_major`; `/sys/dev/block/<major:minor>/dm/uuid`; `/sys/fs/selinux/enforce`; `/sys/module/apparmor/parameters/enabled`; `/sys/kernel/security/lockdown`; `/sys/devices/system/cpu/vulnerabilities/*`; `getrlimit(RLIMIT_MEMLOCK)`; CPUID leaf 0x80000007.
+- macOS: `kern.maxfiles`, `kern.maxfilesperproc`, `kern.ipc.somaxconn`, `net.inet.ip.portrange.first`, `net.inet.ip.portrange.last`; `csr_get_active_config` [verify].
+- Windows: `PowerGetActiveScheme`, `PowerReadFriendlyName` (powrprof); `CallNtPowerInformation(ProcessorInformation)` `MhzLimit`; `GetTokenInformation` privileges (`SeLockMemoryPrivilege`); `GetProcessMitigationPolicy`; `Tbsi_GetDeviceInfo` (tbs.dll); registry: `SYSTEM\CurrentControlSet\Control\SecureBoot\State`, `SYSTEM\CurrentControlSet\Control\DeviceGuard`, `SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy`, `SYSTEM\CurrentControlSet\Services\Tcpip\Parameters` (dynamic ports).
+
 ## Device identity anchors
 
 Feature `device-id`. Values are read into a fixed buffer, hashed, and wiped; none leaves the module.
@@ -263,4 +330,4 @@ At build time only, in the application's build script: `git -C $CARGO_MANIFEST_D
 
 ## Android and iOS
 
-Best effort, build-checked in CI. Android uses the Linux paths where SELinux allows them (`/proc`, `/sys`), plus `__system_property_get` for `ro.build.version.release` and `ro.build.characteristics`; denied reads are `PermissionDenied`. iOS uses the Apple sysctls that exist on iOS (`kern.osproductversion`, `kern.osrelease`, `hw.memsize`, `hw.logicalcpu_max`, `hw.physicalcpu_max`, `machdep.cpu.brand_string` [verify]) and `uname`; everything that needs IOKit power sources, `getfsstat` outside the sandbox, or UIKit is `Unsupported`. `os_proc_available_memory()` (iOS 13 and later) is planned for `mem::free()` on iOS after 1.0.
+Best effort, build-checked in CI. Android uses the Linux paths where SELinux allows them (`/proc`, `/sys`), plus `__system_property_get` for `ro.build.version.release` and `ro.build.characteristics`; denied reads are `PermissionDenied`. iOS uses the Apple sysctls that exist on iOS (`kern.osproductversion`, `kern.osrelease`, `hw.memsize`, `hw.logicalcpu_max`, `hw.physicalcpu_max`, `machdep.cpu.brand_string` [verify]) and `uname`; everything that needs IOKit power sources, `getfsstat` outside the sandbox, or UIKit is `Unsupported`. `os_proc_available_memory()` (iOS 13 and later) gives `mem::free()` on iOS from 0.5.
