@@ -33,7 +33,7 @@ printf 'instance-id: sys-lib-cgroup1\nlocal-hostname: fixture-host\n' > "$work/m
 cloud-localds "$work/seed.iso" "$work/user-data" "$work/meta-data"
 
 # ttyS0 carries the kernel console; ttyS1 carries only the capture.
-timeout 35m qemu-system-x86_64 -enable-kvm -cpu host -m 2048 -smp 2 -display none \
+timeout 35m qemu-system-x86_64 -enable-kvm -cpu host -m 2048 -smp 4 -display none \
   -drive file="$work/disk.qcow2",if=virtio \
   -drive file="$work/seed.iso",format=raw,if=virtio \
   -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
