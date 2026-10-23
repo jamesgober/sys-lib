@@ -11,6 +11,19 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The plan and `docs/API.md` cover the complete library: nothing is scheduled
+  after 1.0. Added to the API: disk read and write rates and this process's
+  disk I/O; CPU, memory, and I/O pressure with out-of-memory event counts; swap
+  and paging activity; huge pages; memory modules; system-wide process, thread,
+  and open-file counts; firmware and motherboard; how the program was started;
+  DNS servers; clock synchronization; sessions; the cloud vendor; each battery;
+  the server readiness, benchmark environment, and security posture reports;
+  temperatures, GPU adapters, and `probe::Probe`. FreeBSD and 32-bit Linux get
+  real implementations. The roadmap gains 0.6 (environment and reports);
+  optimisation moves to 0.7, hardening to 0.8, alpha and beta to 0.9.
+
 ---
 
 ## [0.2.0] - 2026-10-22

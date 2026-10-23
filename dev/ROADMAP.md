@@ -3,7 +3,7 @@
 > Path from scaffold to a stable 1.0. Hard parts are front-loaded; each phase has hard exit criteria and ends with the release routine (bump, CHANGELOG, release notes, local gate, push, green CI, tag, GitHub release, `cargo doc`, `cargo publish`).
 > Design, API item ids (ROOT-, BLD-, INS-, PRC-, OS-, CPU-, MEM-, DSK-, NET-, HST-, VRT-, PWR-, DEV-), threats (T1 to T16), and edge cases (E-1 to E-100): [`PLAN.md`](./PLAN.md).
 >
-> **Anti-deferral rule:** no listed task moves to a later phase unless this file records the move and the reason, with a decision-log entry in `PLAN.md`. P0 items ship in the version listed and never move.
+> **Anti-deferral rule:** no listed task moves to a later phase unless this file records the move and the reason, with a decision-log entry in `PLAN.md`. P0 items ship in the version listed and never move. **Nothing is scheduled after 1.0** (D-028): 1.0 is the complete library.
 
 ## v0.1.0 - Scaffold (DONE, 2026-10-21)
 Exit: CI green on every job; the crate published to claim the name; decision log D-001 to D-008 written.
@@ -39,60 +39,66 @@ Exit: WASP's phase 0 can be written against 0.3 (build info first line, instance
 - [ ] README quick start (Tier 1 first).
 
 ## v0.4.0 - Extended: live readings
-API: ROOT-05 · BLD-06 · PRC-02 to PRC-04, PRC-06 to PRC-10, PRC-13, PRC-14 · CPU-07 to CPU-12, CPU-14, CPU-20 to CPU-25, CPU-30, CPU-31 · MEM-01 to MEM-08 · DSK-01 to DSK-03 · NET-01 to NET-05, NET-08, NET-09 · HST-02, HST-03 · ROOT-07.
-Exit: tower's memory watermark and metrics-lib's system collector can be built on 0.4; every live reading allocation-free where promised; all container fixtures pass.
+API: ROOT-05, ROOT-07, ROOT-08 · BLD-06 · PRC-02 to PRC-04, PRC-06 to PRC-10, PRC-13 to PRC-15 · CPU-07 to CPU-12, CPU-14, CPU-15, CPU-20 to CPU-25, CPU-30, CPU-31 · MEM-01 to MEM-11, MEM-13 · DSK-01 to DSK-03, DSK-06, DSK-07 · NET-01 to NET-05, NET-07 to NET-09 · HST-02, HST-03, HST-09, HST-10.
+Exit: tower's memory watermark and load shedding and metrics-lib's system collector can be built on 0.4; every live reading allocation-free where promised; all container fixtures pass.
 - [ ] cgroup v1 and v2 and job-object memory limits with E-1 to E-12; the container CI job (`--memory`, `--cpus`) asserts real limits; nested job objects verified.
-- [ ] CPU sampler with E-20 to E-27; counting-allocator tests for every scalar reading.
-- [ ] Disk listing with E-36 to E-39; interfaces with E-53 to E-58.
+- [ ] CPU sampler with E-20 to E-27; per-core usage on Windows above 64 CPUs verified (D-031); counting-allocator tests for every scalar reading.
+- [ ] Disk listing with E-36 to E-39; interfaces and `interfaces_with` with E-53 to E-58.
 - [ ] Network traffic (`totals`, `traffic`, `Sampler`) and connection counts, with counter resets and wraps tested; `cpu::load()` (D-023, D-025).
+- [ ] Disk I/O rates (`io`, `IoSampler`, totals, per disk) and `process::io()`, with re-attached disks and partitions not double counted (D-029).
+- [ ] Pressure for CPU, memory, and I/O (cgroup and host), out-of-memory events, swap and paging activity, huge pages; system-wide process and open-file counts (D-029).
 - [ ] Memory with E-28 to E-35; attack tests T5, T6, T7, T8.
 
-## v0.5.0 - Feature complete
-API: OS-08 to OS-13 · CPU-13, CPU-32, CPU-40 to CPU-44 · MEM-09 · DSK-04, DSK-05 · NET-06 · HST-05 to HST-07 · VRT-01 to VRT-04 · PWR-01 to PWR-03 · PRC-05 · DEV-01 to DEV-07 · ROOT-06.
-Exit: every P0 to P2 item is implemented and tested on Linux, macOS, Windows; `docs/SOURCES.md`, `docs/PLATFORM-NOTES.md`, `docs/ARCHITECTURE.md` complete.
-- [ ] Form factor, virtualization (E-79 to E-91), power, time zone and locale (E-92 to E-95), hardware model.
+## v0.5.0 - Detection and identity
+API: OS-08 to OS-13 · CPU-13, CPU-32, CPU-40 to CPU-44 · MEM-12 · DSK-04, DSK-05 · NET-06, NET-10 · HST-05 to HST-08, HST-11 to HST-13 · VRT-01 to VRT-05 · PWR-01 to PWR-04 · PRC-05, PRC-24, PRC-25 · DEV-01 to DEV-07 · ROOT-06.
+Exit: every item above implemented and tested on Linux, macOS, Windows; `docs/SOURCES.md`, `docs/PLATFORM-NOTES.md`, `docs/ARCHITECTURE.md` complete for everything shipped so far.
+- [ ] Form factor, virtualization and cloud vendor (E-79 to E-91), power and each battery, time zone and locale (E-92 to E-95), hardware model, firmware and motherboard.
+- [ ] How the program was started (systemd, launchd, Windows service, container init, terminal, SSH, cron), with evidence strength.
+- [ ] DNS servers (resolv.conf, the systemd-resolved stub, SystemConfiguration, adapter lists); clock synchronization; sessions; memory modules (SMBIOS type 17).
 - [ ] Device identity with E-69 to E-78; crypt-io wired behind `device-id`; `docs/DEVICE-ID.md`; attack tests T1, T2, T3, T13, T14, T15.
-- [ ] Android and iOS build-checked; best-effort paths implemented and documented in `docs/PLATFORM-NOTES.md`.
+- [ ] Android and iOS best-effort paths (iOS `os_proc_available_memory()` for `mem::free()`), documented in `docs/PLATFORM-NOTES.md`.
 
-## v0.6.0 - Optimisation
+## v0.6.0 - Environment and reports (feature complete)
+API: RDY-01 to RDY-04 · BEN-01 to BEN-03 · SEC-01 to SEC-05 · SNS-01 · GPU-01 · PRB-01.
+Exit: every item in `docs/API.md` implemented and tested; FreeBSD and 32-bit Linux implemented; nothing left for 1.x.
+- [ ] Server readiness report for the General, Database, WebServer, and Benchmark profiles, every check with its why and fix, read-only (D-030).
+- [ ] Benchmark environment report, with `is_reproducible()`.
+- [ ] Security posture report (Secure Boot, TPM, disk encryption, SELinux/AppArmor, ASLR, lockdown, code integrity, firewall, CPU vulnerabilities).
+- [ ] Temperatures (Linux hwmon and thermal zones; NVMe on Windows), GPU adapters, `probe::Probe::with_root`.
+- [ ] FreeBSD backend, with a FreeBSD VM job in CI; 32-bit Linux (i686, armv7) layouts verified against `libc` and implemented (D-031).
+- [ ] Every [verify] in `docs/SOURCES.md` confirmed or replaced.
+
+## v0.7.0 - Optimisation
 Exit: every target in `PLAN.md` section 18 measured and published; at least 20% faster than the best competitor for each reading at equal correctness, or a recorded, reviewed reason.
-- [ ] Benchmarks for every row against sysinfo, num_cpus, os_info, raw-cpuid, machine-uid; warm and cold; bare metal and container.
+- [ ] Benchmarks for every row against sysinfo, num_cpus, os_info, raw-cpuid, machine-uid; warm and cold; bare metal and container; the new readings included (disk I/O against sysinfo's disk usage, counts, reports).
 - [ ] Footprint measurements (dependencies, build time, binary size, descriptors held).
 - [ ] Optimise until every bar is met or the reason it cannot be is recorded.
 - [ ] `docs/PERFORMANCE.md` published; criterion baselines stored; the 5% regression gate active.
 
-## v0.7.0 - Hardening
+## v0.8.0 - Hardening
 Exit: no open finding; every threat has a passing attack test.
-- [ ] Fuzzing: 24 hours per target with no finding open.
+- [ ] Fuzzing: 24 hours per target with no finding open (the new parsers included: diskstats, vmstat, PSI, resolv.conf, utmp, sysctl text, SMBIOS types 0, 2, 17).
 - [ ] Attack tests for T1 to T16 complete; `docs/SECURITY.md` with the cost of each defence.
 - [ ] Soak: 8 hours, no growth in memory, descriptors, handles, CF references.
 - [ ] AddressSanitizer job on Linux and macOS clean; the `hostile` fixture passes every function without panic.
 
-## v0.8.0 - Alpha
-Exit: both integrations run on every listed environment; every surprise fixed or recorded in `docs/PLATFORM-NOTES.md`.
-- [ ] Integrated in WASP's boot phase 0 and in a Hive DB start-up (guard beside the data directory, cache sizing from `mem::total()`) on Windows 11, WSL 2 Ubuntu, a Linux server, macOS on Apple silicon, a Docker container with limits, and a Kubernetes pod if available.
-- [ ] API review against real use; changes made now, not after 1.0.
-
-## v0.9.0 - Beta and release candidates
-Exit: two weeks without an API change; every document checked against the build.
-- [ ] API frozen; `0.9.x` only fixes.
-- [ ] Documentation complete; `docs/STABILITY-1.0.md` drafted with the requirement-to-test map.
+## v0.9.0 - Alpha and beta
+Exit: both integrations run on every listed environment; two weeks without an API change; every document checked against the build.
+- [ ] 0.9.0 (alpha): integrated in WASP's boot phase 0 and in a Hive DB start-up (guard beside the data directory, cache sizing from `mem::total()`, the Database readiness report) on Windows 11, WSL 2 Ubuntu, a Linux server, macOS on Apple silicon, FreeBSD, a Docker container with limits, and a Kubernetes pod if available.
+- [ ] API review against real use; changes made in 0.9.0, not later.
+- [ ] 0.9.x (beta): API frozen; only fixes. Documentation complete; `docs/STABILITY-1.0.md` drafted with the requirement-to-test map.
 - [ ] Release candidates `1.0.0-rc.N` as needed.
 
 ## v1.0.0 - Stable
 Exit: the audit passes; the definition of done in `DIRECTIVES.md` and the 1.0 checklist below hold.
-- [ ] Every P0, P1, and P2 item implemented on Linux, macOS, and Windows, or a documented `Unsupported` listed in `docs/PLATFORM-NOTES.md`.
+- [ ] Every item in `docs/API.md` implemented on Linux, macOS, Windows, and FreeBSD, or a documented `Unsupported` where the OS has no such fact, listed in `docs/PLATFORM-NOTES.md`.
 - [ ] Every FR and NFR has a named, passing test; every edge case E-1 to E-100 has a passing test; every threat T1 to T16 has a passing attack test.
 - [ ] Every parser fuzzed 24 hours with no open finding; counting-allocator and 8-hour soak tests pass.
 - [ ] Benchmarks published; zero third-party runtime dependencies with default features; `cargo deny` and `cargo audit` clean.
 - [ ] `unsafe` only in `src/sys/`, every block documented, layout assertions on every target, Miri clean on the parser layer; no subprocess at run time.
-- [ ] CI green on every platform and target, the container job included; every document in `PLAN.md` section 20 complete and matching the build.
-- [ ] WASP boot phase 0 and a Hive DB start-up run on sys-lib on every 0.8 environment.
+- [ ] CI green on every platform and target, the container and FreeBSD jobs included; every document in `PLAN.md` section 20 complete and matching the build.
+- [ ] WASP boot phase 0 and a Hive DB start-up run on sys-lib on every 0.9 environment.
 - [ ] Full audit recorded in `docs/STABILITY-1.0.md`; API frozen until 2.0; an MSRV raise is a major change; the device id derivation `sys-lib/device/v1` frozen for 1.x.
-
-## After 1.0 (P3; the design already leaves room)
-- 1.1: SNS-01 (Linux temperatures), MEM-10 (huge pages), DSK-06 (disk I/O counters), HST-08 (sessions), PWR-04 (several batteries), NET-07 (interface options), VRT-05 (cloud vendor), per-core CPU usage on Windows with more than 64 CPUs if not verified earlier.
-- 1.2: GPU-01 (adapters), PRB-01 (`Probe::with_root`), FreeBSD best effort, a `serde` feature if a caller asks (OD-13).
 
 ## Carried items
 None.
