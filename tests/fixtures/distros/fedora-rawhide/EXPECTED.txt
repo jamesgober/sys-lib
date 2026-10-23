@@ -1,0 +1,8 @@
+IMAGE=fedora:rawhide
+DIGEST=fedora@sha256:a9bab18d01cf2c2cf62f3e79c72623405bce14ac062995cc6651a3073c802e41
+ID=fedora
+NAME=Fedora Linux
+PRETTY_NAME=Fedora Linux 46 (Container Image Prerelease)
+VERSION_ID=46
+ID_LIKE=
+VERSION_CODENAME=

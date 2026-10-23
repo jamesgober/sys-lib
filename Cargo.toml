@@ -3,7 +3,7 @@
 # =============================================================================
 [package]
 name    = "sys-lib"
-version = "0.2.0"
+version = "0.3.0"
 
 # Minimum Supported Rust Version (MSRV)
 # 1.89: `std::fs::File::lock` and `File::try_lock` are stable from 1.89.0, so
@@ -48,6 +48,21 @@ targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "aarch64-apple-
 name = "sys_lib"
 path = "src/lib.rs"
 
+# Threat T16: this test binary also plays the fake programs it plants on PATH,
+# so it has its own `main`.
+[[test]]
+name = "attack_t16_subprocess"
+harness = false
+
+# The boot kit example needs instance info and the guard.
+[[example]]
+name = "boot"
+required-features = ["instance", "guard"]
+
+# `cfg(fuzzing)` is set by cargo-fuzz for the parser entry points in `__fuzz`.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
+
 
 # FEATURE FLAGS
 # #################################
@@ -55,27 +70,34 @@ path = "src/lib.rs"
 default = ["instance", "guard"]
 
 # Instance info: `Instance`, `InstanceId` (brings clock-lib and id-forge).
-instance = []
+instance = ["dep:clock-lib", "dep:id-forge"]
 
 # Process guard: `process::guard`, `Guard` (brings path-lib).
-guard = []
+guard = ["dep:path-lib"]
 
-# Device identity: the `device` module (brings crypt-io). Off by default:
-# device identifiers carry privacy obligations; the caller opts in knowingly.
+# Device identity: the `device` module (from 0.5, bringing crypt-io; until
+# then the feature enables nothing, D-043). Off by default: device identifiers
+# carry privacy obligations; the caller opts in knowingly.
 device-id = []
 
 
 # DEPENDENCIES
 # #################################
 [dependencies]
-# None yet. Planned first-party dependencies and the reason for each are
-# listed in dev/PLAN.md section 16; each is added, by published version, with
-# the first code that needs it. No third-party runtime dependencies.
+# First-party only, by published version (dev/PLAN.md section 16). No
+# third-party runtime dependencies; `default-features = false` has none at all.
+clock-lib = { version = "1.1", optional = true, default-features = false, features = ["std"] }
+id-forge = { version = "1.0", optional = true, default-features = false, features = ["ulid"] }
+path-lib = { version = "1.0", optional = true }
 
 
 # DEV DEPENDENCIES
 # #################################
 [dev-dependencies]
+# Property tests (REPS: proptest for every invariant).
+proptest = { version = "1", default-features = false, features = ["std"] }
+# Oracle for the build helper's UTC timestamp formatting.
+clock-lib = { version = "1.1", default-features = false, features = ["std"] }
 
 # Test oracles only, never runtime dependencies: the unit tests in
 # src/sys/<platform>/ffi.rs compare the size, alignment, and every field offset
@@ -101,6 +123,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_System_Time",
     "Win32_System_WindowsProgramming",
+    "Win32_Storage_FileSystem",
 ] }
 
 

@@ -18,12 +18,88 @@ features = ["device-id"]
 [workspace]
 members = ["."]
 
-# Fuzz targets are added with the parsers they cover, from 0.3.0 on
-# (dev/PLAN.md section 19.4). Each target is a `[[bin]]` entry here:
-#
-# [[bin]]
-# name = "os_release"
-# path = "fuzz_targets/os_release.rs"
-# test = false
-# doc = false
-# bench = false
+# One target per parser (dev/PLAN.md section 19.4).
+
+[[bin]]
+name = "os_release"
+path = "fuzz_targets/os_release.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "release"
+path = "fuzz_targets/release.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "version"
+path = "fuzz_targets/version.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cpu_list"
+path = "fuzz_targets/cpu_list.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cpuinfo"
+path = "fuzz_targets/cpuinfo.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cpu_name"
+path = "fuzz_targets/cpu_name.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proc_status"
+path = "fuzz_targets/proc_status.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mountinfo"
+path = "fuzz_targets/mountinfo.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cgroup"
+path = "fuzz_targets/cgroup.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pid_file"
+path = "fuzz_targets/pid_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "instance_id"
+path = "fuzz_targets/instance_id.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bytes_display"
+path = "fuzz_targets/bytes_display.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,8 @@
+IMAGE=ghcr.io/void-linux/void-glibc
+DIGEST=ghcr.io/void-linux/void-glibc@sha256:91a7c5e2ccaa48ed2c664633110c0f19aff08a2d55ae0709083d1eb562b98ccb
+ID=void
+NAME=Void
+PRETTY_NAME=Void Linux
+VERSION_ID=
+ID_LIKE=
+VERSION_CODENAME=

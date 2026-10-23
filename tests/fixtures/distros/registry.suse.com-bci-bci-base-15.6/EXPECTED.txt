@@ -1,0 +1,8 @@
+IMAGE=registry.suse.com/bci/bci-base:15.6
+DIGEST=registry.suse.com/bci/bci-base@sha256:c4bd6f1a43a3d80e9345e75a0e115e9a34daee55120ad4ba2f14d71bd29ba1eb
+ID=sles
+NAME=SLES
+PRETTY_NAME=SUSE Linux Enterprise Server 15 SP6
+VERSION_ID=15.6
+ID_LIKE=suse
+VERSION_CODENAME=

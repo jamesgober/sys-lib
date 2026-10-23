@@ -1,0 +1,8 @@
+IMAGE=quay.io/centos/centos:stream10
+DIGEST=quay.io/centos/centos@sha256:6f8d618844ed5af4365bad24bea19fb0435fd5ec808201af9aeb19d7a28eb515
+ID=centos
+NAME=CentOS Stream
+PRETTY_NAME=CentOS Stream 10 (Coughlan)
+VERSION_ID=10
+ID_LIKE=rhel fedora
+VERSION_CODENAME=

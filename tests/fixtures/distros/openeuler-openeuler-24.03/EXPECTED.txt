@@ -1,0 +1,8 @@
+IMAGE=openeuler/openeuler:24.03
+DIGEST=openeuler/openeuler@sha256:17c15554be2a5bc46023acb6e04d609d77642b8c20e236e88deb18e41ae4558e
+ID=openEuler
+NAME=openEuler
+PRETTY_NAME=openEuler 24.03 (LTS-SP4)
+VERSION_ID=24.03
+ID_LIKE=
+VERSION_CODENAME=

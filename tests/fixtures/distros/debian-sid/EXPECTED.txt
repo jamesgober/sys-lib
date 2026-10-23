@@ -1,0 +1,8 @@
+IMAGE=debian:sid
+DIGEST=debian@sha256:92d7265e51d67d3a2094c1aad9faa88c74cf9d52e6c354200e429cd60237cc55
+ID=debian
+NAME=Debian GNU/Linux
+PRETTY_NAME=Debian GNU/Linux forky/sid
+VERSION_ID=
+ID_LIKE=
+VERSION_CODENAME=forky

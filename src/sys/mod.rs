@@ -72,6 +72,11 @@ macro_rules! same_layout {
 ))]
 #[allow(unsafe_code)]
 mod linux;
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    target_pointer_width = "64"
+))]
+pub(crate) use linux::*;
 
 // macOS and iOS: one module, with the macOS-only parts (IOKit, getfsstat) gated
 // inside it (D-013).
@@ -81,7 +86,91 @@ mod linux;
 ))]
 #[allow(unsafe_code)]
 mod apple;
+#[cfg(all(
+    any(target_os = "macos", target_os = "ios"),
+    target_pointer_width = "64"
+))]
+pub(crate) use apple::*;
 
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows;
+#[cfg(windows)]
+pub(crate) use windows::*;
+
+// Everything else compiles and answers honestly: unknown, or what std knows.
+#[cfg(not(any(
+    all(
+        any(target_os = "linux", target_os = "android"),
+        target_pointer_width = "64"
+    ),
+    all(
+        any(target_os = "macos", target_os = "ios"),
+        target_pointer_width = "64"
+    ),
+    windows
+)))]
+mod unsupported;
+#[cfg(not(any(
+    all(
+        any(target_os = "linux", target_os = "android"),
+        target_pointer_width = "64"
+    ),
+    all(
+        any(target_os = "macos", target_os = "ios"),
+        target_pointer_width = "64"
+    ),
+    windows
+)))]
+pub(crate) use unsupported::*;
+
+use crate::{cpu::Vendor, os::Source};
+
+/// OS identity as a platform reports it, owned; `crate::os` caches it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OsFacts {
+    pub(crate) name: String,
+    pub(crate) version: Option<String>,
+    pub(crate) kernel: String,
+    pub(crate) distro: String,
+    pub(crate) distro_id: String,
+    pub(crate) release: Option<ReleaseFacts>,
+    pub(crate) name_source: Source,
+}
+
+/// The os-release fields (or their legacy-file equivalents), owned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReleaseFacts {
+    pub(crate) id: Option<String>,
+    pub(crate) id_like: Vec<String>,
+    pub(crate) name: Option<String>,
+    pub(crate) pretty_name: Option<String>,
+    pub(crate) version: Option<String>,
+    pub(crate) version_id: Option<String>,
+    pub(crate) codename: Option<String>,
+    pub(crate) variant_id: Option<String>,
+    pub(crate) build_id: Option<String>,
+    pub(crate) source: Source,
+}
+
+/// Static CPU facts as a platform reports them; `crate::cpu` cleans and caches them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CpuFacts {
+    /// Configured logical processors, at least 1.
+    pub(crate) logical: usize,
+    /// Physical cores, when the platform can tell.
+    pub(crate) physical: Option<usize>,
+    /// The brand string as reported, to be cleaned.
+    pub(crate) raw_name: Option<String>,
+    /// A name that needs no cleaning (ARM cores named from their part numbers).
+    pub(crate) name: Option<String>,
+    pub(crate) vendor: Vendor,
+}
+
+/// A filesystem's type name and whether its locks may not hold across machines.
+#[cfg(feature = "guard")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FsKind {
+    pub(crate) name: &'static str,
+    pub(crate) network: bool,
+}

@@ -1,0 +1,8 @@
+IMAGE=aclemons/slackware:15.0
+DIGEST=aclemons/slackware@sha256:e9bd37749f52b413752c88808174f9817627fa9fa42c0c89f18af1bb770f27a1
+ID=slackware
+NAME=Slackware
+PRETTY_NAME=Slackware 15.0 x86_64
+VERSION_ID=15.0
+ID_LIKE=
+VERSION_CODENAME=stable

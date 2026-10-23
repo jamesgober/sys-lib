@@ -1,9 +1,8 @@
 //! # sys_lib
 //!
-//! System facts for Rust services: operating system, CPU, memory, disks,
-//! network, host, this process, virtualization, power, and device identity,
-//! container-aware by default, plus the boot kit every long-running service
-//! needs (build info, instance info, and a process guard).
+//! System facts for Rust services, container-aware by default, plus the boot
+//! kit every long-running service needs in its first milliseconds: build info,
+//! instance info, and a process guard.
 //!
 //! Every reading is a file read or a system call. sys-lib never starts a
 //! thread or a timer, never runs another program, and has no third-party
@@ -11,38 +10,46 @@
 //!
 //! ## Tier 1
 //!
-//! Add it with Cargo's rename, `sys = { package = "sys-lib", version = "0.2" }`,
+//! Add it with Cargo's rename, `sys = { package = "sys-lib", version = "0.3" }`,
 //! and every file writes `sys::`; without the rename, `use sys_lib as sys;`
-//! does the same (the examples use that form so they compile either way):
+//! does the same (the examples use that form so they compile either way).
+//! One plain call per fact; static facts are read once and cached:
 //!
 //! ```
 //! use sys_lib as sys;
 //!
-//! println!("sys-lib {}", sys::VERSION);
+//! println!("{}", sys::os::name());         // "Ubuntu 24.04.1 LTS", "macOS 15.1 Sequoia", "Windows 11 Pro"
+//! println!("{}", sys::os::distro());       // "Ubuntu"; "Windows", "macOS" elsewhere
+//! println!("{}", sys::cpu::name());        // "AMD Ryzen 9 7950X"
+//! println!("{} cores, {} threads", sys::cpu::physical(), sys::cpu::logical());
+//! let workers = sys::cpu::available();     // what this process may use: affinity, cpuset, quota
+//! # assert!(workers >= 1);
 //! ```
 //!
-//! The Tier 1 functions arrive from `0.3.0` on, one plain call each:
+//! The boot kit:
 //!
-//! ```text
-//! sys::os::name()                // "Ubuntu 24.04.1 LTS", "macOS 15.1 Sequoia", "Windows 11 Pro"
-//! sys::os::distro()              // "Ubuntu"; "Windows", "macOS" elsewhere
-//! sys::cpu::name()               // "AMD Ryzen 9 7950X"
-//! sys::cpu::physical()           // cores
-//! sys::cpu::available()          // what this process may use (affinity, cpuset, quota)
-//! sys::mem::total()?             // the container's limit inside a container
-//! sys::mem::used_percent()?      // "32.8%"
-//! sys::cpu::used()?              // blocks for 100 ms
-//! sys::net::traffic()?           // download and upload; blocks for 1 s
-//! sys::disk::space(path)?        // the filesystem holding `path`
-//! sys::process::guard("site")?   // single-instance lock, umask, open-file limit
+//! ```no_run
+//! # #[cfg(all(feature = "instance", feature = "guard"))]
+//! # fn main() -> Result<(), sys_lib::Error> {
+//! use sys_lib as sys;
+//!
+//! let _guard = sys::process::guard("site")?;   // single-instance lock, umask, open-file limit
+//! let build = sys::build_info!();              // with `sys::build::emit()` in build.rs
+//! let instance = sys::Instance::start();
+//! println!("{build}\n{instance}");
+//! # Ok(())
+//! # }
+//! # #[cfg(not(all(feature = "instance", feature = "guard")))]
+//! # fn main() {}
 //! ```
 //!
 //! ## Status
 //!
-//! Design locked (`0.2.0`). The complete API is in `docs/API.md`, the design
-//! in `dev/PLAN.md`, and the schedule in `dev/ROADMAP.md` (all in the
-//! [repository](https://github.com/jamesgober/sys-lib)); the boot kit ships in
-//! `0.3.0`.
+//! `0.3.0`, the boot kit: [`os`], [`cpu`], [`host`], [`process`], [`build`],
+//! and instance info. Memory, disks, network, virtualization,
+//! power, and device identity arrive through `0.6`; the complete approved API,
+//! each item with the version it arrives in, is `docs/API.md` in the
+//! [repository](https://github.com/jamesgober/sys-lib).
 
 #![doc(html_root_url = "https://docs.rs/sys-lib")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -73,7 +80,37 @@
 /// Crate version string, populated by Cargo at build time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod build;
+pub mod cpu;
+pub mod host;
+#[cfg(feature = "instance")]
+#[cfg_attr(docsrs, doc(cfg(feature = "instance")))]
+pub mod instance;
+pub mod os;
+pub mod process;
+
+mod error;
+mod fmt;
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod __fuzz {
+    //! Parser entry points for `fuzz/`; not part of the API.
+    pub use crate::fuzz::*;
+}
+#[cfg(fuzzing)]
+mod fuzz;
+#[cfg(any(target_os = "linux", target_os = "android", test))]
+mod linux;
+mod parse;
 mod sys;
+mod units;
+
+pub use build::{BuildInfo, PublicBuild};
+pub use error::{Error, Result};
+#[cfg(feature = "instance")]
+#[cfg_attr(docsrs, doc(cfg(feature = "instance")))]
+pub use instance::{Instance, InstanceId};
+pub use units::{Bytes, Percent, Units};
 
 #[cfg(test)]
 mod tests {

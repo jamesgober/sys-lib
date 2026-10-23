@@ -1,0 +1,8 @@
+IMAGE=ghcr.io/void-linux/void-musl
+DIGEST=ghcr.io/void-linux/void-musl@sha256:cd50e0a92688df54f380140004d58a9f6910227cb38adcc96b583684f936ed59
+ID=void
+NAME=Void
+PRETTY_NAME=Void Linux
+VERSION_ID=
+ID_LIKE=
+VERSION_CODENAME=

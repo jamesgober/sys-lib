@@ -33,13 +33,17 @@ Review a capture before committing it.
 | `wsl2-systemd-scope-limited` | the same machine, inside `systemd-run --user --scope -p MemoryMax=256M -p MemoryHigh=200M -p CPUQuota=150%` | a cgroup v2 limit without a cgroup namespace (E-5), nested under ancestors whose limits are `max` (E-2), a fractional CPU quota (E-12) |
 | `docker-cgroup2-limited` | Ubuntu 24.04 container on a GitHub runner (kernel 7.0, Azure), `docker run --memory=256m --memory-reservation=200m --cpus=1.5 --cpuset-cpus=0-1`, captured by the `Fixtures` workflow | a cgroup namespace (path `/`, E-5), `memory.max` 256 MiB, `cpu.max` 1.5 CPUs, a cpuset of 2 CPUs (E-12), an overlay root, `/.dockerenv` |
 | `minimal-scratch` | the same runner, a container with the os-release files and machine id removed first | emulates a scratch or distroless image: no os-release, no machine id (E-47, E-69) |
+| `docker-cgroup1-limited` | Ubuntu 24.04 container on Ubuntu 20.04 (kernel 5.4, cgroup v1 hybrid layout) in a 4-vCPU KVM virtual machine on a GitHub runner, the same `docker run` limits, captured by `capture_cgroup1_vm.sh` through the `Fixtures` workflow (D-038) | cgroup v1 hierarchies with the container's path as the mount root, `cpu.cfs_quota_us` 1.5 CPUs, a cpuset of 2 of 4 CPUs (E-13) |
+
+## Distribution corpus
+
+`distros/<image>/` holds the release files of 64 container images (os-release, `lsb-release`, and the legacy files), copied out of unstarted containers by `capture_distros.sh` from the list in `distros.list`, and `EXPECTED.txt`: the image and digest, and what a clean shell reads when it sources the image's os-release (`ID`, `NAME`, `PRETTY_NAME`, `VERSION_ID`, `ID_LIKE`, `VERSION_CODENAME`), or `LEGACY=1` for an image with no os-release. The tests in `src/linux/os.rs` check every answer against it, and check the legacy files against os-release where an image has both (D-022, D-038). Run the `Fixtures` workflow with `job=distros` to refresh it.
 
 ## To capture
 
 | Fixture | How |
 |---|---|
-| `docker-cgroup1-limited` | a host still on cgroup v1 (GitHub runners are cgroup v2 only) |
-| `ubuntu-24.04-desktop-amd` | a bare-metal Linux desktop |
+| `ubuntu-24.04-desktop-amd` | a bare-metal Linux desktop (moved to 0.4, D-039) |
 
 The full planned set, with the reason for each machine, is in [`../../dev/PLAN.md`](../../dev/PLAN.md) section 19.2.
 

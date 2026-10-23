@@ -1,0 +1,8 @@
+IMAGE=almalinux:8
+DIGEST=almalinux@sha256:8b469a3a78515e8a18ea8fc727e6a3679e1d0c5ba6f58d5b30be3d0d9b86cffe
+ID=almalinux
+NAME=AlmaLinux
+PRETTY_NAME=AlmaLinux 8.10 (Cerulean Leopard)
+VERSION_ID=8.10
+ID_LIKE=rhel centos fedora
+VERSION_CODENAME=

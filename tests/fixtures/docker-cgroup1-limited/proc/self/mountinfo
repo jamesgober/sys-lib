@@ -1,0 +1,37 @@
+820 710 0:53 / / rw,relatime master:381 - overlay overlay rw,lowerdir=/var/lib/docker/overlay2/l/FNHAA4U4G2TDOTS545BY4JSRTX:/var/lib/docker/overlay2/l/NFIVOEAIZJXAS3LY6ZRFE262H6,upperdir=/var/lib/docker/overlay2/ba6ed6c92ad3e8200beb7599c12f7ef10382667a5d281f9cb600f9367c4c3deb/diff,workdir=/var/lib/docker/overlay2/ba6ed6c92ad3e8200beb7599c12f7ef10382667a5d281f9cb600f9367c4c3deb/work,xino=off
+821 820 0:55 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+822 820 0:56 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+823 822 0:57 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,gid=5,mode=620,ptmxmode=666
+824 820 0:58 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro
+825 824 0:59 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - tmpfs tmpfs rw,mode=755
+826 825 0:31 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/systemd ro,nosuid,nodev,noexec,relatime master:11 - cgroup cgroup rw,xattr,name=systemd
+827 825 0:34 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/hugetlb ro,nosuid,nodev,noexec,relatime master:15 - cgroup cgroup rw,hugetlb
+828 825 0:35 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/freezer ro,nosuid,nodev,noexec,relatime master:16 - cgroup cgroup rw,freezer
+829 825 0:36 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/perf_event ro,nosuid,nodev,noexec,relatime master:17 - cgroup cgroup rw,perf_event
+830 825 0:37 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/memory ro,nosuid,nodev,noexec,relatime master:18 - cgroup cgroup rw,memory
+831 825 0:38 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/rdma ro,nosuid,nodev,noexec,relatime master:19 - cgroup cgroup rw,rdma
+832 825 0:39 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/pids ro,nosuid,nodev,noexec,relatime master:20 - cgroup cgroup rw,pids
+833 825 0:40 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/cpuset ro,nosuid,nodev,noexec,relatime master:21 - cgroup cgroup rw,cpuset
+834 825 0:41 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/net_cls,net_prio ro,nosuid,nodev,noexec,relatime master:22 - cgroup cgroup rw,net_cls,net_prio
+835 825 0:42 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/cpu,cpuacct ro,nosuid,nodev,noexec,relatime master:23 - cgroup cgroup rw,cpu,cpuacct
+836 825 0:43 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/devices ro,nosuid,nodev,noexec,relatime master:24 - cgroup cgroup rw,devices
+837 825 0:44 /docker/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5 /sys/fs/cgroup/blkio ro,nosuid,nodev,noexec,relatime master:25 - cgroup cgroup rw,blkio
+838 822 0:54 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw
+839 822 0:60 / /dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=65536k
+840 820 252:1 /root/fixture /work ro,relatime - ext4 /dev/vda1 rw
+841 820 252:1 /out /out rw,relatime - ext4 /dev/vda1 rw
+842 820 252:1 /var/lib/docker/containers/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5/resolv.conf /etc/resolv.conf rw,relatime - ext4 /dev/vda1 rw
+843 820 252:1 /var/lib/docker/containers/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5/hostname /etc/hostname rw,relatime - ext4 /dev/vda1 rw
+844 820 252:1 /var/lib/docker/containers/5e1017bf5d9a245f0d7dab0a07b42816c9df5725034f989065ba2ba622ebcae5/hosts /etc/hosts rw,relatime - ext4 /dev/vda1 rw
+711 821 0:55 /bus /proc/bus ro,nosuid,nodev,noexec,relatime - proc proc rw
+712 821 0:55 /fs /proc/fs ro,nosuid,nodev,noexec,relatime - proc proc rw
+713 821 0:55 /irq /proc/irq ro,nosuid,nodev,noexec,relatime - proc proc rw
+714 821 0:55 /sys /proc/sys ro,nosuid,nodev,noexec,relatime - proc proc rw
+719 821 0:55 /sysrq-trigger /proc/sysrq-trigger ro,nosuid,nodev,noexec,relatime - proc proc rw
+720 821 0:61 / /proc/acpi ro,relatime - tmpfs tmpfs ro
+721 821 0:56 /null /proc/kcore rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+722 821 0:56 /null /proc/keys rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+723 821 0:56 /null /proc/timer_list rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+724 821 0:56 /null /proc/sched_debug rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+725 821 0:62 / /proc/scsi ro,relatime - tmpfs tmpfs ro
+726 824 0:63 / /sys/firmware ro,relatime - tmpfs tmpfs ro

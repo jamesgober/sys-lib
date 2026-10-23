@@ -40,6 +40,10 @@ pub(crate) type IoObject = MachPort;
 
 /// `KERN_SUCCESS`.
 pub(crate) const KERN_SUCCESS: KernReturn = 0;
+/// `O_NOFOLLOW` (fcntl.h).
+pub(crate) const O_NOFOLLOW: c_int = 0x0100;
+/// `ERANGE` (errno.h): a buffer was too small.
+pub(crate) const ERANGE: c_int = 34;
 
 // ---------------------------------------------------------------------------
 // Structs
@@ -763,6 +767,8 @@ mod tests {
     )]
     const _: () = {
         assert!(KERN_SUCCESS == libc::KERN_SUCCESS);
+        assert!(O_NOFOLLOW == libc::O_NOFOLLOW);
+        assert!(ERANGE == libc::ERANGE);
         assert!(MNT_RDONLY as i64 == libc::MNT_RDONLY as i64);
         assert!(MNT_LOCAL as i64 == libc::MNT_LOCAL as i64);
         assert!(MNT_NOWAIT == libc::MNT_NOWAIT);

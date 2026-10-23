@@ -1,0 +1,8 @@
+IMAGE=kalilinux/kali-rolling
+DIGEST=kalilinux/kali-rolling@sha256:4be87f78671419c13dcf4f207ead1cfc0de178ea281b3f69c0f49b69ba4e79b1
+ID=kali
+NAME=Kali GNU/Linux
+PRETTY_NAME=Kali GNU/Linux Rolling
+VERSION_ID=2026.3
+ID_LIKE=debian
+VERSION_CODENAME=kali-rolling

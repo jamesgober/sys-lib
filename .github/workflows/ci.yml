@@ -100,6 +100,49 @@ jobs:
       - name: Clippy and layout oracles (no default features)
         run: cargo clippy --target ${{ matrix.target }} --all-targets --no-default-features -- -D warnings
 
+  miri:
+    name: Miri (parsers and units)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      # Every parser runs over OS data; Miri checks them for undefined behaviour
+      # on every push (dev/PLAN.md section 19.1). Isolation is off only so
+      # proptest can look for its regression files; the code under test does
+      # no I/O.
+      - name: Miri
+        run: "cargo miri test --lib -- parse:: units:: fmt::"
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+          PROPTEST_CASES: "16"
+
+  fuzz-smoke:
+    name: Fuzz (smoke, 20 s per target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      # install-action's cargo-fuzz is a musl build, and cargo-fuzz defaults to
+      # its own target, where AddressSanitizer cannot run: name the target.
+      - name: Run every target
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in $(cargo fuzz list); do
+            mkdir -p "$RUNNER_TEMP/corpus/$target"
+            cargo fuzz run --target x86_64-unknown-linux-gnu "$target" "$RUNNER_TEMP/corpus/$target" tests/fixtures -- -max_total_time=20
+          done
+
   no-subprocess:
     name: No subprocess at run time
     runs-on: ubuntu-latest
@@ -114,9 +157,11 @@ jobs:
           std_hits=$(grep -rnE 'Command::new|process::Command|process::\{[^}]*\bCommand\b' src --include='*.rs' \
             | grep -vE '^src/build(\.rs|/)' || true)
           # 2. Process-creation calls declared or called in the OS modules.
-          #    Names followed by `(` (a declaration or a call); comment lines are
-          #    skipped so prose such as "a system call" does not match.
-          ffi_hits=$(grep -rnE '\b(CreateProcess(A|W|AsUserW)?|ShellExecute(Ex)?W|WinExec)\b|\b(posix_spawnp?|execv[pe]?|execl[pe]?|popen|v?fork|system)[[:space:]]*\(' src/sys --include='*.rs' 2>/dev/null \
+          #    Names followed by `(` (a declaration or a call), bare or through
+          #    `ffi::` or `libc::`, so a method such as `Root::system()` does not
+          #    match; comment lines are skipped so prose such as "a system call"
+          #    does not either.
+          ffi_hits=$(grep -rnE '\b(CreateProcess(A|W|AsUserW)?|ShellExecute(Ex)?W|WinExec)\b|(^|[^:[:alnum:]_]|ffi::|libc::)(posix_spawnp?|execv[pe]?|execl[pe]?|popen|v?fork|system)[[:space:]]*\(' src/sys --include='*.rs' 2>/dev/null \
             | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
           if [ -n "$std_hits$ffi_hits" ]; then
             echo "sys-lib never runs a program at run time (dev/PLAN.md, D-004)."

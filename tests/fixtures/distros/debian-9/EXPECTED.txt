@@ -1,0 +1,8 @@
+IMAGE=debian:9
+DIGEST=debian@sha256:c5c5200ff1e9c73ffbf188b4a67eb1c91531b644856b4aefe86a58d2f0cb05be
+ID=debian
+NAME=Debian GNU/Linux
+PRETTY_NAME=Debian GNU/Linux 9 (stretch)
+VERSION_ID=9
+ID_LIKE=
+VERSION_CODENAME=stretch

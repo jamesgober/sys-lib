@@ -1,0 +1,8 @@
+IMAGE=cgr.dev/chainguard/wolfi-base
+DIGEST=cgr.dev/chainguard/wolfi-base@sha256:f15fea2f49cb14dceaea491fcbde0d35e0c190126a744ac05a9838440d47d994
+ID=wolfi
+NAME=Wolfi
+PRETTY_NAME=Wolfi
+VERSION_ID=20230201
+ID_LIKE=
+VERSION_CODENAME=

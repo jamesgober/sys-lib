@@ -1,0 +1,8 @@
+IMAGE=opensuse/leap:42.3
+DIGEST=opensuse/leap@sha256:271c921a1c84d65467d565e3f1c754b75aa01ceed1a7ac39de4816683c355fd2
+ID=opensuse
+NAME=openSUSE Leap
+PRETTY_NAME=openSUSE Leap 42.3
+VERSION_ID=42.3
+ID_LIKE=suse
+VERSION_CODENAME=

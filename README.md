@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>unsafe</code> is denied at the crate root and allowed only in one OS module per platform.
     </p>
     <blockquote>
-        <strong>Status: design locked (<code>0.2.0</code>).</strong> No functional code yet. The complete API is written down and approved in <a href="./docs/API.md"><code>docs/API.md</code></a>; the boot kit (build info, instance info, process guard, OS identity, CPU counts) ships in <code>0.3.0</code>. Design: <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a>; schedule: <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
+        <strong>Status: <code>0.3.0</code>, the boot kit.</strong> OS identity and the distribution, CPU counts and names (with <code>cpu::available()</code> honouring affinity, cpusets, and container CPU quotas), the host name, the user, build info, instance info, and the process guard. Memory, disks, network, and the rest arrive through <code>0.6</code>; the complete approved API, each item with its version, is in <a href="./docs/API.md"><code>docs/API.md</code></a>. Design: <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a>; schedule: <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -40,22 +40,66 @@
 
 Static facts read once and cached (OS name and version, CPU model, core counts, CPU features, caches, topology, virtualization, form factor); live readings read fresh on every call with no allocation for single values (memory, swap, uptime, load, disk space, this process's memory and CPU time); caller-owned samplers for values that need two readings (CPU usage, network rates); the boot kit (build info, instance info, process guard); and an opt-in device id derived with a keyed hash, so raw hardware identifiers never leave the library. It does not inspect other processes, change system settings, or run in the background.
 
-The shape of the Tier 1 API, arriving from `0.3.0`. Cargo's rename makes the crate `sys` in your code:
+## Quick start
+
+Cargo's rename makes the crate `sys` in your code:
 
 ```toml
 [dependencies]
-sys = { package = "sys-lib", version = "0.2" }
+sys = { package = "sys-lib", version = "0.3" }
+```
+
+Tier 1 is one plain call per fact. Static facts are read once and cached, so
+every later call costs about a nanosecond:
+
+```rust
+println!("{}", sys::os::name());          // "Ubuntu 24.04.1 LTS", "macOS 15.1 Sequoia", "Windows 11 Pro"
+println!("{}", sys::os::distro());        // "Ubuntu"; "Windows" and "macOS" elsewhere
+println!("{}", sys::cpu::name());         // "AMD Ryzen 9 7950X"
+println!("{} cores, {} threads", sys::cpu::physical(), sys::cpu::logical());
+println!("{} usable here", sys::cpu::available());   // the container's quota, not the host's count
+println!("{}", sys::host::name()?);       // "build-07"
+if sys::cpu::is_64bit() && sys::os::is_like("debian") { /* ... */ }
+```
+
+The boot kit, for a long-running service's first milliseconds:
+
+```rust
+fn main() -> Result<(), sys::Error> {
+    // One copy only, private files by default, enough file descriptors.
+    // Before any file is opened and before threads start.
+    let _guard = sys::process::guard("site")?;
+
+    let build = sys::build_info!();       // needs `sys::build::emit()` in build.rs
+    let instance = sys::Instance::start();
+    println!("{build}");                  // site 1.4.0 (9db9e36, release, built 2026-10-21T18:02:11Z)
+    println!("{instance}");               // 01J9ZQ4M8T6Y2K5V3W1X7R0B9C build-07 pid 4821 up 0s
+    println!("{}", build.public());       // site 1.4.0: safe for a public health endpoint
+
+    let workers = sys::cpu::available();  // size the pool to what the cgroup allows
+    // ...
+    Ok(())
+}
 ```
 
 ```rust
-println!("{}", sys::os::name());                 // "Ubuntu 24.04.1 LTS", "macOS 15.1 Sequoia", "Windows 11 Pro"
-println!("{}", sys::os::distro());               // "Ubuntu"; "Windows" and "macOS" elsewhere
-println!("{}", sys::cpu::name());                // "AMD Ryzen 9 7950X"
-println!("{} cores, {} threads", sys::cpu::physical(), sys::cpu::logical());
-println!("{} of {}", sys::mem::used()?, sys::mem::total()?);    // "41.2 GiB of 125.6 GiB"
-println!("{}", sys::cpu::used()?);               // "12.4%" (blocks for 100 ms)
-let t = sys::net::traffic()?;                    // download and upload (blocks for 1 s)
-let _guard = sys::process::guard("site")?;      // one copy only; safe permissions
+// build.rs
+fn main() {
+    sys::build::emit();
+}
+```
+
+Tier 2 adds detail behind the same modules (`sys::os::info()`, `sys::os::os_release()`,
+`sys::process::Guard::builder(..)`); errors say what failed and what to do,
+and a fact the OS does not expose is `Error::Unsupported`, never a guess.
+
+### Planned through 0.6
+
+```rust
+println!("{} of {}", sys::mem::used()?, sys::mem::total()?);    // 0.4: "41.2 GiB of 125.6 GiB"
+println!("{}", sys::cpu::used()?);                              // 0.4: "12.4%" (blocks for 100 ms)
+let t = sys::net::traffic()?;                                   // 0.4: download and upload
+let r = sys::readiness::report(sys::readiness::Profile::Database); // 0.6: is this host fit to serve?
 ```
 
 The complete planned API, with the version each item arrives in, is in [`docs/API.md`](./docs/API.md); where every value comes from on each operating system is in [`docs/SOURCES.md`](./docs/SOURCES.md). See [`dev/PLAN.md`](./dev/PLAN.md) for the full scope, what is deliberately left to other crates, and the decision log.

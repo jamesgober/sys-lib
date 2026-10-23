@@ -1,0 +1,8 @@
+IMAGE=oraclelinux:7
+DIGEST=oraclelinux@sha256:767c93c07b1fa621ae56d1f5f090e8c0dce7eb452e7dda1e74bbe7546504d63f
+ID=ol
+NAME=Oracle Linux Server
+PRETTY_NAME=Oracle Linux Server 7.9
+VERSION_ID=7.9
+ID_LIKE=fedora
+VERSION_CODENAME=
