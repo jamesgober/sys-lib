@@ -24,23 +24,26 @@ Exit: James approves `docs/API.md`; layout tests pass on every target; every ope
 - [x] Open decisions OD-4 to OD-6, OD-9, OD-11 to OD-17 accepted by James as recommended (D-021); his API additions recorded (D-022 to D-026).
 - [x] One new defence idea recorded (`PLAN.md` section 22: the layout oracle).
 
-## v0.3.0 - Core: the boot kit (WASP boot phase 0)
-API: ROOT-02, ROOT-03, ROOT-04 · BLD-01 to BLD-05 · INS-01 to INS-06 · PRC-01, PRC-11, PRC-12, PRC-20 to PRC-23 · OS-01 to OS-07 · CPU-01 to CPU-06 · HST-01.
+## v0.3.0 - Core: the boot kit (WASP boot phase 0) (DONE, 2026-10-23)
+API: ROOT-02, ROOT-03, ROOT-04 · BLD-01 to BLD-06 (BLD-06 from 0.4, D-032) · INS-01 to INS-06 · PRC-01, PRC-11, PRC-12, PRC-20 to PRC-23 · OS-01 to OS-07 · CPU-01 to CPU-06 · HST-01.
 Exit: WASP's phase 0 can be written against 0.3 (build info first line, instance id in every log line, guard before any file is opened, worker pool sized by `cpu::available()`); every 0.3 item has unit, fixture, live, and edge-case tests; the guard tests pass on all three OSes including `kill -9` recovery.
-- [ ] Bounded reader (`read.rs`); parser layer: `os_release` (and the legacy release files), `cpu_list`, `cpuinfo`, `proc_status`, `cgroup` (CPU side).
-- [ ] Fixtures moved from 0.2 (D-027): `docker-cgroup1-limited` (a cgroup v1 host) and `ubuntu-24.04-desktop-amd` (a bare-metal Linux desktop).
-- [ ] Distribution corpus: real os-release and legacy release files from at least 40 distributions, each with its expected `distro()`, `distro_id()`, `version()`, and `is_like()` answers (D-022).
-- [ ] `Error` with every variant and its "do" sentence tested; `Bytes` and `Percent` with the display rules of `PLAN.md` section 6.
-- [ ] `cpu::available()` complete: affinity, cpuset, and the cgroup v1/v2 CPU quota, with E-12 to E-15.
-- [ ] Process guard complete with every protection in `PLAN.md` section 9.3 and E-63 to E-68; first-party dependency path-lib wired.
-- [ ] Build helper and macro with E-59 to E-61; instance info with id-forge and clock-lib wired, E-62.
-- [ ] Fuzz targets for every parser introduced; Miri job active in CI.
-- [ ] Attack tests T4, T9, T10, T11, T16.
-- [ ] README quick start (Tier 1 first).
+- [x] Bounded reader (`Root` in `src/linux/mod.rs`, 1 MiB per file, small files on the stack); parser layer: `os_release` (and the legacy release files), `cpu_list`, `cpuinfo`, `cpu_name`, `proc_status`, `mountinfo`, `cgroup` (CPU side), `pid_file`, `version`.
+- [x] Fixture moved from 0.2 (D-027): `docker-cgroup1-limited`, captured on a real cgroup v1 host in a VM (D-038).
+- Moved to 0.4 (D-039): `ubuntu-24.04-desktop-amd`, which needs a bare-metal Linux desktop.
+- [x] Distribution corpus: 64 images' os-release and legacy release files, each checked against a shell's reading of os-release, and the legacy path checked against os-release (D-022, D-038). It found two accuracy bugs, fixed (D-036).
+- [x] `Error` with every variant and its "do" sentence tested; `Bytes` and `Percent` with the display rules of `PLAN.md` section 6.
+- [x] `cpu::available()` complete: affinity, cpuset, and the cgroup v1/v2 CPU quota, with E-12 to E-15.
+- [x] Process guard complete with every protection in `PLAN.md` section 9.3 and E-63 to E-68; first-party dependency path-lib wired; across processes with `kill -9` recovery (`tests/guard.rs`).
+- [x] Build helper and macro with E-59 to E-61; instance info with id-forge and clock-lib wired, E-62.
+- [x] Fuzz targets for every parser introduced (12); Miri job active in CI; fuzz smoke on every push, 10 minutes per target nightly (D-040).
+- [x] Attack tests T4, T9, T10, T11, T16.
+- [x] Live comparison with the OS's own tools on every runner (`tests/live.rs`), 64 threads at first use (`tests/concurrency.rs`).
+- [x] README quick start (Tier 1 first).
 
 ## v0.4.0 - Extended: live readings
-API: ROOT-05, ROOT-07, ROOT-08 · BLD-06 · PRC-02 to PRC-04, PRC-06 to PRC-10, PRC-13 to PRC-15 · CPU-07 to CPU-12, CPU-14, CPU-15, CPU-20 to CPU-25, CPU-30, CPU-31 · MEM-01 to MEM-11, MEM-13 · DSK-01 to DSK-03, DSK-06, DSK-07 · NET-01 to NET-05, NET-07 to NET-09 · HST-02, HST-03, HST-09, HST-10.
+API: ROOT-05, ROOT-07, ROOT-08 · PRC-02 to PRC-04, PRC-06 to PRC-10, PRC-13 to PRC-15 · CPU-07 to CPU-12, CPU-14, CPU-15, CPU-20 to CPU-25, CPU-30, CPU-31 · MEM-01 to MEM-11, MEM-13 · DSK-01 to DSK-03, DSK-06, DSK-07 · NET-01 to NET-05, NET-07 to NET-09 · HST-02, HST-03, HST-09, HST-10.
 Exit: tower's memory watermark and load shedding and metrics-lib's system collector can be built on 0.4; every live reading allocation-free where promised; all container fixtures pass.
+- [ ] Fixture moved from 0.3 (D-039): `ubuntu-24.04-desktop-amd`, captured with `tests/fixtures/capture.sh` on a bare-metal Linux desktop.
 - [ ] cgroup v1 and v2 and job-object memory limits with E-1 to E-12; the container CI job (`--memory`, `--cpus`) asserts real limits; nested job objects verified.
 - [ ] CPU sampler with E-20 to E-27; per-core usage on Windows above 64 CPUs verified (D-031); counting-allocator tests for every scalar reading.
 - [ ] Disk listing with E-36 to E-39; interfaces and `interfaces_with` with E-53 to E-58.

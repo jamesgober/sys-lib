@@ -11,7 +11,48 @@
 
 ## [Unreleased]
 
+---
+
+## [0.3.0] - 2026-10-23
+
+The boot kit: OS identity and the distribution, CPU counts and names, the
+host, the user, build info, instance info, and the process guard.
+
+### Added
+
+- `os`: `kind()` and the `const` `is_*()` checks, `name()`, `version()`,
+  `kernel()`, `distro()`, `distro_id()`, `is_like()`, `os_release()`, and
+  `info()`. On Linux: os-release, then the legacy release files, then "Linux".
+- `cpu`: `arch()`, `is_64bit()`, `is_32bit()`, `logical()`, `physical()`,
+  `available()` (affinity, cgroup cpuset, cgroup v1 and v2 CPU quota, the
+  Windows job object's CPU rate cap), `name()`, `raw_name()`, and `vendor()`.
+- `host::name()`; `process::id()`, `process::user()`, `process::is_elevated()`.
+- The process guard: `process::guard()`, `Guard`, `GuardBuilder`,
+  `GuardReport`, `GuardWarning`, and `process::Limit`.
+- Build info: `build::emit()`, `build::emitter()` (planned for 0.4, D-032),
+  `build_info!()`, `BuildInfo`, and `PublicBuild`.
+- Instance info: `Instance`, `InstanceId`, and `instance::current()`.
+- `Error` and `Result`, `Bytes` and `Units`, and `Percent`.
+- `cpu::Vendor` variants `Broadcom`, `Marvell`, `Fujitsu`, `HiSilicon`, and
+  `Microsoft`, beyond the planned list (D-033).
+- Examples `facts` and `boot`.
+- A distribution corpus of 64 systems in `tests/fixtures/distros`, captured
+  from container images by the `Fixtures` workflow and checked against a
+  shell's reading of each os-release; the `docker-cgroup1-limited` fixture,
+  captured on a cgroup v1 host in a virtual machine (D-038).
+- Live comparison with the OS's tools, a 64-thread first-use test, the guard
+  across processes with `kill -9` recovery, and attack tests T4, T9, T10,
+  T11, and T16.
+- Fuzz targets for all 12 parsers; CI runs Miri over the parsers on every
+  push, each fuzz target for 20 seconds on every push, and 10 minutes per
+  target nightly (D-040).
+
 ### Changed
+
+- `docs/API.md` corrected to the shipped code after an item-by-item audit
+  (D-034); `GuardWarning::ThreadsAlreadyRunning` is Unix only (D-035).
+- The `ubuntu-24.04-desktop-amd` fixture moves to 0.4: it needs a bare-metal
+  Linux desktop (D-039).
 
 - The plan and `docs/API.md` cover the complete library: nothing is scheduled
   after 1.0. Added to the API: disk read and write rates and this process's
@@ -99,6 +140,7 @@ The scaffold and the plan. No functional code yet.
   `dev/ROADMAP.md`.
 - `tests/fixtures/` and `fuzz/` skeletons.
 
-[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jamesgober/sys-lib/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/sys-lib/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/sys-lib/releases/tag/v0.1.0

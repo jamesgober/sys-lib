@@ -94,20 +94,20 @@ Costs are estimates (marked [est.]) until they are measured in `0.7.0`; measured
 
 ```toml
 [dependencies]
-sys = { package = "sys-lib", version = "0.2" }
+sys = { package = "sys-lib", version = "0.3" }
 # Without instance info and the process guard (no dependencies at all):
-# sys = { package = "sys-lib", version = "0.2", default-features = false }
-# With device identity:
-# sys = { package = "sys-lib", version = "0.2", features = ["device-id"] }
+# sys = { package = "sys-lib", version = "0.3", default-features = false }
+# With device identity (from 0.5):
+# sys = { package = "sys-lib", version = "0.5", features = ["device-id"] }
 ```
 
-The package is `sys-lib` on crates.io (`sys` and `system` were taken). Cargo's rename makes it `sys` in your code, so every file writes `sys::os::name()` with no import line. Without the rename (`sys-lib = "0.2"`), add `use sys_lib as sys;` at the top of a file and the code is the same.
+The package is `sys-lib` on crates.io (`sys` and `system` were taken). Cargo's rename makes it `sys` in your code, so every file writes `sys::os::name()` with no import line. Without the rename (`sys-lib = "0.3"`), add `use sys_lib as sys;` at the top of a file and the code is the same.
 
 | Feature | Default | Enables | Brings |
 |---|---|---|---|
 | `instance` | yes | `Instance`, `InstanceId`, `instance::current()` | clock-lib, id-forge |
-| `guard` | yes | `process::guard`, `Guard`, `GuardBuilder`, `GuardReport` | path-lib |
-| `device-id` | no | the `device` module | crypt-io (keyed BLAKE3, zeroize) |
+| `guard` | yes | `process::guard`, `Guard`, `GuardBuilder`, `GuardReport`, `GuardWarning` | path-lib |
+| `device-id` | no | the `device` module (from 0.5; before that the feature exists and enables nothing) | crypt-io (keyed BLAKE3, zeroize) |
 
 Everything else is always compiled and has no dependencies. No feature brings a third-party crate except `device-id`, whose cryptography comes through crypt-io.
 
@@ -441,14 +441,16 @@ summary.write_json(&mut line)?;
 
 ## `build`: build info
 
-**Since** 0.3 (BLD-01 to BLD-05), 0.4 (BLD-06)
+**Since** 0.3 (BLD-01 to BLD-06; BLD-06 was planned for 0.4 and shipped with the helper, D-032)
 
 Facts fixed when the application was compiled, answering "exactly which build is running?" in logs, crash reports, health checks, and metrics. Zero run-time cost: every field is a `&'static str` in the binary.
 
 ```rust
 pub mod build {
     pub fn emit();                          // call from the application's build.rs
-    pub fn emitter() -> Emitter;            // Tier 2, since 0.4
+    pub fn emitter() -> Emitter;            // Tier 2
+    #[derive(Clone, Copy, Debug)]
+    #[must_use]
     pub struct Emitter { /* private */ }
     impl Emitter {
         pub fn git(self, on: bool) -> Self;        // default true
@@ -461,7 +463,7 @@ pub mod build {
 #[macro_export]
 macro_rules! build_info { () => { /* &'static BuildInfo, expanded in the calling crate */ } }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BuildInfo {
     pub name: &'static str,          // the application's CARGO_PKG_NAME
@@ -481,6 +483,7 @@ impl BuildInfo {
     pub fn write_json(&self, out: &mut impl fmt::Write) -> fmt::Result;
 }
 impl fmt::Display for BuildInfo;   // site 0.3.0 (9db9e36, release, built 2026-10-21T18:02:11Z)
+                                   // "9db9e36-dirty" when tracked files differed; unknown parts left out
 
 #[derive(Clone, Copy, Debug)]
 pub struct PublicBuild<'a> { /* private */ }
@@ -496,9 +499,9 @@ impl fmt::Display for PublicBuild<'_>;   // site 0.3.0
 | BLD-05 | `public()` | 1 | 0 |
 | BLD-06 | `emitter()` | 2 | build time only |
 
-**How it works.** The application adds sys-lib as a build-dependency and calls `sys_lib::build::emit()` from its own `build.rs`. At build time the helper runs `git -C $CARGO_MANIFEST_DIR rev-parse HEAD`, `git status --porcelain --untracked-files=no`, and `$RUSTC --version`, then hands the values to the compiler with `cargo:rustc-env=SYS_LIB_BUILD_*`. It prints `cargo:rerun-if-changed` for the git `HEAD` file and the ref it points to (followed through a `.git` file in worktrees) and `cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH`, so a new commit refreshes the values without rebuilding every time. The macro expands in the application crate, so it reads the **application's** name and version; it reads the helper's values with `option_env!`, so an application that never called `emit()` still compiles and shows `unknown`.
+**How it works.** The application adds sys-lib as a build-dependency and calls `sys_lib::build::emit()` from its own `build.rs`. At build time the helper runs `git -C $CARGO_MANIFEST_DIR rev-parse HEAD`, `git status --porcelain --untracked-files=no`, and `$RUSTC --version`, then hands the values to the compiler with `cargo:rustc-env=SYS_LIB_BUILD_*`. It prints `cargo:rerun-if-changed` for the git `HEAD` file, the ref it points to (followed through a `.git` file in worktrees), `packed-refs`, and the index (so staging a change refreshes the dirty flag), and for the package's `src/`, `build.rs`, and `Cargo.toml`, plus `cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH`, so a new commit refreshes the values without rebuilding every time. A `HEAD` naming anything but a well-formed ref under `refs/` is ignored, and a path containing a line break is never printed, so a tampered repository cannot add a line to the build script's output (threat T11). The macro expands in the application crate, so it reads the **application's** name and version; it reads the helper's values with `option_env!`, so an application that never called `emit()` still compiles and shows `unknown`.
 
-**Never fails the build.** `git` missing, a crates.io tarball, a shallow clone, a detached HEAD: the value becomes `unknown`. `SOURCE_DATE_EPOCH`, when set, wins over the clock (reproducible builds); a value that is not a non-negative integer is ignored with a `cargo:warning`. Every value is checked (printable ASCII, at most 128 bytes) before it reaches `rustc-env`, because a branch name can contain anything (threat T11). The helper records no build host, user name, or source path.
+**Never fails the build.** `git` missing, a crates.io tarball, a shallow clone, a detached HEAD: the value becomes `unknown`. `SOURCE_DATE_EPOCH`, when set, wins over the clock (reproducible builds); a value that is not a non-negative integer is ignored with a `cargo:warning`. Every value is checked (printable ASCII, at most 128 bytes; 512 for the feature list) before it reaches `rustc-env`, because a branch name can contain anything (threat T11). The helper records no build host, user name, or source path.
 
 **At run time sys-lib starts no program.** The helper is the only code in the crate that runs one, and it runs in the application's build script.
 
@@ -646,9 +649,10 @@ pub struct Limits {
     pub core_dump: Limit, pub stack: Limit,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Limit { pub soft: Option<u64>, pub hard: Option<u64> }   // None = unlimited or not applicable
+                                                                    // since 0.3, with the guard's report
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -841,8 +845,10 @@ impl Guard {
     pub fn report(&self) -> &GuardReport;
     pub fn lock_file(&self) -> Option<&Path>;
 }
-impl Drop for Guard;   // closes the lock file, which releases the lock; never deletes the file
+impl fmt::Debug for Guard;
+// Dropping the guard closes the lock file, which releases the lock; it never deletes the file.
 
+#[derive(Clone, Debug)]
 pub struct GuardBuilder { /* private */ }
 impl GuardBuilder {
     pub fn lock_dir(self, dir: impl Into<PathBuf>) -> Self;   // default: path-lib's runtime directory for `name`
@@ -855,7 +861,7 @@ impl GuardBuilder {
     pub fn build(self) -> Result<Guard>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct GuardReport {
     pub lock_file: Option<PathBuf>,
@@ -870,6 +876,7 @@ pub struct GuardReport {
 pub enum GuardWarning {
     /// Other threads were running when the umask changed; files they created
     /// meanwhile may have the old permissions. Call the guard before starting threads.
+    /// Unix only: Windows has no umask, and its loader starts threads in every process.
     ThreadsAlreadyRunning { threads: usize },
     /// The lock directory is on a filesystem whose locks may not hold across machines,
     /// accepted because `allow_network_lock(true)` was set.
@@ -890,13 +897,14 @@ What the guard does, in order:
 
 | Step | Linux and macOS | Windows |
 |---|---|---|
-| 1. lock directory | created owner-only (0700) through path-lib if missing; refused if it is a symlink, group- or world-writable, or on a network filesystem (`nfs`, `cifs`, `smb2`, `fuse.sshfs`, WSL's `drvfs` and `9p`) unless `allow_network_lock(true)` | created through path-lib; refused if it is a reparse point or on a remote drive unless allowed |
-| 2. single-instance lock | `<dir>/<name>.lock` opened with `O_NOFOLLOW`, locked with `File::try_lock`; the OS releases the lock when the process dies, even after `kill -9` | the same file, `File::try_lock`, reparse points refused |
-| 3. pid file | `<dir>/<name>.pid` written after the lock is held, with `path_lib::write_atomic` | same (the locked file cannot be read by another process, so the pid lives beside it) |
-| 4. umask | `umask(0o027)`: owner read and write, group read, others nothing | not applicable; `umask_after` is `None` |
-| 5. open-file limit | soft `RLIMIT_NOFILE` raised to the target, capped at the hard limit (and on macOS at `kern.maxfilesperproc`); `OpenFilesTooLow` if the hard limit is below the minimum, with nothing changed | not applicable (no per-process descriptor count for sockets); reported as unlimited |
+| 1. open-file limit, checked | `OpenFilesTooLow` if the hard `RLIMIT_NOFILE` is below the minimum, before anything else, so a refusal changes nothing (a second copy started under a low limit gets this error, not `AlreadyRunning`) | not applicable |
+| 2. lock directory | the default, path-lib's runtime directory, through path-lib; an explicit `lock_dir` created with mode 0700 if missing; refused if it is a symlink, group- or world-writable, owned by another user, or on a network filesystem (`nfs`, `cifs`, `smb2`, `fuse.sshfs`, WSL's `drvfs` and `9p`) unless `allow_network_lock(true)` | the same; refused if it is a reparse point or on a remote drive unless allowed |
+| 3. single-instance lock | `<dir>/<name>.lock` opened with `O_NOFOLLOW`, then checked (the opened file must be the one inspected, by device and inode, and owned by this user), locked with `File::try_lock`; the OS releases the lock when the process dies, even after `kill -9` | the same file, `File::try_lock`, reparse points refused |
+| 4. pid file | `<dir>/<name>.pid` written after the lock is held, with `path_lib::write_atomic` | same (the locked file cannot be read by another process, so the pid lives beside it) |
+| 5. open-file limit, raised | soft limit raised to the target, capped at the hard limit, on Linux at `/proc/sys/fs/nr_open`, and on macOS at `kern.maxfilesperproc` | not applicable (no per-process descriptor count for sockets); reported as unlimited |
+| 6. umask | `umask(0o027)`: owner read and write, group read, others nothing | not applicable; `umask_after` is `None` |
 
-The lock file is **never deleted**, not even on a clean exit: deleting it would let a waiting process lock the unlinked file while a third creates a new one, and two copies would run. The name must be 1 to 64 characters of ASCII letters, digits, `-`, `_`, `.`, not starting with `.`. The umask is process-wide, so call the guard before starting threads; if other threads already run, the report says so. Privileges are not dropped here: that is shield-sec's job, after the listening sockets are bound.
+The lock file is **never deleted**, not even on a clean exit: deleting it would let a waiting process lock the unlinked file while a third creates a new one, and two copies would run. The name must be 1 to 64 characters of ASCII letters, digits, `-`, `_`, `.`, not starting with `.`. The umask is process-wide, so call the guard before starting threads; on Unix, if other threads already run, the report says so. Privileges are not dropped here: that is shield-sec's job, after the listening sockets are bound.
 
 Errors, each saying what to do:
 
@@ -1002,8 +1010,8 @@ pub struct OsInfo {
     pub kind: Kind, pub name: &'static str, pub version: Option<&'static Version>,
     pub kernel: &'static str, pub distro: &'static str, pub distro_id: &'static str,
     pub os_release: Option<&'static OsRelease>,
-    pub edition: Option<&'static str>, pub codename: Option<&'static str>,
-    pub is_64bit: bool,
+    pub edition: Option<&'static str>, pub codename: Option<&'static str>,   // since 0.5 (OS-08, OS-09)
+    pub is_64bit: bool,                                                      // since 0.5 (OS-10)
     pub name_source: Source,     // where `name` came from
 }
 
@@ -1142,9 +1150,14 @@ impl Arch {
     pub const fn is_64bit(self) -> bool;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 #[non_exhaustive]
-pub enum Vendor { Intel, Amd, Apple, Arm, Qualcomm, Ampere, Nvidia, Samsung, Mediatek, Hygon, Zhaoxin, Unknown }
+pub enum Vendor {
+    Intel, Amd, Apple, Arm, Qualcomm, Ampere, Nvidia, Samsung, Mediatek, Hygon, Zhaoxin,
+    Broadcom, Marvell, Fujitsu, HiSilicon, Microsoft,   // ARM implementers in servers and boards (D-033)
+    #[default] Unknown,
+}
+impl Vendor { pub const fn name(self) -> &'static str; }   // "Intel", "AMD", "ARM", "Unknown"
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
@@ -2783,11 +2796,11 @@ A monitoring agent in a container that has the host's `/proc` and `/sys` mounted
 | `Unsupported { what, platform }` | this reading does not exist on this platform (load average on Windows is `Ok(None)` instead; temperatures on macOS are `Unsupported`) | treat the value as unknown |
 | `PermissionDenied { what, hint }` | the OS refused (root-only DMI files, a sandbox, SELinux, seccomp) | run with the permission named in `hint`, or accept the value as unknown |
 | `NotFound { what, source }` | a file or key that should exist does not (a container with a reduced `/proc`) | accept the value as unknown; `docs/PLATFORM-NOTES.md` lists known causes |
-| `Malformed { what, source, line }` | the OS returned data that does not parse; the source and line, never the content | report it with the output of `sys_lib::summary()` |
-| `TooLarge { what, limit }` | a file or a list exceeded its budget (1 MiB per file; 4 096 mounts or interfaces; 16 384 CPUs), or a caller buffer was too short | raise the budget with the Tier 2 option when the machine is genuinely that large, or pass a longer buffer |
+| `Malformed { what, source, line }` | the OS returned data that does not parse; the source and line, never the content | treat the value as unknown, and report it on the issue tracker with the file named (`summary()` output helps, from 0.5) |
+| `TooLarge { what, limit }` | a file or a list exceeded its budget (1 MiB per file; 4 096 mounts or interfaces; 16 384 CPUs), or a caller buffer was too short | treat the value as unknown; when the machine is genuinely that large, raise the budget with the Tier 2 option (from 0.4) or pass a longer buffer, and report it |
 | `TooSoon { elapsed, minimum }` | a sampler was asked again before any time passed on the OS clock | sample at least `minimum` apart |
 | `Os { what, call, code }` | a system call failed, with its name and OS error code | the code says why; report it if unexpected |
-| `Io { what, source }` | file I/O failed outside the cases above | see `source` |
+| `Io { what, source }` | file I/O failed outside the cases above | treat the value as unknown; `source` says why; report it if unexpected |
 | `InvalidInput { what, reason }` | invalid input from the caller (a guard name with a slash, an empty app id, an id string of the wrong length) | fix the input as `reason` says |
 | `AlreadyRunning { pid, lock_file }` | the process guard found another copy holding the lock | stop the other copy (its pid when known) or use another lock directory |
 | `RunDirUnavailable { path, source }` | the guard's lock directory cannot be created, written, or trusted | the message names the reason and the fix (`chmod 700`, a local directory, `allow_network_lock`) |

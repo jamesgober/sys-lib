@@ -3,7 +3,7 @@
 # =============================================================================
 [package]
 name    = "sys-lib"
-version = "0.2.0"
+version = "0.3.0"
 
 # Minimum Supported Rust Version (MSRV)
 # 1.89: `std::fs::File::lock` and `File::try_lock` are stable from 1.89.0, so
@@ -54,6 +54,11 @@ path = "src/lib.rs"
 name = "attack_t16_subprocess"
 harness = false
 
+# The boot kit example needs instance info and the guard.
+[[example]]
+name = "boot"
+required-features = ["instance", "guard"]
+
 # `cfg(fuzzing)` is set by cargo-fuzz for the parser entry points in `__fuzz`.
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
@@ -70,8 +75,9 @@ instance = ["dep:clock-lib", "dep:id-forge"]
 # Process guard: `process::guard`, `Guard` (brings path-lib).
 guard = ["dep:path-lib"]
 
-# Device identity: the `device` module (brings crypt-io). Off by default:
-# device identifiers carry privacy obligations; the caller opts in knowingly.
+# Device identity: the `device` module (from 0.5, bringing crypt-io; until
+# then the feature enables nothing, D-043). Off by default: device identifiers
+# carry privacy obligations; the caller opts in knowingly.
 device-id = []
 
 
