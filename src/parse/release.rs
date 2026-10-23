@@ -100,7 +100,9 @@ pub(crate) fn parse(kind: Kind, data: &[u8]) -> Option<Legacy> {
 
 fn first_line(data: &[u8]) -> Option<String> {
     let line = super::lines(data, 1).next()?;
-    let text = super::lossy(super::trim(line), MAX_TEXT);
+    // `str::trim`, not just ASCII: the parsers below trim with it too, so a
+    // line of only a vertical tab is empty here rather than an empty name later.
+    let text = super::lossy(line, MAX_TEXT).trim().to_owned();
     (!text.is_empty()).then_some(text)
 }
 
@@ -141,7 +143,7 @@ fn lsb(data: &[u8]) -> Option<Legacy> {
         }
     }
     let name = id.filter(|n| !n.trim().is_empty())?;
-    let lower = valid_id(name.trim().to_ascii_lowercase().replace(' ', "-"))?;
+    let lower = lsb_alias(valid_id(name.trim().replace(' ', "-"))?);
     let version = release.and_then(version_token);
     let pretty_name = description
         .filter(|d| !d.trim().is_empty())
@@ -153,6 +155,22 @@ fn lsb(data: &[u8]) -> Option<Legacy> {
         version,
         codename: codename.and_then(valid_id),
     })
+}
+
+/// The os-release id for a `DISTRIB_ID` spelled differently from it, as
+/// `lsb_release -i` reports on those systems; any other id is kept.
+fn lsb_alias(id: String) -> String {
+    let alias = match id.as_str() {
+        "manjarolinux" => "manjaro",
+        "vmware-photon-os" => "photon",
+        "redhatenterpriseserver" | "redhatenterpriseworkstation" | "redhatenterprise" => "rhel",
+        "amazonami" => "amzn",
+        "oracleserver" => "ol",
+        "scientificsl" | "scientific-linux" => "scientific",
+        "opensuse-project" => "opensuse",
+        _ => return id,
+    };
+    alias.to_owned()
 }
 
 /// "CentOS Linux release 7.9.2009 (Core)", "Fedora release 20 (Heisenbug)",
@@ -202,6 +220,9 @@ fn red_hat_id(name: &str) -> Option<String> {
 fn suse(data: &[u8]) -> Option<Legacy> {
     let first = first_line(data)?;
     let name = first.split(" (").next().unwrap_or(&first).trim().to_owned();
+    if name.is_empty() {
+        return None;
+    }
     let (mut version, mut patch) = (None, None);
     for line in super::lines(data, 32).skip(1) {
         let text = super::lossy(line, MAX_TEXT);
@@ -285,6 +306,21 @@ mod tests {
         assert_eq!(l.version.as_deref(), Some("12.04"));
         assert_eq!(l.codename.as_deref(), Some("precise"));
         assert_eq!(parse(Kind::Lsb, b"DISTRIB_RELEASE=1\n"), None);
+        // DISTRIB_IDs spelled differently from the os-release id (corpus).
+        let id = |data: &[u8]| parse(Kind::Lsb, data).map(|l| l.id);
+        assert_eq!(
+            id(b"DISTRIB_ID=\"ManjaroLinux\"\n").as_deref(),
+            Some("manjaro")
+        );
+        assert_eq!(
+            id(b"DISTRIB_ID=\"VMware Photon OS\"\n").as_deref(),
+            Some("photon")
+        );
+        assert_eq!(
+            id(b"DISTRIB_ID=RedHatEnterpriseServer\n").as_deref(),
+            Some("rhel")
+        );
+        assert_eq!(id(b"DISTRIB_ID=\"Mariner\"\n").as_deref(), Some("mariner"));
     }
 
     #[test]
@@ -352,8 +388,13 @@ mod tests {
                 b"x release )(",
                 b"\n\n\n",
                 b"VERSION = \nPATCHLEVEL",
+                // Found by fuzzing: an empty name after trimming.
+                b"\x0b",
+                b" (x86_64)\n",
             ] {
-                let _ = parse(kind, input);
+                if let Some(l) = parse(kind, input) {
+                    assert!(!l.id.is_empty() && !l.name.is_empty(), "{kind:?} {input:?}");
+                }
             }
         }
     }

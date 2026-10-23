@@ -1,0 +1,8 @@
+IMAGE=linuxmintd/mint22-amd64
+DIGEST=linuxmintd/mint22-amd64@sha256:34ff53d1dca48a73486c3051425306421278225ae02b6d5066a3c940183cae1f
+ID=ubuntu
+NAME=Ubuntu
+PRETTY_NAME=Ubuntu 24.04.5 LTS
+VERSION_ID=24.04
+ID_LIKE=debian
+VERSION_CODENAME=noble

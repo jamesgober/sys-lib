@@ -44,7 +44,8 @@ fn android(facts: &mut OsFacts) {
             let bytes: Vec<u8> = buf
                 .iter()
                 .take_while(|&&c| c != 0)
-                .map(|&c| c as u8)
+                // `c_char` is `u8` on aarch64 Android and `i8` on x86_64.
+                .map(|&c| u8::from_ne_bytes(c.to_ne_bytes()))
                 .collect();
             crate::parse::lossy(&bytes, 64)
         })

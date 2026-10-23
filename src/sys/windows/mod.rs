@@ -479,7 +479,9 @@ pub(crate) fn open_files_ceiling() -> Option<u64> {
     None
 }
 
-#[cfg(feature = "guard")]
+// The guard does not count threads on Windows (no umask, so no race);
+// `process::threads()` (PRC-07, 0.4) uses this.
+#[allow(dead_code)]
 pub(crate) fn thread_count() -> Option<usize> {
     // SAFETY: plain flags; the returned handle is checked before use.
     let snapshot = unsafe { ffi::CreateToolhelp32Snapshot(ffi::TH32CS_SNAPTHREAD, 0) };

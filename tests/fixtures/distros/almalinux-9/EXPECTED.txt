@@ -1,0 +1,8 @@
+IMAGE=almalinux:9
+DIGEST=almalinux@sha256:9819dc675b67b595c2b59e42be7763fca1a8bb217fa5944e04daa22e9a64db16
+ID=almalinux
+NAME=AlmaLinux
+PRETTY_NAME=AlmaLinux 9.8 (Olive Jaguar)
+VERSION_ID=9.8
+ID_LIKE=rhel centos fedora
+VERSION_CODENAME=

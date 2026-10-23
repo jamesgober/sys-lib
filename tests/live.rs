@@ -35,6 +35,10 @@ fn need(program: &str, args: &[&str]) -> Option<String> {
     value
 }
 
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "macos", windows)),
+    allow(dead_code)
+)]
 fn number(text: &str) -> usize {
     text.trim()
         .parse()

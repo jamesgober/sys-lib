@@ -1,0 +1,8 @@
+IMAGE=alpine:3.10
+DIGEST=alpine@sha256:451eee8bedcb2f029756dc3e9d73bab0e7943c1ac55cff3a4861c52a0fdd3e98
+ID=alpine
+NAME=Alpine Linux
+PRETTY_NAME=Alpine Linux v3.10
+VERSION_ID=3.10.9
+ID_LIKE=
+VERSION_CODENAME=

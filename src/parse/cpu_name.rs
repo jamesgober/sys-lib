@@ -7,16 +7,34 @@
 /// Zhaoxin names, so names like "QEMU Virtual CPU version 2.5+" stay intact.
 pub(crate) fn clean(raw: &str) -> String {
     // Marks vanish rather than becoming spaces: "FX(tm)-8350" is "FX-8350".
+    // Repeated until none is left, since removing one can join another
+    // ("(T(TM)M)"), so a cleaned name never cleans further (fuzzing).
     let mut s = raw.replace(['®', '™'], "");
-    for mark in ["(R)", "(r)", "(TM)", "(tm)", "(Tm)"] {
-        s = s.replace(mark, "");
-    }
-    // A trailing frequency: " CPU @ 3.00GHz", " @ 2.40GHz", "@2.7GHz".
-    if let Some(at) = s.rfind('@') {
-        let tail = s[at + 1..].trim().to_ascii_lowercase();
-        if tail.ends_with("ghz") || tail.ends_with("mhz") {
-            s.truncate(at);
+    loop {
+        let before = s.len();
+        for mark in ["(R)", "(r)", "(TM)", "(tm)", "(Tm)"] {
+            s = s.replace(mark, "");
         }
+        if s.len() == before {
+            break;
+        }
+    }
+    // Trailing frequencies: " CPU @ 3.00GHz", " @ 2.40GHz", "@2.7GHz"; a
+    // number must come before the unit.
+    while let Some(at) = s.rfind('@') {
+        let tail = s[at + 1..].trim().to_ascii_lowercase();
+        let number = tail
+            .strip_suffix("ghz")
+            .or_else(|| tail.strip_suffix("mhz"));
+        let is_frequency = number.is_some_and(|n| {
+            let n = n.trim_end();
+            n.starts_with(|c: char| c.is_ascii_digit())
+                && n.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        });
+        if !is_frequency {
+            break;
+        }
+        s.truncate(at);
     }
     let mut words: Vec<&str> = s.split_whitespace().collect();
     let vendor_rules = words.first().is_some_and(|w| {
@@ -315,6 +333,14 @@ mod tests {
         assert_eq!(clean("@"), "@");
         assert_eq!(clean("Intel(R)"), "Intel");
         assert_eq!(clean("x @ fast"), "x @ fast");
+        assert_eq!(clean("x @ mhz"), "x @ mhz");
+        // Found by fuzzing: two frequencies, and marks that join into another.
+        assert_eq!(clean("Old CPU @ 1.0GHz @ 2.0GHz"), "Old CPU");
+        assert_eq!(clean("AMD(T(TM)M) X"), "AMD X");
+        let fuzzed =
+            String::from_utf8_lossy(b"09<\x15.0\xe0\xff\xff\xff@@\xc780ghz@mhz").into_owned();
+        let once = clean(&fuzzed);
+        assert_eq!(clean(&once), once);
     }
 
     #[test]

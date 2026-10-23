@@ -1,0 +1,8 @@
+IMAGE=clearlinux:latest
+DIGEST=clearlinux@sha256:ea82c1042e56f70b697844a9060d49c87bf4193c5cb9a2f34c45ee3e756019f7
+ID=clear-linux-os
+NAME=Clear Linux OS
+PRETTY_NAME=Clear Linux OS
+VERSION_ID=43630
+ID_LIKE=clear-linux-os
+VERSION_CODENAME=

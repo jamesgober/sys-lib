@@ -267,6 +267,10 @@ impl GuardBuilder {
             }
         };
 
+        // The race is the umask's, so the warning is Unix-only. Windows has no
+        // umask, and every Windows process starts with the loader's worker
+        // threads, so a count there would warn on every start.
+        #[cfg(unix)]
         if let Some(threads) = sys::thread_count().filter(|&n| n > 1) {
             warnings.push(GuardWarning::ThreadsAlreadyRunning { threads });
         }
@@ -311,7 +315,8 @@ pub struct GuardReport {
 #[non_exhaustive]
 pub enum GuardWarning {
     /// Other threads were running when the umask changed; files they created
-    /// meanwhile may have the old permissions. Call the guard before starting threads.
+    /// meanwhile may have the old permissions. Call the guard before starting
+    /// threads. Unix only: Windows has no umask.
     ThreadsAlreadyRunning {
         /// The thread count, this one included.
         threads: usize,
@@ -742,8 +747,8 @@ mod tests {
 
     #[test]
     fn test_guard_report_with_threads_warns() {
-        // E-65, T10: the test harness runs tests on threads, so a warning is expected
-        // wherever the platform can count them.
+        // E-65, T10: the test harness runs tests on threads, so on Unix a warning
+        // is expected wherever the platform can count them; never on Windows.
         let g = Guard::builder("threads")
             .lock(false)
             .keep_umask()
@@ -751,15 +756,15 @@ mod tests {
             .open_files_minimum(0)
             .build()
             .unwrap();
-        if let Some(n) = sys::thread_count()
-            && n > 1
-        {
-            assert!(
-                g.report()
-                    .warnings
-                    .iter()
-                    .any(|w| matches!(w, GuardWarning::ThreadsAlreadyRunning { .. }))
-            );
+        let warned = g
+            .report()
+            .warnings
+            .iter()
+            .any(|w| matches!(w, GuardWarning::ThreadsAlreadyRunning { .. }));
+        if cfg!(unix) {
+            assert_eq!(warned, sys::thread_count().is_some_and(|n| n > 1));
+        } else {
+            assert!(!warned);
         }
         if cfg!(unix) {
             assert!(g.report().umask_before.is_some());

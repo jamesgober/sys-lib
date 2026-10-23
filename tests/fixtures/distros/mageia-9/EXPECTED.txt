@@ -1,0 +1,8 @@
+IMAGE=mageia:9
+DIGEST=mageia@sha256:a2fc9d2077dd746a26096d6e90bfd99a30e56ade04105e1ff7eb249930e92f66
+ID=mageia
+NAME=Mageia
+PRETTY_NAME=Mageia 9
+VERSION_ID=9
+ID_LIKE=mandriva fedora
+VERSION_CODENAME=

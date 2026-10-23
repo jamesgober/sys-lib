@@ -115,6 +115,9 @@ pub enum Error {
     },
 }
 
+/// Where unexpected OS data is reported.
+const ISSUES: &str = "https://github.com/jamesgober/sys-lib/issues";
+
 /// The result type used throughout sys-lib.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
@@ -172,25 +175,32 @@ impl fmt::Display for Error {
                 if let Some(line) = line {
                     write!(f, " (line {line})")?;
                 }
-                write!(f, "; report it with the output of sys_lib::summary()")
+                write!(
+                    f,
+                    "; treat the value as unknown, and report it at {ISSUES} with the file \
+                     named here"
+                )
             }
             Self::TooLarge { what, limit } => write!(
                 f,
-                "{what} exceeded its budget of {limit}; raise the budget with the Tier 2 options \
-                 if the machine is genuinely that large, or pass a larger buffer"
+                "{what} exceeded its budget of {limit}; treat the value as unknown, and if the \
+                 machine is genuinely that large, report it at {ISSUES}"
             ),
             Self::TooSoon { elapsed, minimum } => write!(
                 f,
                 "sampled again after {elapsed:?}, before the OS clock moved; sample at least \
                  {minimum:?} apart"
             ),
-            Self::Os { what, call, code } => {
-                write!(
-                    f,
-                    "{what} could not be read: {call} failed with OS error {code}"
-                )
-            }
-            Self::Io { what, source } => write!(f, "{what} could not be read: {source}"),
+            Self::Os { what, call, code } => write!(
+                f,
+                "{what} could not be read: {call} failed with OS error {code}; the code says \
+                 why, and if it is unexpected, report it at {ISSUES}"
+            ),
+            Self::Io { what, source } => write!(
+                f,
+                "{what} could not be read: {source}; treat the value as unknown, and if it is \
+                 unexpected, report it at {ISSUES}"
+            ),
             Self::InvalidInput { what, reason } => write!(f, "invalid {what}: {reason}"),
             Self::AlreadyRunning { pid, lock_file } => {
                 write!(f, "another copy is already running")?;

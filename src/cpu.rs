@@ -171,7 +171,7 @@ pub enum Vendor {
 }
 
 impl Vendor {
-    /// The vendor's name: "Intel", "AMD", "Arm".
+    /// The vendor's name: "Intel", "AMD", "ARM".
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {

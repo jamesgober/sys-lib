@@ -1,0 +1,8 @@
+IMAGE=alpine:edge
+DIGEST=alpine@sha256:020dfcbaaf4cc1078bf2d9c7ba31a8466e334061dcd2f248001d68f79e52c000
+ID=alpine
+NAME=Alpine Linux
+PRETTY_NAME=Alpine Linux edge
+VERSION_ID=3.25.0_alpha20260805
+ID_LIKE=
+VERSION_CODENAME=

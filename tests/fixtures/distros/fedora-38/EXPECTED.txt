@@ -1,0 +1,8 @@
+IMAGE=fedora:38
+DIGEST=fedora@sha256:b9ff6f23cceb5bde20bb1f79b492b98d71ef7a7ae518ca1b15b26661a11e6a94
+ID=fedora
+NAME=Fedora Linux
+PRETTY_NAME=Fedora Linux 38 (Container Image)
+VERSION_ID=38
+ID_LIKE=
+VERSION_CODENAME=

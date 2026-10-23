@@ -273,6 +273,36 @@ mod tests {
     }
 
     #[test]
+    fn test_linux_cpu_docker_cgroup_v1_quota_and_cpuset() {
+        // E-13, D-027: a real cgroup v1 host (Ubuntu 20.04, hybrid layout) with
+        // 4 CPUs; the container has quota 1.5 CPUs and a cpuset of two.
+        let name = "docker-cgroup1-limited";
+        let (root, log) = fixtures::root(name).recording();
+        assert_eq!(quota(&root), Some((150_000, 100_000)));
+        let logical = read(&root).logical.unwrap();
+        assert_eq!(logical, 4);
+        assert_eq!(available(&root, logical), 2);
+        let opened = log.lock().unwrap().clone();
+        assert!(
+            opened
+                .iter()
+                .any(|p| p == "/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_quota_us"),
+            "{opened:?}"
+        );
+        assert!(
+            opened
+                .iter()
+                .any(|p| p == "/sys/fs/cgroup/cpuset/cpuset.effective_cpus"),
+            "{opened:?}"
+        );
+        assert_eq!(fixtures::tool(name, "nproc").as_deref(), Some("2"));
+        assert_eq!(
+            fixtures::tool(name, "getconf _NPROCESSORS_CONF").as_deref(),
+            Some("4")
+        );
+    }
+
+    #[test]
     fn test_linux_cpu_available_never_zero_never_above_logical() {
         for name in fixtures::ALL {
             let root = fixtures::root(name);

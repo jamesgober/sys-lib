@@ -1,0 +1,8 @@
+IMAGE=parrotsec/core
+DIGEST=parrotsec/core@sha256:2dcefa48d3c4ae6b1a1a1391ae2a0ae6115a3c194b3677b3f0487f0e3996c9cd
+ID=parrot
+NAME=Parrot Security
+PRETTY_NAME=Parrot Security 7.4 (echo)
+VERSION_ID=7.4
+ID_LIKE=debian
+VERSION_CODENAME=echo

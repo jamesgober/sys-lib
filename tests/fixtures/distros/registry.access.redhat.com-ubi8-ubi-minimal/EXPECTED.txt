@@ -1,0 +1,8 @@
+IMAGE=registry.access.redhat.com/ubi8/ubi-minimal
+DIGEST=registry.access.redhat.com/ubi8/ubi-minimal@sha256:c851eaf99ddf32811fdf8a216c2609cd0e55317ab8c46ecbaa3ea8298532f055
+ID=rhel
+NAME=Red Hat Enterprise Linux
+PRETTY_NAME=Red Hat Enterprise Linux 8.10 (Ootpa)
+VERSION_ID=8.10
+ID_LIKE=fedora
+VERSION_CODENAME=

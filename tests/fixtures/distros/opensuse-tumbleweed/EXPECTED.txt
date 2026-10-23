@@ -1,0 +1,8 @@
+IMAGE=opensuse/tumbleweed
+DIGEST=opensuse/tumbleweed@sha256:0c6f00841281acf55a8ef29e777fc2db40d0923289ba933d566542cff2cddc00
+ID=opensuse-tumbleweed
+NAME=openSUSE Tumbleweed
+PRETTY_NAME=openSUSE Tumbleweed
+VERSION_ID=20261021
+ID_LIKE=opensuse suse
+VERSION_CODENAME=

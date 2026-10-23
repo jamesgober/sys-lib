@@ -1,0 +1,8 @@
+IMAGE=gentoo/stage3
+DIGEST=gentoo/stage3@sha256:916dc4d8cf38d316da9a838c2e20f32f16b7d4f21ef137b4682b66d68874c2c5
+ID=gentoo
+NAME=Gentoo
+PRETTY_NAME=Gentoo Linux
+VERSION_ID=2.18
+ID_LIKE=
+VERSION_CODENAME=

@@ -1,0 +1,8 @@
+IMAGE=amazonlinux:2
+DIGEST=amazonlinux@sha256:63c18d5d2412a1bf15288e984e5c3a478e80c307e01b37e6e04a96bd4a32268f
+ID=amzn
+NAME=Amazon Linux
+PRETTY_NAME=Amazon Linux 2
+VERSION_ID=2
+ID_LIKE=centos rhel fedora
+VERSION_CODENAME=

@@ -51,6 +51,7 @@ impl Root {
     }
 
     /// A captured tree (`tests/fixtures/<name>`), or a host tree mounted elsewhere.
+    #[cfg_attr(not(test), allow(dead_code))] // the fixtures; a host root from 0.4
     pub(crate) fn at(base: impl Into<PathBuf>) -> Self {
         Self {
             base: Some(base.into()),
@@ -156,12 +157,14 @@ impl Root {
         .ok()
     }
 
+    #[allow(dead_code)] // container and virtualization markers, 0.4
     pub(crate) fn exists(&self, abs: &str) -> bool {
         self.resolve(abs).exists()
     }
 
     /// The target of a symbolic link. Fixture trees hold no real links; they
     /// record the target in `<path>.link`.
+    #[cfg_attr(not(test), allow(dead_code))] // the time zone and block devices, 0.4
     pub(crate) fn link_target(&self, abs: &str) -> Option<String> {
         #[cfg(test)]
         if let Some(log) = &self.log {
@@ -176,6 +179,7 @@ impl Root {
     }
 
     /// The names in a directory, at most `max`, sorted.
+    #[allow(dead_code)] // disks, interfaces, and sensors, 0.4
     pub(crate) fn dir_names(&self, abs: &str, max: usize) -> Vec<String> {
         let Ok(entries) = std::fs::read_dir(self.resolve(abs)) else {
             return Vec::new();
@@ -199,10 +203,11 @@ pub(crate) mod fixtures {
         Root::at(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/").to_owned() + name)
     }
 
-    pub(crate) const ALL: [&str; 4] = [
+    pub(crate) const ALL: [&str; 5] = [
         "wsl2",
         "wsl2-systemd-scope-limited",
         "docker-cgroup2-limited",
+        "docker-cgroup1-limited",
         "minimal-scratch",
     ];
 

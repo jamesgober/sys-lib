@@ -1,0 +1,8 @@
+IMAGE=registry.access.redhat.com/ubi9/ubi-minimal
+DIGEST=registry.access.redhat.com/ubi9/ubi-minimal@sha256:c4c285d42941ebb2bd4da878479008e1e4536bb599aad1dbe568f89de9053661
+ID=rhel
+NAME=Red Hat Enterprise Linux
+PRETTY_NAME=Red Hat Enterprise Linux 9.8 (Plow)
+VERSION_ID=9.8
+ID_LIKE=fedora
+VERSION_CODENAME=

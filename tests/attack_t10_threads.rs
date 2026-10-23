@@ -27,9 +27,14 @@ fn test_attack_t10_guard_after_threads_warns_and_sets_the_umask_once() {
         .warnings
         .iter()
         .any(|w| matches!(w, GuardWarning::ThreadsAlreadyRunning { threads } if *threads >= 2));
-    // Every tier 1 platform can count threads; the warning is not optional there.
-    if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
+    // Linux and macOS count threads, so the warning is not optional there.
+    // Windows has no umask and never warns (its loader starts worker threads
+    // in every process).
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
         assert!(warned, "no ThreadsAlreadyRunning warning: {report:?}");
+    }
+    if cfg!(windows) {
+        assert!(!warned, "{report:?}");
     }
 
     #[cfg(unix)]

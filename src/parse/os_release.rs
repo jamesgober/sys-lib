@@ -29,11 +29,12 @@ pub(crate) fn parse(data: &[u8]) -> OsReleaseData {
         match key {
             b"ID" => out.id = valid_id(value),
             b"ID_LIKE" => {
-                out.id_like = value
-                    .split(' ')
-                    .filter_map(|v| valid_id(v.to_owned()))
-                    .take(16)
-                    .collect();
+                out.id_like.clear();
+                for like in value.split(' ').filter_map(|v| valid_id(v.to_owned())) {
+                    if out.id_like.len() < 16 && !out.id_like.contains(&like) {
+                        out.id_like.push(like);
+                    }
+                }
             }
             b"NAME" => out.name = non_empty(value),
             b"PRETTY_NAME" => out.pretty_name = non_empty(value),
@@ -53,12 +54,15 @@ fn non_empty(value: String) -> Option<String> {
 }
 
 /// An id by the os-release rule: lowercase letters, digits, `.`, `_`, `-`.
-pub(crate) fn valid_id(value: String) -> Option<String> {
+/// ASCII capitals, which some distributions ship against the rule
+/// (openEuler's `ID=openEuler`), are lowered rather than rejected.
+pub(crate) fn valid_id(mut value: String) -> Option<String> {
     let ok = !value.is_empty()
         && value.len() <= 64
-        && value.bytes().all(|b| {
-            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
-        });
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    value.make_ascii_lowercase();
     ok.then_some(value)
 }
 
@@ -178,10 +182,19 @@ LOGO=ubuntu-logo
 
     #[test]
     fn test_os_release_invalid_ids_are_dropped() {
-        let r = parse(b"ID=Ubuntu\nID_LIKE=\"rhel centos FEDORA fedora\"\nVARIANT_ID=server\n");
+        let r = parse(b"ID=ubuntu!\nID_LIKE=\"rhel cent/os FEDORA fedora\"\nVARIANT_ID=server\n");
         assert_eq!(r.id, None);
-        assert_eq!(r.id_like, vec!["rhel", "centos", "fedora"]);
+        assert_eq!(r.id_like, vec!["rhel", "fedora"]);
         assert_eq!(r.variant_id.as_deref(), Some("server"));
+    }
+
+    #[test]
+    fn test_os_release_capital_ids_are_lowered() {
+        // openEuler 24.03 ships `ID=openEuler`, against os-release(5) (corpus).
+        let r = parse(b"NAME=\"openEuler\"\nID=\"openEuler\"\nID_LIKE=\"Fedora\"\n");
+        assert_eq!(r.id.as_deref(), Some("openeuler"));
+        assert_eq!(r.id_like, vec!["fedora"]);
+        assert_eq!(r.name.as_deref(), Some("openEuler"));
     }
 
     #[test]

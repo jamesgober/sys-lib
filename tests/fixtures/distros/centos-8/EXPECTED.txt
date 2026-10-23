@@ -1,0 +1,8 @@
+IMAGE=centos:8
+DIGEST=centos@sha256:a27fd8080b517143cbbbab9dfb7c8571c40d67d534bbdee55bd6c473f432b177
+ID=centos
+NAME=CentOS Linux
+PRETTY_NAME=CentOS Linux 8
+VERSION_ID=8
+ID_LIKE=rhel fedora
+VERSION_CODENAME=

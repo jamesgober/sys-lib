@@ -1,0 +1,8 @@
+IMAGE=debian:13
+DIGEST=debian@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308
+ID=debian
+NAME=Debian GNU/Linux
+PRETTY_NAME=Debian GNU/Linux 13 (trixie)
+VERSION_ID=13
+ID_LIKE=
+VERSION_CODENAME=trixie

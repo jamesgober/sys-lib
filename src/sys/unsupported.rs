@@ -101,7 +101,7 @@ pub(crate) fn open_files_ceiling() -> Option<u64> {
     None
 }
 
-#[cfg(feature = "guard")]
+#[cfg(all(feature = "guard", unix))]
 pub(crate) fn thread_count() -> Option<usize> {
     None
 }

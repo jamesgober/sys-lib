@@ -1,0 +1,8 @@
+IMAGE=debian:11
+DIGEST=debian@sha256:6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe9
+ID=debian
+NAME=Debian GNU/Linux
+PRETTY_NAME=Debian GNU/Linux 11 (bullseye)
+VERSION_ID=11
+ID_LIKE=
+VERSION_CODENAME=bullseye

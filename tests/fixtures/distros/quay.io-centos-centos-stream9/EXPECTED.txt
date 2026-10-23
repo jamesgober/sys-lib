@@ -1,0 +1,8 @@
+IMAGE=quay.io/centos/centos:stream9
+DIGEST=quay.io/centos/centos@sha256:086f25bff2b5e44eaa6953c8165cf6c4dcb3af8018b37053b510c7d5d796613c
+ID=centos
+NAME=CentOS Stream
+PRETTY_NAME=CentOS Stream 9
+VERSION_ID=9
+ID_LIKE=rhel fedora
+VERSION_CODENAME=

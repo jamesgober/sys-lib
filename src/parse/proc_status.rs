@@ -9,6 +9,7 @@ pub(crate) fn field<'a>(data: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
 }
 
 /// A numeric field such as `Threads` or `PPid`.
+#[cfg_attr(not(feature = "guard"), allow(dead_code))] // the guard's thread count; PRC-07 from 0.4
 pub(crate) fn number(data: &[u8], key: &[u8]) -> Option<u64> {
     super::parse_u64(field(data, key)?)
 }

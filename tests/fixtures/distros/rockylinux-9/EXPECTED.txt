@@ -1,0 +1,8 @@
+IMAGE=rockylinux:9
+DIGEST=rockylinux@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6
+ID=rocky
+NAME=Rocky Linux
+PRETTY_NAME=Rocky Linux 9.3 (Blue Onyx)
+VERSION_ID=9.3
+ID_LIKE=rhel centos fedora
+VERSION_CODENAME=

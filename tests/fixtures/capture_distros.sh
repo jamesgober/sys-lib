@@ -43,7 +43,7 @@ while IFS= read -r image; do
     if [ -d "$dir/$f" ]; then rm -rf -- "${dir:?}/$f"; fi
   done
   docker rm "$id" >/dev/null 2>&1
-  find "$dir" -type d -empty -delete
+  find "$dir" -mindepth 1 -type d -empty -delete
 
   digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$image" 2>/dev/null || echo unknown)
   release=""
