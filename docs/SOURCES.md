@@ -120,7 +120,7 @@ Quirks:
 
 | Reading | Linux | macOS | Windows |
 |---|---|---|---|
-| total | line `cpu` of `/proc/stat` (only the first line is read) | `host_statistics(HOST_CPU_LOAD_INFO)` | `GetSystemTimes` (idle, kernel, user) |
+| total | line `cpu` of `/proc/stat` (only the first line is read) | `host_statistics(HOST_CPU_LOAD_INFO)` (32-bit tick counters that wrap; the sampler re-bases on a wrap, E-20) | `GetSystemTimes` (idle, kernel, user) |
 | per core | lines `cpuN` of `/proc/stat` | `host_processor_info(PROCESSOR_CPU_LOAD_INFO)` | `NtQuerySystemInformation(SystemProcessorPerformanceInformation)` |
 | states | user, nice, system, idle, iowait, irq, softirq, steal (guest and guest_nice are already in user and nice) | user, system, idle, nice | idle, kernel (includes idle), user, dpc, interrupt |
 
@@ -131,7 +131,7 @@ Busy on Windows is `kernel + user - idle`, because kernel time includes idle; a 
 | Value | Linux | macOS | Windows |
 |---|---|---|---|
 | host total | `MemTotal` in `/proc/meminfo` | `hw.memsize` | `ullTotalPhys` (`GlobalMemoryStatusEx`) |
-| host free (available) | `MemAvailable` (kernel 3.14 and later; older: `MemFree + Buffers + Cached`) | `(free_count + inactive_count) × page size` from `host_statistics64(HOST_VM_INFO64)` [verify against `vm_stat` and Activity Monitor] | `ullAvailPhys` |
+| host free (available) | `MemAvailable` (kernel 3.14 and later; older: `MemFree + Buffers + Cached`) | `(free_count + inactive_count) × kernel page size` from `host_statistics64(HOST_VM_INFO64)`; the counts are in kernel pages (`host_page_size`), which differ from the process page size under Rosetta 2 | `ullAvailPhys` |
 | unused | `MemFree` | `free_count - speculative_count` | not exposed separately |
 | cached | `Cached + SReclaimable - Shmem` | `external_page_count × page size` | `CacheBytes` (`GetPerformanceInfo`) |
 | swap | `SwapTotal`, `SwapFree` | `vm.swapusage` (`xsw_usage`) | `CommitLimit - PhysicalTotal` (`GetPerformanceInfo`), an approximation: the commit limit covers every pagefile |
@@ -161,7 +161,7 @@ LXCFS: a `fuse.lxcfs` mount over `/proc/meminfo`, `/proc/stat`, or `/proc/cpuinf
 |---|---|---|---|
 | `disk::space(path)` | `statvfs`: `f_blocks`, `f_bfree`, `f_bavail` × `f_frsize` | `statfs` | `GetDiskFreeSpaceExW` |
 | `disk::list()` | `/proc/self/mountinfo` (octal escapes `\040`, `\011`, `\012`, `\134` decoded), then `statvfs` per mount | `getfsstat(MNT_NOWAIT)` | `GetLogicalDriveStringsW`, `GetDriveTypeW`, `GetVolumeInformationW`, `GetDiskFreeSpaceExW`; mounted folders via `FindFirstVolumeW` and `GetVolumePathNamesForVolumeNameW` |
-| `DiskKind` | `/sys/block/<dev>/queue/rotational` (a partition resolved to its parent device), `removable` | IOKit device characteristics `Medium Type` [verify] | `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceSeekPenaltyProperty` |
+| `DiskKind` | `removable` in 0.4 (`/sys/block/<dev>/removable`, a partition resolved to its parent device); `queue/rotational` for SSD and HDD in 0.5 | `MNT_REMOVABLE` in 0.4; IOKit device characteristics `Medium Type` for SSD and HDD in 0.5 [verify] | `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceSeekPenaltyProperty` |
 | `disk::of(path)` | the longest matching mount point after canonicalising `path`, checked by device number | `statfs` `f_mntonname` | `GetVolumePathNameW` |
 
 Network filesystems (`nfs`, `nfs4`, `cifs`, `smb3`, `smbfs`, `fuse.sshfs`, `9p`, `afpfs`, `DRIVE_REMOTE` on Windows) are skipped by default because `statvfs` on a dead hard mount can hang. Pseudo filesystems (`proc`, `sysfs`, `cgroup`, `cgroup2`, `tmpfs`, `devtmpfs`, `squashfs`, `overlay` when not the root, `autofs`, `debugfs`, `tracefs`, `securityfs`, `pstore`, `bpf`, `mqueue`, `hugetlbfs`, `configfs`, `fusectl`, `binfmt_misc`) are skipped by default. Windows volume calls run under `SetThreadErrorMode(SEM_FAILCRITICALERRORS)`. APFS volumes sharing a container are reported once.
@@ -175,10 +175,10 @@ Network filesystems (`nfs`, `nfs4`, `cifs`, `smb3`, `smbfs`, `fuse.sshfs`, `9p`,
 | MAC kind | `addr_assign_type`: 0 permanent, 1 random; 2 (stolen) and 3 (set) unknown | locally administered bit | locally administered bit |
 | state | `operstate`, `flags` | `if_flags` | `OperStatus` |
 | kind | `type` (ARPHRD), `wireless/` or `phy80211/` present for Wi-Fi | `if_data.ifi_type` | `IfType` |
-| physical | `/sys/class/net/<if>/device` exists | built-in interfaces from IOKit [verify] | `IfType` Ethernet or Wi-Fi and not virtual (`ConnectionType`, the tunnel types) |
-| MTU, speed | `mtu`, `speed` (Mb/s; `-1` or an error means unknown) | `if_data.ifi_mtu`, `ifi_baudrate` | `Mtu`, `TransmitLinkSpeed` (maximum values mean unknown) |
+| physical | `/sys/class/net/<if>/device` exists | an Ethernet, Wi-Fi, or cellular type with a hardware address | `IfType` Ethernet or Wi-Fi and not virtual (`ConnectionType`, the tunnel types) |
+| MTU, speed | `mtu`, `speed` (Mb/s; `-1` or an error means unknown) | `ifi_mtu` and the 64-bit `ifi_baudrate` from `NET_RT_IFLIST2` (the 32-bit value from `getifaddrs` truncates links above 4 Gb/s) | `Mtu`, `TransmitLinkSpeed` (maximum values mean unknown) |
 | `net::totals()`, `counters()`, `traffic()`, `Sampler` | `/proc/net/dev` (one read; loopback left out of totals) | `sysctl` `NET_RT_IFLIST2` (`if_data64`; the 32-bit counters wrap) | `GetIfTable2` (`MIB_IF_ROW2`, 64-bit; software loopback left out) |
-| `net::connections()` | `/proc/net/snmp` `Tcp:` `CurrEstab`; `/proc/net/sockstat` and `/proc/net/sockstat6` `TCP inuse`, `tw`, `UDP inuse` | `net.inet.tcp.pcbcount`, `net.inet.udp.pcbcount` [verify]; established and time-wait `None` | `GetTcpStatisticsEx` (`dwCurrEstab`, `dwNumConns`) and `GetUdpStatisticsEx` (`dwNumAddrs`), IPv4 and IPv6 |
+| `net::connections()` | `/proc/net/snmp` `Tcp:` `CurrEstab`; `/proc/net/sockstat` and `/proc/net/sockstat6` `TCP inuse`, `tw`, `UDP inuse` | `net.inet.tcp.pcbcount`, `net.inet.udp.pcbcount` (the active PCB counts, IPv4 and IPv6 together); established and time-wait `None` | `GetTcpStatisticsEx` (`dwCurrEstab`, `dwNumConns`) and `GetUdpStatisticsEx` (`dwNumAddrs`), IPv4 and IPv6 |
 | default route | `/proc/net/route` (destination 0) and `/proc/net/ipv6_route` | routing socket dump via `sysctl(NET_RT_DUMP)` [verify] | `GetBestInterfaceEx` towards 0.0.0.0 |
 
 Interface names from the OS are validated before they are used in a `/sys` path: no `/`, no `..`, at most 15 bytes on Linux (`IFNAMSIZ` 16 with the NUL).
@@ -188,7 +188,7 @@ Interface names from the OS are validated before they are used in a `/sys` path:
 | Reading | Linux | macOS | Windows |
 |---|---|---|---|
 | `host::name()` | `/proc/sys/kernel/hostname` | `gethostname` | `GetComputerNameExW(ComputerNameDnsHostname)` |
-| `host::uptime()` | `clock_gettime(CLOCK_BOOTTIME)` (includes suspend); fallback `/proc/uptime` | now minus `kern.boottime` | `GetTickCount64` |
+| `host::uptime()` | `clock_gettime(CLOCK_BOOTTIME)` (includes suspend); fallback `/proc/uptime` | `mach_continuous_time` scaled by `mach_timebase_info` (counts through sleep); fallback now minus `kern.boottime` | `GetTickCount64` |
 | `host::boot_time()` | `btime` in `/proc/stat` | `kern.boottime` | now minus `GetTickCount64` |
 | `host::timezone()` | `TZ` when it is a valid name; else the `/etc/localtime` link target after `zoneinfo/`; else `/etc/timezone`; offset and abbreviation from `localtime_r` (`tm_gmtoff`, `tm_zone`) | same; link target under `/var/db/timezone/zoneinfo/` | `GetDynamicTimeZoneInformation` (`TimeZoneKeyName`, `Bias`, daylight bias); IANA name from an embedded copy of CLDR `windowsZones.xml` |
 | `host::locale()` | `LC_ALL`, then `LC_MESSAGES`, then `LANG`, normalised (`en_US.UTF-8` to `en-US`) | `CFLocaleCopyCurrent` identifier (GUI applications have no `LANG`) | `GetUserDefaultLocaleName` |
@@ -205,7 +205,7 @@ Interface names from the OS are validated before they are used in a `/sys` path:
 | `memory_detail()` | `VmRSS`, `VmSize`, `RssAnon`, `RssFile + RssShmem`, `VmSwap` | `task_info` + `proc_pid_rusage` (`ri_phys_footprint` as private) | `PROCESS_MEMORY_COUNTERS_EX` (`PrivateUsage`) |
 | `cpu_time()` | `getrusage(RUSAGE_SELF)` | `getrusage` | `GetProcessTimes` |
 | `threads()` | `Threads` in `/proc/self/status` | `proc_pidinfo(PROC_PIDTASKINFO).pti_threadnum` | `CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD)` filtered to this pid (system-wide snapshot) |
-| `open_files()` | entries of `/proc/self/fd` | `proc_pidinfo(PROC_PIDLISTFDS)` size ÷ entry size | `GetProcessHandleCount` |
+| `open_files()` | entries of `/proc/self/fd`, counted with `readdir` | `proc_pidinfo(PROC_PIDLISTFDS)` with a buffer, bytes returned ÷ entry size (a null buffer gives the table size, not the count) | `GetProcessHandleCount` |
 | `limits()` | `getrlimit` for `RLIMIT_NOFILE`, `NPROC`, `AS`, `CORE`, `STACK` | same | job-object limits when present; otherwise `None` |
 | `started_at()` | field 22 of `/proc/self/stat` (ticks since boot) + boot time | `proc_pidinfo(PROC_PIDTBSDINFO).pbi_start_tvsec` | `GetProcessTimes` creation time |
 | `user()` | `geteuid` + `getpwuid_r` (NSS) | same | `GetUserNameW`; `is_admin` from the token |
@@ -271,7 +271,7 @@ PSI files need kernel 4.20 or later; without them the readings are `Ok(None)`. c
 
 | Reading | Linux | macOS | Windows |
 |---|---|---|---|
-| `host::processes()` | numeric entries of `/proc` (counted, never opened); `/proc/loadavg` field 4; `procs_running` in `/proc/stat` | `proc_listallpids(NULL, 0)`; `kern.num_threads` | `GetPerformanceInfo` `ProcessCount`, `ThreadCount` |
+| `host::processes()` | numeric entries of `/proc` (counted with `readdir`, never opened); `/proc/loadavg` field 4; `procs_running` in `/proc/stat` | `proc_listallpids` with a buffer (a null buffer gives an estimate); threads from `processor_set_statistics(PROCESSOR_SET_LOAD_INFO)` (`kern.num_threads` is the limit, not the count) | `GetPerformanceInfo` `ProcessCount`, `ThreadCount` |
 | `host::open_files()` | `/proc/sys/fs/file-nr` | `kern.num_files`, `kern.maxfiles` | `GetPerformanceInfo` `HandleCount` |
 | `host::firmware()` | `/sys/class/dmi/id/bios_{vendor,version,date}` (0444); `/sys/firmware/efi` for UEFI | IORegistry firmware version [verify property names] | SMBIOS type 0; `GetFirmwareType` |
 | `host::board()` | `/sys/class/dmi/id/board_{vendor,name,version}` (0444) | `IOPlatformExpertDevice` `board-id` (Intel) | SMBIOS type 2 |
