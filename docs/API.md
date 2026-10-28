@@ -94,14 +94,14 @@ Costs are estimates (marked [est.]) until they are measured in `0.7.0`; measured
 
 ```toml
 [dependencies]
-sys = { package = "sys-lib", version = "0.3" }
+sys = { package = "sys-lib", version = "0.4" }
 # Without instance info and the process guard (no dependencies at all):
-# sys = { package = "sys-lib", version = "0.3", default-features = false }
+# sys = { package = "sys-lib", version = "0.4", default-features = false }
 # With device identity (from 0.5):
 # sys = { package = "sys-lib", version = "0.5", features = ["device-id"] }
 ```
 
-The package is `sys-lib` on crates.io (`sys` and `system` were taken). Cargo's rename makes it `sys` in your code, so every file writes `sys::os::name()` with no import line. Without the rename (`sys-lib = "0.3"`), add `use sys_lib as sys;` at the top of a file and the code is the same.
+The package is `sys-lib` on crates.io (`sys` and `system` were taken). Cargo's rename makes it `sys` in your code, so every file writes `sys::os::name()` with no import line. Without the rename (`sys-lib = "0.4"`), add `use sys_lib as sys;` at the top of a file and the code is the same.
 
 | Feature | Default | Enables | Brings |
 |---|---|---|---|

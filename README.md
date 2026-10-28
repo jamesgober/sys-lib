@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>unsafe</code> is denied at the crate root and allowed only in one OS module per platform.
     </p>
     <blockquote>
-        <strong>Status: <code>0.3.0</code>, the boot kit.</strong> OS identity and the distribution, CPU counts and names (with <code>cpu::available()</code> honouring affinity, cpusets, and container CPU quotas), the host name, the user, build info, instance info, and the process guard. Memory, disks, network, and the rest arrive through <code>0.6</code>; the complete approved API, each item with its version, is in <a href="./docs/API.md"><code>docs/API.md</code></a>. Design: <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a>; schedule: <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
+        <strong>Status: <code>0.4.0</code>, live readings.</strong> The boot kit (OS identity and the distribution, CPU counts and names, the host, the user, build info, instance info, the process guard), and now memory and swap with container limits, CPU usage, load, and pressure, disks and disk I/O, network interfaces, download and upload, connection counts, and this process's memory, CPU time, threads, files, limits, and I/O. Detection and identity, environment reports, and the rest arrive through <code>0.6</code>; the complete approved API, each item with its version, is in <a href="./docs/API.md"><code>docs/API.md</code></a>. Design: <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a>; schedule: <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -46,7 +46,7 @@ Cargo's rename makes the crate `sys` in your code:
 
 ```toml
 [dependencies]
-sys = { package = "sys-lib", version = "0.3" }
+sys = { package = "sys-lib", version = "0.4" }
 ```
 
 Tier 1 is one plain call per fact. Static facts are read once and cached, so
@@ -60,6 +60,29 @@ println!("{} cores, {} threads", sys::cpu::physical(), sys::cpu::logical());
 println!("{} usable here", sys::cpu::available());   // the container's quota, not the host's count
 println!("{}", sys::host::name()?);       // "build-07"
 if sys::cpu::is_64bit() && sys::os::is_like("debian") { /* ... */ }
+
+// Live readings: read now, container-aware.
+println!("{} of {} used", sys::mem::used()?, sys::mem::total()?);   // "41.2 GiB of 125.6 GiB" (the cgroup's limit inside a container)
+println!("{}", sys::cpu::used()?);        // "12.4%" (blocks for 100 ms)
+let t = sys::net::traffic()?;             // blocks 1 s
+println!("down {} up {}", t.download, t.upload);   // "down 12.5 MiB/s up 1.2 MiB/s"
+println!("{} free", sys::disk::space("/var/lib/hive")?.available);
+```
+
+A monitor keeps samplers instead of blocking: each is owned by the caller,
+never sleeps, and allocates nothing per sample:
+
+```rust
+let mut cpu = sys::cpu::Sampler::new()?;
+let mut net = sys::net::Sampler::new()?;
+loop {
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    let (u, t) = (cpu.sample()?, net.sample()?);
+    println!("cpu {} down {} up {}", u.used(), t.download, t.upload);
+    if let Some(p) = sys::mem::pressure()? {
+        if p.level >= sys::PressureLevel::Warning { /* trim caches */ }
+    }
+}
 ```
 
 The boot kit, for a long-running service's first milliseconds:
@@ -96,9 +119,8 @@ and a fact the OS does not expose is `Error::Unsupported`, never a guess.
 ### Planned through 0.6
 
 ```rust
-println!("{} of {}", sys::mem::used()?, sys::mem::total()?);    // 0.4: "41.2 GiB of 125.6 GiB"
-println!("{}", sys::cpu::used()?);                              // 0.4: "12.4%" (blocks for 100 ms)
-let t = sys::net::traffic()?;                                   // 0.4: download and upload
+let v = sys::virt::detect();                                    // 0.5: VM, container, WSL, cloud
+let id = sys::device::id("site")?;                              // 0.5: an application-scoped device id
 let r = sys::readiness::report(sys::readiness::Profile::Database); // 0.6: is this host fit to serve?
 ```
 

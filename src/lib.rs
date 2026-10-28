@@ -10,7 +10,7 @@
 //!
 //! ## Tier 1
 //!
-//! Add it with Cargo's rename, `sys = { package = "sys-lib", version = "0.3" }`,
+//! Add it with Cargo's rename, `sys = { package = "sys-lib", version = "0.4" }`,
 //! and every file writes `sys::`; without the rename, `use sys_lib as sys;`
 //! does the same (the examples use that form so they compile either way).
 //! One plain call per fact; static facts are read once and cached:
@@ -24,6 +24,9 @@
 //! println!("{} cores, {} threads", sys::cpu::physical(), sys::cpu::logical());
 //! let workers = sys::cpu::available();     // what this process may use: affinity, cpuset, quota
 //! # assert!(workers >= 1);
+//! println!("{} of {} used", sys::mem::used()?, sys::mem::total()?);  // the container's limit inside one
+//! println!("{} free here", sys::disk::space(".")?.available);
+//! # Ok::<(), sys_lib::Error>(())
 //! ```
 //!
 //! The boot kit:
@@ -45,11 +48,12 @@
 //!
 //! ## Status
 //!
-//! `0.3.0`, the boot kit: [`os`], [`cpu`], [`host`], [`process`], [`build`],
-//! and instance info. Memory, disks, network, virtualization,
-//! power, and device identity arrive through `0.6`; the complete approved API,
-//! each item with the version it arrives in, is `docs/API.md` in the
-//! [repository](https://github.com/jamesgober/sys-lib).
+//! `0.4.0`, live readings: the boot kit ([`os`], [`cpu`], [`host`],
+//! [`process`], [`build`], and instance info), [`mem`], [`disk`], [`net`], and
+//! CPU usage, load, pressure, and features. Virtualization, power, device
+//! identity, and the environment reports arrive through `0.6`; the complete
+//! approved API, each item with the version it arrives in, is `docs/API.md` in
+//! the [repository](https://github.com/jamesgober/sys-lib).
 
 #![doc(html_root_url = "https://docs.rs/sys-lib")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
