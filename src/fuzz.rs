@@ -7,7 +7,7 @@
 
 use crate::parse::{
     cgroup, cpu_list::CpuSet, cpu_name, cpuinfo, mountinfo, os_release, pid_file, proc_status,
-    release, version,
+    procfs, release, version,
 };
 
 pub fn os_release(data: &[u8]) {
@@ -136,4 +136,42 @@ pub fn bytes_display(data: &[u8]) {
     assert!(out.len() < 128, "{out}");
     let p = crate::Percent::from_ratio(value, u64::from_le_bytes(raw[1..9].try_into().unwrap()));
     write!(out, " {p} {p:.9}").unwrap();
+}
+
+pub fn procfs(data: &[u8]) {
+    let m = procfs::meminfo(data);
+    if let (Some(a), Some(t)) = (m.available(), m.total) {
+        let _ = a.min(t);
+    }
+    let _ = m.cache();
+    for line in data.split(|&b| b == b'\n').take(64) {
+        if let Some((_, ticks)) = procfs::stat_cpu_line(line) {
+            assert_eq!(ticks.len(), 8);
+        }
+        if let Some(l) = procfs::diskstats_line(line) {
+            assert!(l.name.len() <= line.len());
+        }
+        if let Some(l) = procfs::net_dev_line(line) {
+            assert!(!l.name.is_empty());
+        }
+        let _ = mountinfo::parse_line(line);
+    }
+    if let Some((one, five, fifteen, _, _)) = procfs::loadavg(data) {
+        assert!(one >= 0.0 && five >= 0.0 && fifteen >= 0.0);
+    }
+    let (some, full) = procfs::psi(data);
+    for line in [some, full].into_iter().flatten() {
+        assert!(line.avg10 >= 0.0 && line.avg60 >= 0.0 && line.avg300 >= 0.0);
+    }
+    let _ = procfs::space_value(data, b"btime");
+    let _ = procfs::sockstat(data, b"TCP", b"inuse");
+    let _ = procfs::snmp(data, b"Tcp", b"CurrEstab");
+    let _ = procfs::statm(data);
+    let _ = procfs::stat_start_ticks(data);
+    let _ = procfs::file_nr(data);
+    let _ = procfs::uptime(data);
+    let _ = procfs::cgroup_bytes(data);
+    if let Some(word) = procfs::bracketed(data) {
+        assert!(word.len() < data.len());
+    }
 }

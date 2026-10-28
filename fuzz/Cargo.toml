@@ -103,3 +103,10 @@ path = "fuzz_targets/bytes_display.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "procfs"
+path = "fuzz_targets/procfs.rs"
+test = false
+doc = false
+bench = false

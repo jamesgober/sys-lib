@@ -369,7 +369,8 @@ pub(crate) fn file_nr(data: &[u8]) -> Option<(u64, u64)> {
 pub(crate) fn uptime(data: &[u8]) -> Option<Duration> {
     let first = trim(data).split(|&b| b == b' ').next()?;
     let secs = decimal(first)?;
-    Some(Duration::from_secs_f64(f64::from(secs)))
+    // A value past what a Duration holds is junk, not a panic (T6).
+    Duration::try_from_secs_f64(f64::from(secs)).ok()
 }
 
 /// A cgroup memory value: a number of bytes, or `max` (no limit: `None`).
@@ -524,6 +525,11 @@ mod tests {
         assert_eq!(
             uptime(b"12345.67 400000.00\n"),
             Some(Duration::from_secs_f64(f64::from(12345.67f32)))
+        );
+        assert_eq!(
+            uptime(b"18446744073709551615 0"),
+            None,
+            "past Duration::MAX"
         );
         assert_eq!(cgroup_bytes(b"max\n"), Some(None));
         assert_eq!(cgroup_bytes(b"268435456\n"), Some(Some(268_435_456)));

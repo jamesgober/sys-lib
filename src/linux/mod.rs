@@ -16,6 +16,8 @@ pub(crate) mod cgroup;
 pub(crate) mod cpu;
 pub(crate) mod disk;
 pub(crate) mod host;
+#[cfg(test)]
+mod hostile;
 pub(crate) mod mem;
 pub(crate) mod net;
 pub(crate) mod os;
