@@ -10,13 +10,19 @@ fn expected(name: &str) -> Option<u64> {
 
 #[test]
 fn test_container_limits_are_the_containers() {
-    let (Some(memory), Some(cpus)) = (expected("SYS_LIB_EXPECT_MEMORY"), expected("SYS_LIB_EXPECT_CPUS")) else {
+    let (Some(memory), Some(cpus)) = (
+        expected("SYS_LIB_EXPECT_MEMORY"),
+        expected("SYS_LIB_EXPECT_CPUS"),
+    ) else {
         return;
     };
     use sys_lib::{cpu, mem};
     let m = mem::snapshot().unwrap();
     assert_eq!(m.total.raw(), memory, "{m:?}");
-    assert!(m.host_total > m.total, "the host has more than the container");
+    assert!(
+        m.host_total > m.total,
+        "the host has more than the container"
+    );
     let limit = m.limit.expect("a memory limit");
     assert_eq!(limit.source, mem::LimitSource::Cgroup2);
     assert_eq!(m.source, mem::MemorySource::Cgroup2);
@@ -30,5 +36,11 @@ fn test_container_limits_are_the_containers() {
     }
     let e = mem::events().unwrap().expect("cgroup memory events");
     assert_eq!(e.scope, mem::EventScope::Cgroup);
-    println!("container: {} of {} memory, {} CPUs, quota {:.1}", m.used, m.total, cpu::available(), q.cpus);
+    println!(
+        "container: {} of {} memory, {} CPUs, quota {:.1}",
+        m.used,
+        m.total,
+        cpu::available(),
+        q.cpus
+    );
 }

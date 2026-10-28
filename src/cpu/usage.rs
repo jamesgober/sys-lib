@@ -228,7 +228,13 @@ impl Sampler {
     /// As [`times`].
     pub fn new() -> Result<Sampler> {
         let mut cores = vec![Times::default(); super::logical()];
-        let (total, n) = read_cores(&mut cores)?;
+        let (total, n) = match read_cores(&mut cores) {
+            Ok(r) => r,
+            // No per-core counters here (Windows past 64 processors): the
+            // total still works; the per-core calls say Unsupported.
+            Err(Error::Unsupported { .. }) => (times()?, 0),
+            Err(e) => return Err(e),
+        };
         cores.truncate(n);
         let now = Instant::now();
         Ok(Sampler {
