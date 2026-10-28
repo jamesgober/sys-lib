@@ -318,7 +318,7 @@ impl Totals {
     /// The traffic between `earlier` and `self`; a counter that went backwards
     /// (an interface re-created, a driver reset) counts as no traffic.
     fn since(&self, earlier: &Totals, interval: Duration) -> Traffic {
-        let d = |new: u64, old: u64| new.checked_sub(old).unwrap_or(0);
+        let d = |new: u64, old: u64| new.saturating_sub(old);
         let secs = interval.as_secs_f64();
         let per_sec = |n: u64| if secs > 0.0 { n as f64 / secs } else { 0.0 };
         Traffic {

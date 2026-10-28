@@ -489,7 +489,7 @@ impl Sampler {
                 minimum: Duration::from_millis(1),
             });
         }
-        let delta = |new: u64, old: u64| new.checked_sub(old).unwrap_or(0);
+        let delta = |new: u64, old: u64| new.saturating_sub(old);
         let activity = Activity {
             swap_in: Rate::from_delta(delta(now.swap_in, self.previous.swap_in), interval),
             swap_out: Rate::from_delta(delta(now.swap_out, self.previous.swap_out), interval),

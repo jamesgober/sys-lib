@@ -1,17 +1,17 @@
 Name:	head
 Umask:	0022
 State:	R (running)
-Tgid:	56
+Tgid:	77
 Ngid:	0
-Pid:	56
+Pid:	77
 PPid:	1
 TracerPid:	0
 Uid:	0	0	0	0
 Gid:	0	0	0	0
 FDSize:	256
 Groups:	0 
-NStgid:	56
-NSpid:	56
+NStgid:	77
+NSpid:	77
 NSpgid:	1
 NSsid:	1
 Kthread:	0
@@ -19,10 +19,10 @@ VmPeak:	    2720 kB
 VmSize:	    2720 kB
 VmLck:	       0 kB
 VmPin:	       0 kB
-VmHWM:	    1644 kB
-VmRSS:	    1644 kB
+VmHWM:	    1560 kB
+VmRSS:	    1560 kB
 RssAnon:	     100 kB
-RssFile:	    1544 kB
+RssFile:	    1460 kB
 RssShmem:	       0 kB
 VmData:	     224 kB
 VmStk:	     132 kB
@@ -35,7 +35,7 @@ CoreDumping:	0
 THP_enabled:	1
 untag_mask:	0xffffffffffffffff
 Threads:	1
-SigQ:	2/63795
+SigQ:	2/58121
 SigPnd:	0000000000000000
 ShdPnd:	0000000000000000
 SigBlk:	0000000000000000
@@ -56,6 +56,6 @@ Cpus_allowed_list:	0-1
 Mems_allowed:	00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000001
 Mems_allowed_list:	0
 voluntary_ctxt_switches:	0
-nonvoluntary_ctxt_switches:	0
+nonvoluntary_ctxt_switches:	1
 x86_Thread_features:	
 x86_Thread_features_locked:	

@@ -1,7 +1,7 @@
 fixture: docker-cgroup1-limited
-captured: 2026-10-23T04:20:04Z
-capture.sh: version 2
+captured: 2026-10-28T17:12:35Z
+capture.sh: version 3
 kernel: 5.4.0-216-generic
 machine: x86_64
 as root: yes
-files: 207
+files: 229

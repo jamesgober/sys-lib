@@ -10,8 +10,12 @@ pub(crate) const MAX_LINES: usize = 1 << 20;
 /// One mount.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Mount<'a> {
+    /// `major:minor` of the filesystem's device.
+    pub(crate) device: &'a [u8],
     pub(crate) root: Cow<'a, [u8]>,
     pub(crate) mount_point: Cow<'a, [u8]>,
+    /// The per-mount options (`rw`, `ro`, `nosuid`, ...).
+    pub(crate) options: &'a [u8],
     pub(crate) fstype: &'a [u8],
     pub(crate) source: Cow<'a, [u8]>,
     pub(crate) super_options: &'a [u8],
@@ -26,10 +30,10 @@ fn line(line: &[u8]) -> Option<Mount<'_>> {
     let mut fields = line.split(|&b| b == b' ');
     let _id = fields.next()?;
     let _parent = fields.next()?;
-    let _dev = fields.next()?;
+    let device = fields.next()?;
     let root = fields.next()?;
     let mount_point = fields.next()?;
-    let _options = fields.next()?;
+    let options = fields.next()?;
     // Optional fields up to the lone "-" separator.
     loop {
         if fields.next()? == b"-" {
@@ -43,12 +47,19 @@ fn line(line: &[u8]) -> Option<Mount<'_>> {
         return None;
     }
     Some(Mount {
+        device,
         root: unescape(root),
         mount_point: unescape(mount_point),
+        options,
         fstype,
         source: unescape(source),
         super_options,
     })
+}
+
+/// One mount from a single line, for a caller that streams the file.
+pub(crate) fn parse_line(text: &[u8]) -> Option<Mount<'_>> {
+    line(text)
 }
 
 /// Decodes `\NNN` octal escapes; anything else is kept as written.

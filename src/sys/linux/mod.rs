@@ -3,9 +3,9 @@
 //! value.
 
 mod ffi;
+mod live;
 
-// Removed before release: every item must be this platform's own.
-pub(crate) use super::pending::*;
+pub(crate) use live::*;
 
 use std::{
     ffi::{CStr, c_char},
@@ -90,7 +90,7 @@ pub(crate) fn cpu() -> CpuFacts {
 }
 
 pub(crate) fn cpu_available(logical: usize) -> usize {
-    tree::cpu::available(&ROOT, logical)
+    live::available(logical)
 }
 
 /// A 64-bit build runs only on a 64-bit processor; 32-bit Linux has no

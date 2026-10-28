@@ -31,6 +31,7 @@ pub struct Space {
 
 impl Space {
     /// A reading with its invariants applied: `available <= free <= total`.
+    #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))] // the platforms that sum or build these
     pub(crate) fn new(total: u64, free: u64, available: u64) -> Space {
         let free = free.min(total);
         Space {
@@ -266,6 +267,7 @@ pub(crate) struct DiskRaw {
 }
 
 impl DiskRaw {
+    #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))] // the platforms that sum or build these
     pub(crate) fn add(&mut self, other: &DiskRaw) {
         self.read = self.read.saturating_add(other.read);
         self.written = self.written.saturating_add(other.written);
@@ -289,7 +291,7 @@ impl DiskRaw {
     /// (a disk removed and re-attached) counts as no activity: the caller
     /// re-bases.
     fn rates_since(&self, earlier: &DiskRaw, interval: Duration) -> DiskIo {
-        let d = |new: u64, old: u64| new.checked_sub(old).unwrap_or(0);
+        let d = |new: u64, old: u64| new.saturating_sub(old);
         let secs = interval.as_secs_f64();
         let ops = d(self.reads, earlier.reads).saturating_add(d(self.writes, earlier.writes));
         let per_sec = |n: u64| if secs > 0.0 { n as f64 / secs } else { 0.0 };
@@ -317,6 +319,7 @@ impl DiskRaw {
     }
 }
 
+#[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
 fn add_opt(a: Option<Duration>, b: Option<Duration>) -> Option<Duration> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.saturating_add(b)),

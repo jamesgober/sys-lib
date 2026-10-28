@@ -51,6 +51,7 @@ impl Pressure {
     pub const CRITICAL_FULL_AVG10: f32 = 10.0;
 
     /// A pressure reading from its stall shares, with the level they amount to.
+    #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))] // Linux PSI
     pub(crate) fn from_stalls(
         some: Stall,
         full: Option<Stall>,
@@ -104,6 +105,7 @@ impl Stall {
         avg300: Percent::ZERO,
     };
 
+    #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))] // Linux PSI
     pub(crate) fn new(avg10: Percent, avg60: Percent, avg300: Percent) -> Stall {
         Stall {
             avg10,
