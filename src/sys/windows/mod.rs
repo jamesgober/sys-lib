@@ -1,26 +1,30 @@
 //! Windows: kernel32, advapi32, iphlpapi, powrprof, and ntdll, called directly.
 
+mod cpu;
+mod disk;
 mod ffi;
+mod host;
+mod mem;
+mod net;
+mod process;
 
-// Removed before release: every item must be this platform's own.
-pub(crate) use super::pending::*;
-
+pub(crate) use cpu::*;
+pub(crate) use disk::*;
 #[cfg(feature = "guard")]
 pub(crate) use ffi::FILE_ATTRIBUTE_REPARSE_POINT;
+pub(crate) use host::*;
+pub(crate) use mem::*;
+pub(crate) use net::*;
+pub(crate) use process::*;
 use std::{
     ffi::c_void,
     mem::{MaybeUninit, size_of},
+    time::{Duration, SystemTime},
 };
 #[cfg(feature = "guard")]
 use std::{fs::OpenOptions, path::Path};
 
-use crate::{
-    Error, Result,
-    cpu::Vendor,
-    os::Source,
-    process::User,
-    sys::{CpuFacts, OsFacts},
-};
+use crate::{Error, Result, os::Source, process::User, sys::OsFacts};
 #[cfg(feature = "guard")]
 use crate::{process::Limit, sys::FsKind};
 
@@ -37,6 +41,47 @@ fn from_wide(buf: &[u16]) -> String {
 
 fn last_error() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+}
+
+/// `Os` for a failed call, with the thread's last error.
+fn os_error(what: &'static str, call: &'static str) -> Error {
+    Error::Os {
+        what,
+        call,
+        code: last_error(),
+    }
+}
+
+/// `Unsupported` on this platform.
+fn unsupported(what: &'static str) -> Error {
+    Error::Unsupported {
+        what,
+        platform: crate::os::kind().name(),
+    }
+}
+
+/// A count of 100 ns intervals (`FILETIME`, `LARGE_INTEGER` times) as a
+/// `Duration`, without overflow.
+fn hundred_ns(n: u64) -> Duration {
+    Duration::new(n / 10_000_000, (n % 10_000_000) as u32 * 100)
+}
+
+/// A signed OS counter that is never negative in practice; a negative one
+/// reads as zero.
+fn non_negative(n: i64) -> u64 {
+    u64::try_from(n).unwrap_or(0)
+}
+
+/// 100 ns intervals from 1601-01-01 to 1970-01-01.
+const UNIX_EPOCH_FILETIME: u64 = 116_444_736_000_000_000;
+
+/// A `FILETIME` value (100 ns since 1601) as a `SystemTime`.
+fn filetime_to_system(ft: u64) -> Option<SystemTime> {
+    if ft >= UNIX_EPOCH_FILETIME {
+        SystemTime::UNIX_EPOCH.checked_add(hundred_ns(ft - UNIX_EPOCH_FILETIME))
+    } else {
+        SystemTime::UNIX_EPOCH.checked_sub(hundred_ns(UNIX_EPOCH_FILETIME - ft))
+    }
 }
 
 /// An open registry key, closed on drop.
@@ -123,6 +168,78 @@ impl Drop for Owned {
     }
 }
 
+/// Critical-error dialogs ("insert a disk in drive E:") are off for this
+/// thread while a value lives, and the previous mode comes back on drop
+/// (threat T8). Every volume call runs under one.
+struct NoDialogs(Option<u32>);
+
+impl NoDialogs {
+    fn new() -> NoDialogs {
+        let mut previous = 0u32;
+        // SAFETY: `previous` is a writable local.
+        let ok = unsafe { ffi::SetThreadErrorMode(ffi::SEM_FAILCRITICALERRORS, &raw mut previous) };
+        NoDialogs((ok != 0).then_some(previous))
+    }
+}
+
+impl Drop for NoDialogs {
+    fn drop(&mut self) {
+        if let Some(previous) = self.0 {
+            // SAFETY: restores the mode saved by `new`; the old-mode output is
+            // optional.
+            unsafe { ffi::SetThreadErrorMode(previous, std::ptr::null_mut()) };
+        }
+    }
+}
+
+/// `GlobalMemoryStatusEx`.
+fn memory_status() -> Result<ffi::MemoryStatusEx> {
+    let mut status = ffi::MemoryStatusEx {
+        length: size_of::<ffi::MemoryStatusEx>() as u32,
+        ..ffi::MemoryStatusEx::default()
+    };
+    // SAFETY: `status` is a MEMORYSTATUSEX with its length set.
+    let ok = unsafe { ffi::GlobalMemoryStatusEx(&raw mut status) };
+    if ok == 0 {
+        return Err(os_error("memory", "GlobalMemoryStatusEx"));
+    }
+    Ok(status)
+}
+
+/// `GetPerformanceInfo`: system-wide commit, cache, and object counts. It
+/// counts handles across every process, so only the readings that need those
+/// values call it.
+fn performance_info(what: &'static str) -> Result<ffi::PerformanceInformation> {
+    let mut info = ffi::PerformanceInformation::default();
+    let size = size_of::<ffi::PerformanceInformation>() as u32;
+    info.cb = size;
+    // SAFETY: `info` is a PERFORMANCE_INFORMATION of the size passed.
+    let ok = unsafe { ffi::K32GetPerformanceInfo(&raw mut info, size) };
+    if ok == 0 {
+        return Err(os_error(what, "GetPerformanceInfo"));
+    }
+    Ok(info)
+}
+
+/// The limits of the job object this process is in, or `None` outside a job.
+/// A nested job reports its own limits: the query answers for the immediate
+/// job, not the effective minimum over the enclosing ones.
+fn job_limits() -> Option<ffi::JobObjectExtendedLimitInformation> {
+    let mut info = ffi::JobObjectExtendedLimitInformation::default();
+    // SAFETY: a null job means the job of this process; `info` is the buffer
+    // for the extended-limit class, of the size passed.
+    let ok = unsafe {
+        ffi::QueryInformationJobObject(
+            std::ptr::null_mut(),
+            ffi::JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            (&raw mut info).cast::<c_void>(),
+            size_of::<ffi::JobObjectExtendedLimitInformation>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(info)
+}
+
 pub(crate) fn os() -> OsFacts {
     let info = MaybeUninit::<ffi::OsVersionInfoExW>::zeroed();
     // SAFETY: `info` is zeroed, so every field is valid before the call.
@@ -192,183 +309,6 @@ fn windows_name(
     }
 }
 
-pub(crate) fn cpu() -> CpuFacts {
-    let logical = usize::try_from(ffi::GetActiveProcessorCount(ffi::ALL_PROCESSOR_GROUPS))
-        .ok()
-        .filter(|&n| n > 0)
-        .or_else(|| {
-            std::thread::available_parallelism()
-                .ok()
-                .map(std::num::NonZero::get)
-        })
-        .unwrap_or(1);
-    let key = Key::local_machine(r"HARDWARE\DESCRIPTION\System\CentralProcessor\0");
-    let raw_name = key.as_ref().and_then(|k| k.string("ProcessorNameString"));
-    let vendor_id = key
-        .as_ref()
-        .and_then(|k| k.string("VendorIdentifier"))
-        .unwrap_or_default();
-    let vendor = if vendor_id == "GenuineIntel" {
-        Vendor::Intel
-    } else if vendor_id == "AuthenticAMD" {
-        Vendor::Amd
-    } else if vendor_id.contains("Qualcomm")
-        || raw_name
-            .as_deref()
-            .is_some_and(|n| n.contains("Snapdragon"))
-    {
-        Vendor::Qualcomm
-    } else if vendor_id.starts_with("ARM") {
-        Vendor::Arm
-    } else {
-        Vendor::Unknown
-    };
-    CpuFacts {
-        logical,
-        physical: physical_cores(),
-        packages: None,
-        raw_name,
-        name: None,
-        vendor,
-    }
-}
-
-/// Counts the processor-core records of `GetLogicalProcessorInformationEx`
-/// across every processor group.
-fn physical_cores() -> Option<usize> {
-    let mut len = 0u32;
-    // SAFETY: a null buffer with length 0 asks for the size needed.
-    unsafe {
-        ffi::GetLogicalProcessorInformationEx(
-            ffi::lpi::RELATION_PROCESSOR_CORE,
-            std::ptr::null_mut(),
-            &raw mut len,
-        )
-    };
-    if len == 0 || len > 16 << 20 {
-        return None;
-    }
-    // u64 elements keep the records 8-byte aligned, as the structs require.
-    let mut buf = vec![0u64; (len as usize).div_ceil(8)];
-    // SAFETY: `buf` holds at least `len` writable bytes.
-    let ok = unsafe {
-        ffi::GetLogicalProcessorInformationEx(
-            ffi::lpi::RELATION_PROCESSOR_CORE,
-            buf.as_mut_ptr().cast::<u8>(),
-            &raw mut len,
-        )
-    };
-    if ok == 0 {
-        return None;
-    }
-    // SAFETY: `buf` is `buf.len() * 8` initialised bytes; a u8 view of it is valid.
-    let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len() * 8) };
-    let bytes = &bytes[..(len as usize).min(bytes.len())];
-    let mut cores = 0usize;
-    let mut at = 0usize;
-    while at + 8 <= bytes.len() {
-        let field = |o: usize| {
-            u32::from_ne_bytes([
-                bytes[at + o],
-                bytes[at + o + 1],
-                bytes[at + o + 2],
-                bytes[at + o + 3],
-            ])
-        };
-        let (relationship, size) = (
-            field(ffi::lpi::RELATIONSHIP) as i32,
-            field(ffi::lpi::SIZE) as usize,
-        );
-        if size == 0 || at + size > bytes.len() {
-            break;
-        }
-        if relationship == ffi::lpi::RELATION_PROCESSOR_CORE {
-            cores += 1;
-        }
-        at += size;
-    }
-    (cores > 0).then_some(cores)
-}
-
-pub(crate) fn cpu_available(logical: usize) -> usize {
-    let process = ffi::GetCurrentProcess();
-    let mut groups = [0u16; 64];
-    let mut count = groups.len() as u16;
-    // SAFETY: `groups` has `count` writable entries.
-    let ok = unsafe { ffi::GetProcessGroupAffinity(process, &raw mut count, groups.as_mut_ptr()) };
-    let mut cpus = if ok != 0 && count == 1 {
-        let (mut mask, mut system) = (0usize, 0usize);
-        // SAFETY: both masks are writable locals.
-        let ok = unsafe { ffi::GetProcessAffinityMask(process, &raw mut mask, &raw mut system) };
-        if ok != 0 {
-            mask.count_ones() as usize
-        } else {
-            logical
-        }
-    } else if ok != 0 {
-        // A process spanning several groups (Windows 11 and Server 2022 by
-        // default, E-13) may use every processor of those groups.
-        groups[..usize::from(count).min(groups.len())]
-            .iter()
-            .map(|&g| ffi::GetActiveProcessorCount(g) as usize)
-            .sum()
-    } else {
-        logical
-    };
-    if let Some(cap) = job_cpu_cap(logical) {
-        cpus = cpus.min(cap);
-    }
-    cpus.clamp(1, logical.max(1))
-}
-
-/// The job object's hard CPU-rate cap, in CPUs (rounded up).
-fn job_cpu_cap(logical: usize) -> Option<usize> {
-    let mut info = ffi::JobObjectCpuRateControlInformation {
-        control_flags: 0,
-        value: 0,
-    };
-    // SAFETY: a null job means the job of this process; `info` is the buffer
-    // for the CPU-rate class, of the size passed.
-    let ok = unsafe {
-        ffi::QueryInformationJobObject(
-            std::ptr::null_mut(),
-            ffi::JOB_OBJECT_CPU_RATE_CONTROL_INFORMATION,
-            (&raw mut info).cast::<c_void>(),
-            size_of::<ffi::JobObjectCpuRateControlInformation>() as u32,
-            std::ptr::null_mut(),
-        )
-    };
-    if ok == 0 || info.control_flags & ffi::JOB_OBJECT_CPU_RATE_CONTROL_ENABLE == 0 {
-        return None;
-    }
-    // The rate is a share of every processor, in hundredths of a percent.
-    let rate = if info.control_flags & ffi::JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP != 0 {
-        info.value
-    } else if info.control_flags & ffi::JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE != 0 {
-        info.value >> 16
-    } else {
-        return None;
-    };
-    let cpus = (u64::from(rate) * logical as u64).div_ceil(10_000);
-    usize::try_from(cpus.max(1)).ok()
-}
-
-pub(crate) fn processor_is_64bit() -> bool {
-    if cfg!(target_pointer_width = "64") {
-        return true;
-    }
-    let (mut process, mut native) = (0u16, 0u16);
-    // SAFETY: both outputs are writable locals.
-    let ok = unsafe {
-        ffi::IsWow64Process2(ffi::GetCurrentProcess(), &raw mut process, &raw mut native)
-    };
-    ok != 0
-        && matches!(
-            native,
-            ffi::IMAGE_FILE_MACHINE_AMD64 | ffi::IMAGE_FILE_MACHINE_ARM64
-        )
-}
-
 pub(crate) fn host_name() -> Result<String> {
     let mut len = 0u32;
     // SAFETY: a null buffer with size 0 asks for the size needed.
@@ -390,11 +330,7 @@ pub(crate) fn host_name() -> Result<String> {
         )
     };
     if ok == 0 {
-        return Err(Error::Os {
-            what: "host name",
-            call: "GetComputerNameExW",
-            code: last_error(),
-        });
+        return Err(os_error("host name", "GetComputerNameExW"));
     }
     let name = from_wide(&buf[..(size as usize).min(buf.len())]);
     Ok(crate::parse::lossy(name.as_bytes(), 255))
@@ -406,11 +342,7 @@ pub(crate) fn user() -> Result<User> {
     // SAFETY: `buf` has `size` writable UTF-16 units (UNLEN + 1).
     let ok = unsafe { ffi::GetUserNameW(buf.as_mut_ptr(), &raw mut size) };
     if ok == 0 {
-        return Err(Error::Os {
-            what: "user name",
-            call: "GetUserNameW",
-            code: last_error(),
-        });
+        return Err(os_error("user name", "GetUserNameW"));
     }
     Ok(User {
         name: from_wide(&buf),
@@ -426,11 +358,7 @@ pub(crate) fn is_elevated() -> Result<bool> {
         ffi::OpenProcessToken(ffi::GetCurrentProcess(), ffi::TOKEN_QUERY, &raw mut token)
     };
     if ok == 0 {
-        return Err(Error::Os {
-            what: "elevation",
-            call: "OpenProcessToken",
-            code: last_error(),
-        });
+        return Err(os_error("elevation", "OpenProcessToken"));
     }
     let token = Owned(token);
     let mut elevation = ffi::TokenElevation {
@@ -448,11 +376,7 @@ pub(crate) fn is_elevated() -> Result<bool> {
         )
     };
     if ok == 0 {
-        return Err(Error::Os {
-            what: "elevation",
-            call: "GetTokenInformation",
-            code: last_error(),
-        });
+        return Err(os_error("elevation", "GetTokenInformation"));
     }
     Ok(elevation.token_is_elevated != 0)
 }
@@ -483,39 +407,6 @@ pub(crate) fn open_files_ceiling() -> Option<u64> {
     None
 }
 
-// The guard does not count threads on Windows (no umask, so no race);
-// `process::threads()` (PRC-07, 0.4) uses this.
-#[allow(dead_code)]
-pub(crate) fn thread_count() -> Option<usize> {
-    // SAFETY: plain flags; the returned handle is checked before use.
-    let snapshot = unsafe { ffi::CreateToolhelp32Snapshot(ffi::TH32CS_SNAPTHREAD, 0) };
-    if snapshot == ffi::INVALID_HANDLE_VALUE {
-        return None;
-    }
-    let snapshot = Owned(snapshot);
-    let pid = std::process::id();
-    let mut entry = ffi::ThreadEntry32 {
-        size: size_of::<ffi::ThreadEntry32>() as u32,
-        cnt_usage: 0,
-        th32_thread_id: 0,
-        th32_owner_process_id: 0,
-        tp_base_pri: 0,
-        tp_delta_pri: 0,
-        flags: 0,
-    };
-    let mut count = 0usize;
-    // SAFETY: `entry` is a THREADENTRY32 with its size set.
-    let mut more = unsafe { ffi::Thread32First(snapshot.0, &raw mut entry) } != 0;
-    while more {
-        if entry.th32_owner_process_id == pid {
-            count += 1;
-        }
-        // SAFETY: as above.
-        more = unsafe { ffi::Thread32Next(snapshot.0, &raw mut entry) } != 0;
-    }
-    (count > 0).then_some(count)
-}
-
 #[cfg(feature = "guard")]
 pub(crate) fn lock_open_options(options: &mut OpenOptions) {
     use std::os::windows::fs::OpenOptionsExt;
@@ -530,6 +421,7 @@ pub(crate) fn filesystem(path: &Path) -> Option<FsKind> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
+    let _quiet = NoDialogs::new();
     let mut root = [0u16; 1024];
     // SAFETY: `path` is NUL-terminated; `root` has its length in units.
     let ok =
@@ -595,13 +487,31 @@ mod tests {
     }
 
     #[test]
-    fn test_sys_windows_live_readings() {
-        assert!(physical_cores().is_some_and(|c| c >= 1));
-        let logical = cpu().logical;
-        let a = cpu_available(logical);
-        assert!(a >= 1 && a <= logical);
+    fn test_sys_windows_time_conversions_exact() {
+        assert_eq!(hundred_ns(0), Duration::ZERO);
+        assert_eq!(hundred_ns(15), Duration::from_nanos(1_500));
+        assert_eq!(hundred_ns(10_000_000), Duration::from_secs(1));
+        assert_eq!(
+            hundred_ns(u64::MAX),
+            Duration::new(u64::MAX / 10_000_000, 955_161_500)
+        );
+        assert_eq!(non_negative(-1), 0);
+        assert_eq!(non_negative(7), 7);
+        assert_eq!(
+            filetime_to_system(UNIX_EPOCH_FILETIME),
+            Some(SystemTime::UNIX_EPOCH)
+        );
+        assert_eq!(
+            filetime_to_system(UNIX_EPOCH_FILETIME + 10_000_000),
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+        );
+        assert!(filetime_to_system(0).is_some_and(|t| t < SystemTime::UNIX_EPOCH));
+    }
+
+    #[test]
+    fn test_sys_windows_live_identity() {
         assert!(os().version.is_some());
         assert!(!host_name().unwrap().is_empty());
-        assert!(processor_is_64bit() || cfg!(target_pointer_width = "32"));
+        assert!(memory_status().unwrap().total_phys > 0);
     }
 }
