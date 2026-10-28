@@ -13,14 +13,21 @@ pub(crate) fn uptime() -> Result<Duration> {
     Ok(Duration::from_millis(ffi::GetTickCount64()))
 }
 
+/// The boot instant: now minus the uptime, computed once, so two calls agree
+/// (the tick count and the clock are read a few milliseconds apart).
 pub(crate) fn boot_time() -> Result<SystemTime> {
-    SystemTime::now()
+    static BOOT: std::sync::OnceLock<SystemTime> = std::sync::OnceLock::new();
+    if let Some(b) = BOOT.get() {
+        return Ok(*b);
+    }
+    let boot = SystemTime::now()
         .checked_sub(uptime()?)
         .ok_or(Error::Malformed {
             what: "boot time",
             source: "GetTickCount64",
             line: None,
-        })
+        })?;
+    Ok(*BOOT.get_or_init(|| boot))
 }
 
 pub(crate) fn processes() -> Result<Processes> {

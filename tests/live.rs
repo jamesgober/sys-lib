@@ -335,7 +335,7 @@ fn test_live_windows_memory_disk_and_uptime_match_cim_and_dotnet() {
     let script = "$cs = Get-CimInstance Win32_ComputerSystem; $os = Get-CimInstance Win32_OperatingSystem; \
         $d = [System.IO.DriveInfo]::new($env:SystemDrive); \
         $cs.TotalPhysicalMemory; $os.FreePhysicalMemory; $d.TotalSize; $d.AvailableFreeSpace; \
-        [Environment]::TickCount64";
+        [long]((Get-Date) - $os.LastBootUpTime).TotalMilliseconds";
     let Some(out) = need(
         "powershell",
         &["-NoProfile", "-NonInteractive", "-Command", script],
@@ -356,12 +356,17 @@ fn test_live_windows_memory_disk_and_uptime_match_cim_and_dotnet() {
     let s = disk::space(&drive).unwrap();
     assert_eq!(s.total.raw(), v[2], "drive size");
     assert!(close(s.available.raw(), v[3], 64 * MIB), "drive available");
+    // The boot time from CIM (Windows PowerShell 5.1 has no TickCount64).
+    // Fast Startup and sleep can separate the two clocks on a desktop, so
+    // the comparison is strict only on CI's virtual machines.
     let up = host::uptime().unwrap().as_millis() as u64;
-    assert!(
-        up.abs_diff(v[4]) < 5_000,
-        "uptime {up} vs TickCount64 {}",
-        v[4]
-    );
+    if std::env::var_os("CI").is_some() {
+        assert!(
+            up.abs_diff(v[4]) < 5_000,
+            "uptime {up} vs LastBootUpTime {}",
+            v[4]
+        );
+    }
 }
 
 #[test]
@@ -386,7 +391,12 @@ fn test_live_samplers_measure_real_activity() {
     let before = process::io().ok();
     let path = std::env::temp_dir().join(format!("sys-lib-live-io-{}", std::process::id()));
     std::fs::write(&path, vec![7u8; 4 << 20]).unwrap();
-    std::fs::File::open(&path).unwrap().sync_all().unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .sync_all()
+        .unwrap();
     let after = process::io().ok();
     let _ = std::fs::remove_file(&path);
     if let (Some(b), Some(a)) = (before, after) {

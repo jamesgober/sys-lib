@@ -542,6 +542,7 @@ fn disk_raw(p: &ffi::DiskPerformance) -> DiskRaw {
         op_time: Some(hundred_ns(
             non_negative(p.read_time).saturating_add(non_negative(p.write_time)),
         )),
+        disks: 1,
     }
 }
 

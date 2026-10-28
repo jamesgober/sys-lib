@@ -211,10 +211,14 @@ pub fn free() -> Result<Percent> {
 /// ```
 #[derive(Debug)]
 pub struct Sampler {
+    /// The baseline of `sample`, from `times()`.
     total: Times,
     at: Instant,
-    /// The per-core baseline and a scratch buffer of the same length, or empty
-    /// for a total-only sampler.
+    /// The baseline of `sample_per_core_into`: its own total (from the same
+    /// read as the cores, which on macOS is a wider sum than `times()`), the
+    /// cores, and a scratch buffer of the same length. Kept apart from the
+    /// total's, so mixing the two calls never compares unlike counters.
+    cores_total: Times,
     cores: Vec<Times>,
     scratch: Vec<Times>,
     cores_at: Instant,
@@ -227,12 +231,13 @@ impl Sampler {
     ///
     /// As [`times`].
     pub fn new() -> Result<Sampler> {
+        let total = times()?;
         let mut cores = vec![Times::default(); super::logical()];
-        let (total, n) = match read_cores(&mut cores) {
+        let (cores_total, n) = match read_cores(&mut cores) {
             Ok(r) => r,
             // No per-core counters here (Windows past 64 processors): the
             // total still works; the per-core calls say Unsupported.
-            Err(Error::Unsupported { .. }) => (times()?, 0),
+            Err(Error::Unsupported { .. }) => (total, 0),
             Err(e) => return Err(e),
         };
         cores.truncate(n);
@@ -240,6 +245,7 @@ impl Sampler {
         Ok(Sampler {
             total,
             at: now,
+            cores_total,
             scratch: vec![Times::default(); cores.len()],
             cores,
             cores_at: now,
@@ -249,9 +255,11 @@ impl Sampler {
     /// A sampler for the total only, for the blocking functions.
     fn total_only() -> Result<Sampler> {
         let now = Instant::now();
+        let total = times()?;
         Ok(Sampler {
-            total: times()?,
+            total,
             at: now,
+            cores_total: total,
             cores: Vec::new(),
             scratch: Vec::new(),
             cores_at: now,
@@ -268,20 +276,10 @@ impl Sampler {
     pub fn sample(&mut self) -> Result<Usage> {
         let now = times()?;
         let at = Instant::now();
-        let usage = self.advance(now, at);
+        let usage = between(&now, &self.total, at.duration_since(self.at));
         self.total = now;
         self.at = at;
         usage
-    }
-
-    fn advance(&self, now: Times, at: Instant) -> Result<Usage> {
-        let interval = at.duration_since(self.at);
-        let too_soon = || Error::TooSoon {
-            elapsed: interval,
-            minimum: crate::sys::CPU_TICK,
-        };
-        let delta = now.since(&self.total).ok_or_else(too_soon)?;
-        Usage::from_delta(&delta, crate::sys::CPU_STATES, interval).ok_or_else(too_soon)
     }
 
     /// Usage since the previous sample, total and per core (allocates the
@@ -306,8 +304,10 @@ impl Sampler {
     /// # Errors
     ///
     /// `TooLarge` without writing anything when `out` is shorter than the
-    /// number of cores; `TooSoon` as [`sample`](Sampler::sample);
-    /// `Unsupported` per core on Windows with more than 64 logical processors.
+    /// number of cores (on Linux, the highest CPU number plus one: an offline
+    /// CPU keeps its slot and reads 0%); `TooSoon` as
+    /// [`sample`](Sampler::sample); `Unsupported` per core on Windows with
+    /// more than 64 logical processors or more than one processor group.
     pub fn sample_per_core_into(&mut self, out: &mut [Percent]) -> Result<Usage> {
         let (total, n) = read_cores(&mut self.scratch)?;
         let at = Instant::now();
@@ -317,8 +317,8 @@ impl Sampler {
                 limit: out.len() as u64,
             });
         }
-        let usage = self.advance(total, at);
         let interval = at.duration_since(self.cores_at);
+        let usage = between(&total, &self.cores_total, interval);
         for (i, now) in self.scratch[..n].iter().enumerate() {
             out[i] = self
                 .cores
@@ -332,10 +332,19 @@ impl Sampler {
         self.cores.resize(n, Times::default());
         self.cores.copy_from_slice(&self.scratch[..n]);
         self.cores_at = at;
-        self.total = total;
-        self.at = at;
+        self.cores_total = total;
         usage
     }
+}
+
+/// The usage between two readings `interval` apart.
+fn between(now: &Times, then: &Times, interval: Duration) -> Result<Usage> {
+    let too_soon = || Error::TooSoon {
+        elapsed: interval,
+        minimum: crate::sys::CPU_TICK,
+    };
+    let delta = now.since(then).ok_or_else(too_soon)?;
+    Usage::from_delta(&delta, crate::sys::CPU_STATES, interval).ok_or_else(too_soon)
 }
 
 /// The total and per-core counters, into `buf`. When more cores report than

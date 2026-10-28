@@ -264,6 +264,9 @@ pub(crate) struct DiskRaw {
     pub(crate) busy: Option<Duration>,
     /// Time spent on completed operations (read plus write).
     pub(crate) op_time: Option<Duration>,
+    /// How many disks the counters cover (1 for one disk), so a sum's busy
+    /// time becomes the mean share across disks.
+    pub(crate) disks: u32,
 }
 
 impl DiskRaw {
@@ -275,6 +278,7 @@ impl DiskRaw {
         self.writes = self.writes.saturating_add(other.writes);
         self.busy = add_opt(self.busy, other.busy);
         self.op_time = add_opt(self.op_time, other.op_time);
+        self.disks = self.disks.saturating_add(other.disks);
     }
 
     fn totals(&self) -> IoTotals {
@@ -300,10 +304,11 @@ impl DiskRaw {
             write: Rate::from_delta(d(self.written, earlier.written), interval),
             reads_per_sec: per_sec(d(self.reads, earlier.reads)),
             writes_per_sec: per_sec(d(self.writes, earlier.writes)),
+            // Several disks: the mean share of the interval each was busy.
             busy: match (self.busy, earlier.busy) {
                 (Some(n), Some(o)) if !interval.is_zero() => Some(Percent::from_ratio_u128(
                     n.checked_sub(o).unwrap_or_default().as_nanos(),
-                    interval.as_nanos(),
+                    interval.as_nanos() * u128::from(self.disks.max(1)),
                 )),
                 _ => None,
             },
@@ -520,6 +525,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_disk_busy_across_two_disks_is_the_mean() {
+        let one = |busy_ms: u64| DiskRaw {
+            busy: Some(Duration::from_millis(busy_ms)),
+            disks: 1,
+            ..DiskRaw::default()
+        };
+        let (mut before, mut after) = (one(0), one(600));
+        before.add(&one(0));
+        after.add(&one(600));
+        let io = after.rates_since(&before, Duration::from_secs(1));
+        assert_eq!(io.busy.unwrap().to_string(), "60.0%");
+    }
+
+    #[test]
     fn test_disk_space_invariants() {
         let s = Space::new(100, 150, 200);
         assert_eq!(
@@ -541,6 +560,7 @@ mod tests {
             writes: 0,
             busy: Some(Duration::from_millis(100)),
             op_time: Some(Duration::from_millis(20)),
+            disks: 1,
         };
         let b = DiskRaw {
             read: 3 << 20,
@@ -549,6 +569,7 @@ mod tests {
             writes: 10,
             busy: Some(Duration::from_millis(600)),
             op_time: Some(Duration::from_millis(80)),
+            disks: 1,
         };
         let io = b.rates_since(&a, Duration::from_secs(1));
         assert_eq!(io.read.to_string(), "2 MiB/s");

@@ -16,10 +16,16 @@ use sys_lib::{self as sys, Percent};
 
 struct Counting;
 
-thread_local! {
-    static ON: Cell<bool> = const { Cell::new(false) };
-    static COUNT: Cell<u64> = const { Cell::new(0) };
+// The initializers are `const`; clippy on Android misreads the expansion.
+#[allow(clippy::missing_const_for_thread_local)]
+mod counters {
+    use std::cell::Cell;
+    thread_local! {
+        pub(super) static ON: Cell<bool> = const { Cell::new(false) };
+        pub(super) static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
 }
+use counters::{COUNT, ON};
 
 // SAFETY: every call is forwarded to `System` unchanged; the counter is a
 // thread-local `Cell` that never allocates.

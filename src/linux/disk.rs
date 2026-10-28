@@ -218,6 +218,7 @@ fn raw(l: &procfs::DiskLine<'_>) -> DiskRaw {
         writes: l.writes,
         busy: Some(Duration::from_millis(l.io_ms)),
         op_time: Some(Duration::from_millis(l.read_ms.saturating_add(l.write_ms))),
+        disks: 1,
     }
 }
 

@@ -89,7 +89,12 @@ const FILES: &[&str] = &[
 fn read_everything(root: &Root) {
     let cg = Cgroups::resolve(root);
     let paths = mem::MemPaths::new(&cg);
-    if let Ok(raw) = mem::read(root, paths.as_ref(), false, true) {
+    if let Ok(raw) = mem::read(
+        root,
+        paths.as_ref(),
+        false,
+        crate::mem::MemWant::ALL_FOR_TESTS,
+    ) {
         let m = crate::mem::from_raw(raw);
         assert!(m.used <= m.total && m.used.saturating_add(m.free) == m.total);
         assert!(m.host_free <= m.host_total && m.swap.used <= m.swap.total);
@@ -192,7 +197,15 @@ fn test_attack_t5_values_read_at_different_instants_keep_invariants() {
     let root = t.root();
     let cg = Cgroups::resolve(&root);
     let paths = mem::MemPaths::new(&cg);
-    let m = crate::mem::from_raw(mem::read(&root, paths.as_ref(), false, false).unwrap());
+    let m = crate::mem::from_raw(
+        mem::read(
+            &root,
+            paths.as_ref(),
+            false,
+            crate::mem::MemWant::ALL_FOR_TESTS,
+        )
+        .unwrap(),
+    );
     assert_eq!(m.total.raw(), 100 << 20);
     assert!(m.used <= m.total, "{m:?}");
     assert_eq!(m.used.saturating_add(m.free), m.total);

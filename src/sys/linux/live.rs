@@ -20,7 +20,7 @@ use crate::{
     disk::{Disk, DiskRaw, ListOptions, Space},
     host::{OpenFiles, Processes},
     linux::{self as tree, cgroup::Cgroups, mem::MemPaths, stat::Resource},
-    mem::{HugePages, MemRaw, MemoryEvents, PagingRaw},
+    mem::{HugePages, MemRaw, MemWant, MemoryEvents, PagingRaw},
     net::{Connections, Counters, Interface, InterfaceKind, InterfaceOptions, IpNet, Mac, Totals},
     process::{CpuTime, Limit, Limits, ProcessIo, ProcessMemory},
 };
@@ -63,8 +63,8 @@ fn last_error(what: &'static str, call: &'static str) -> Error {
 // Memory
 // ---------------------------------------------------------------------------
 
-pub(crate) fn memory(with_swap: bool) -> Result<MemRaw> {
-    tree::mem::read(&ROOT, mem_paths(), cgroups().lxcfs.meminfo, with_swap)
+pub(crate) fn memory(want: MemWant) -> Result<MemRaw> {
+    tree::mem::read(&ROOT, mem_paths(), cgroups().lxcfs.meminfo, want)
 }
 
 pub(crate) fn page_size() -> usize {

@@ -483,7 +483,12 @@ mod tests {
             let _ = cpu::current_frequency(&root);
             let _ = host::name(&root);
             let _ = host::open_files(&root);
-            let _ = mem::read(&root, paths.as_ref(), false, true);
+            let _ = mem::read(
+                &root,
+                paths.as_ref(),
+                false,
+                crate::mem::MemWant::ALL_FOR_TESTS,
+            );
             let _ = mem::events(&root, paths.as_ref());
             let _ = mem::paging(&root, 4096);
             let _ = mem::huge_pages(&root);

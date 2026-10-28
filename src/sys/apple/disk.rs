@@ -91,10 +91,9 @@ pub(crate) fn disks(options: &ListOptions) -> Result<Vec<Disk>> {
         let mount_point = std::path::PathBuf::from(std::ffi::OsString::from_vec(
             super::c_array_bytes(&st.mntonname),
         ));
-        let space = match class {
-            DiskKind::Network => None,
-            _ => Some(fresh_space(&mount_point).unwrap_or_else(|| space_of(st))),
-        };
+        // A network mount is here only when the caller included it, accepting
+        // the risk of a hang on a dead one: its space is read like the rest.
+        let space = Some(fresh_space(&mount_point).unwrap_or_else(|| space_of(st)));
         out.push(Disk {
             device: crate::parse::lossy(&super::c_array_bytes(&st.mntfromname), PATH_MAX),
             mount_point,
@@ -400,6 +399,7 @@ mod iokit {
             writes: number(&stats, &keys.writes),
             busy: None,
             op_time: Some(Duration::from_nanos(read_time.saturating_add(write_time))),
+            disks: 1,
         })
     }
 

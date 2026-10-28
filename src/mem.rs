@@ -125,6 +125,49 @@ impl Swap {
     }
 }
 
+/// Which parts of the memory reading a caller needs, so each Tier 1 function
+/// performs only the reads it needs (`host_total()` reads no cgroup file).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MemWant {
+    /// The limit (cgroup `memory.max` and its ancestors, the job object).
+    pub(crate) limit: bool,
+    /// The usage counted against the limit (`memory.current`, `memory.stat`).
+    pub(crate) usage: bool,
+    /// Swap, and on Windows the cache.
+    pub(crate) swap: bool,
+}
+
+impl MemWant {
+    pub(crate) const HOST: MemWant = MemWant {
+        limit: false,
+        usage: false,
+        swap: false,
+    };
+    pub(crate) const TOTAL: MemWant = MemWant {
+        limit: true,
+        usage: false,
+        swap: false,
+    };
+    pub(crate) const USED: MemWant = MemWant {
+        limit: true,
+        usage: true,
+        swap: false,
+    };
+    pub(crate) const SWAP: MemWant = MemWant {
+        limit: false,
+        usage: false,
+        swap: true,
+    };
+    pub(crate) const ALL: MemWant = MemWant {
+        limit: true,
+        usage: true,
+        swap: true,
+    };
+    /// Everything, for the backend tests.
+    #[cfg(test)]
+    pub(crate) const ALL_FOR_TESTS: MemWant = MemWant::ALL;
+}
+
 /// Memory as a platform reports it, in bytes. [`from_raw`] turns it into the
 /// public values and enforces their invariants in one place.
 #[derive(Clone, Copy, Debug, Default)]
@@ -188,8 +231,8 @@ pub(crate) fn from_raw(raw: MemRaw) -> Memory {
     }
 }
 
-fn read(with_swap: bool) -> Result<Memory> {
-    crate::sys::memory(with_swap).map(from_raw)
+fn read(want: MemWant) -> Result<Memory> {
+    crate::sys::memory(want).map(from_raw)
 }
 
 /// What this process may use: the host's memory, or the container's (or job
@@ -209,7 +252,7 @@ fn read(with_swap: bool) -> Result<Memory> {
 /// `NotFound` or `PermissionDenied` when a sandbox hides the OS's memory
 /// counters; `Malformed` when they do not parse.
 pub fn total() -> Result<Bytes> {
-    read(false).map(|m| m.total)
+    read(MemWant::TOTAL).map(|m| m.total)
 }
 
 /// Memory in use, counted against [`total`]. Inside a limit it is the
@@ -220,7 +263,7 @@ pub fn total() -> Result<Bytes> {
 ///
 /// As [`total`].
 pub fn used() -> Result<Bytes> {
-    read(false).map(|m| m.used)
+    read(MemWant::USED).map(|m| m.used)
 }
 
 /// Memory available to new allocations without swapping: reclaimable cache
@@ -230,7 +273,7 @@ pub fn used() -> Result<Bytes> {
 ///
 /// As [`total`].
 pub fn free() -> Result<Bytes> {
-    read(false).map(|m| m.free)
+    read(MemWant::USED).map(|m| m.free)
 }
 
 /// [`used`] as a share of [`total`].
@@ -239,7 +282,7 @@ pub fn free() -> Result<Bytes> {
 ///
 /// As [`total`].
 pub fn used_percent() -> Result<Percent> {
-    read(false).map(|m| m.used_percent())
+    read(MemWant::USED).map(|m| m.used_percent())
 }
 
 /// [`free`] as a share of [`total`].
@@ -256,7 +299,7 @@ pub fn used_percent() -> Result<Percent> {
 ///
 /// As [`total`].
 pub fn free_percent() -> Result<Percent> {
-    read(false).map(|m| m.free_percent())
+    read(MemWant::USED).map(|m| m.free_percent())
 }
 
 /// Every memory value from one set of reads, swap included. A caller who wants
@@ -277,7 +320,7 @@ pub fn free_percent() -> Result<Percent> {
 ///
 /// As [`total`].
 pub fn snapshot() -> Result<Memory> {
-    read(true)
+    read(MemWant::ALL)
 }
 
 /// The machine's memory, ignoring any limit.
@@ -286,7 +329,7 @@ pub fn snapshot() -> Result<Memory> {
 ///
 /// As [`total`].
 pub fn host_total() -> Result<Bytes> {
-    read(false).map(|m| m.host_total)
+    read(MemWant::HOST).map(|m| m.host_total)
 }
 
 /// Memory available on the machine, ignoring any limit.
@@ -295,7 +338,7 @@ pub fn host_total() -> Result<Bytes> {
 ///
 /// As [`total`].
 pub fn host_free() -> Result<Bytes> {
-    read(false).map(|m| m.host_free)
+    read(MemWant::HOST).map(|m| m.host_free)
 }
 
 /// The memory limit on this process, or `None` when there is none (or it is
@@ -308,7 +351,7 @@ pub fn host_free() -> Result<Bytes> {
 ///
 /// As [`total`].
 pub fn limit() -> Result<Option<MemoryLimit>> {
-    read(false).map(|m| m.limit)
+    read(MemWant::TOTAL).map(|m| m.limit)
 }
 
 /// Swap space. All zero when there is none (E-31). zram counts as swap; zswap
@@ -318,7 +361,7 @@ pub fn limit() -> Result<Option<MemoryLimit>> {
 ///
 /// As [`total`].
 pub fn swap() -> Result<Swap> {
-    read(true).map(|m| m.swap)
+    read(MemWant::SWAP).map(|m| m.swap)
 }
 
 /// The size of a memory page in bytes (a static fact).

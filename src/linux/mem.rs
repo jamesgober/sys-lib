@@ -11,8 +11,8 @@ use super::{
 use crate::{
     Bytes, Error, Result,
     mem::{
-        EventScope, HugePages, LimitSource, MemRaw, MemoryEvents, MemoryLimit, MemorySource,
-        PagingRaw, TransparentHugePages,
+        EventScope, HugePages, LimitSource, MemRaw, MemWant, MemoryEvents, MemoryLimit,
+        MemorySource, PagingRaw, TransparentHugePages,
     },
     parse::procfs::{self, Meminfo, space_value as space_kv_value},
 };
@@ -110,7 +110,7 @@ pub(crate) fn read(
     root: &Root,
     paths: Option<&MemPaths>,
     lxcfs: bool,
-    with_swap: bool,
+    want: MemWant,
 ) -> Result<MemRaw> {
     let m = meminfo(root)?;
     let malformed = || Error::Malformed {
@@ -125,7 +125,7 @@ pub(crate) fn read(
         host_available,
         host_unused: m.free,
         cached: m.cache(),
-        swap: if with_swap {
+        swap: if want.swap {
             Some((m.swap_total.unwrap_or(0), m.swap_free.unwrap_or(0)))
         } else {
             None
@@ -137,7 +137,7 @@ pub(crate) fn read(
         }),
         ..MemRaw::default()
     };
-    if lxcfs {
+    if lxcfs || !want.limit {
         return Ok(raw);
     }
     let Some(p) = paths else { return Ok(raw) };
@@ -146,7 +146,10 @@ pub(crate) fn read(
             return Ok(raw);
         };
         // E-11: inactive_file read at a different instant may exceed current.
-        let used = bytes_file(root, &p.current)
+        let used = want
+            .usage
+            .then(|| bytes_file(root, &p.current))
+            .flatten()
             .map(|c| c.saturating_sub(stat_value(root, &p.stat, b"inactive_file").unwrap_or(0)));
         raw.limit = Some(MemoryLimit {
             hard: Bytes::new(hard),
@@ -159,9 +162,13 @@ pub(crate) fn read(
         let hard =
             stat_value(root, &p.stat, b"hierarchical_memory_limit").filter(|&v| v < V1_UNLIMITED);
         let Some(hard) = hard else { return Ok(raw) };
-        let used = bytes_file(root, &p.current).map(|c| {
-            c.saturating_sub(stat_value(root, &p.stat, b"total_inactive_file").unwrap_or(0))
-        });
+        let used = want
+            .usage
+            .then(|| bytes_file(root, &p.current))
+            .flatten()
+            .map(|c| {
+                c.saturating_sub(stat_value(root, &p.stat, b"total_inactive_file").unwrap_or(0))
+            });
         let soft = bytes_file(root, &p.soft).filter(|&v| v < V1_UNLIMITED);
         // memory.memsw is memory plus swap; the swap share is the difference.
         let swap = bytes_file(root, &p.memsw)
@@ -303,7 +310,15 @@ mod tests {
         let root = fixtures::root(name);
         let cg = fixtures::cgroups(name);
         let paths = MemPaths::new(&cg);
-        from_raw(read(&root, paths.as_ref(), cg.lxcfs.meminfo, true).unwrap())
+        from_raw(
+            read(
+                &root,
+                paths.as_ref(),
+                cg.lxcfs.meminfo,
+                MemWant::ALL_FOR_TESTS,
+            )
+            .unwrap(),
+        )
     }
 
     #[test]
@@ -356,7 +371,7 @@ mod tests {
     fn test_linux_mem_lxcfs_is_not_limited_twice() {
         let root = fixtures::root("docker-cgroup2-limited");
         let paths = MemPaths::new(&fixtures::cgroups("docker-cgroup2-limited"));
-        let raw = read(&root, paths.as_ref(), true, false).unwrap();
+        let raw = read(&root, paths.as_ref(), true, MemWant::ALL_FOR_TESTS).unwrap();
         assert_eq!((raw.limit, raw.source), (None, Some(MemorySource::Lxcfs)));
     }
 
@@ -379,7 +394,13 @@ mod tests {
 
     #[test]
     fn test_linux_mem_missing_meminfo_is_not_found() {
-        let err = read(&fixtures::root("no-such-fixture"), None, false, false).unwrap_err();
+        let err = read(
+            &fixtures::root("no-such-fixture"),
+            None,
+            false,
+            MemWant::ALL_FOR_TESTS,
+        )
+        .unwrap_err();
         assert!(err.is_unavailable(), "{err}");
     }
 }

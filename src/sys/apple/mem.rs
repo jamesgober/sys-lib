@@ -7,14 +7,14 @@ use std::sync::OnceLock;
 use super::{SendRight, SysctlError, ffi, kern_error};
 use crate::{
     Pressure, PressureLevel, Result,
-    mem::{HugePages, MemRaw, MemoryEvents, MemorySource, PagingRaw},
+    mem::{HugePages, MemRaw, MemWant, MemoryEvents, MemorySource, PagingRaw},
 };
 
-pub(crate) fn memory(with_swap: bool) -> Result<MemRaw> {
+pub(crate) fn memory(want: MemWant) -> Result<MemRaw> {
     const WHAT: &str = "memory";
     let total = super::sysctl_int(c"hw.memsize").map_err(|e| e.into_error(WHAT, c"hw.memsize"))?;
     let vm = vm_statistics(WHAT)?;
-    let swap = if with_swap { Some(swap()?) } else { None };
+    let swap = if want.swap { Some(swap()?) } else { None };
     Ok(raw_from(total, &vm, kernel_page_size(), swap))
 }
 
@@ -196,7 +196,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn test_mem_apple_live_readings_hold_invariants() {
-        let raw = memory(true).unwrap();
+        let raw = memory(MemWant::ALL).unwrap();
         assert!(raw.host_total > 0);
         assert!(raw.host_unused.unwrap() <= raw.host_available);
         let (swap_total, swap_free) = raw.swap.unwrap();

@@ -1,10 +1,8 @@
-//! The live-reading interface (0.4), answered `Unsupported`.
-//!
-//! Every platform module glob-imports this; an item a platform defines itself
-//! shadows the one here, so a backend fills the interface in one function at a
-//! time. The other-targets module (`unsupported`) keeps it for good. Linux,
-//! macOS, and Windows must define every item: their import of this module is
-//! removed before release, which turns a missing item into a build error.
+//! The live-reading interface (0.4), answered `Unsupported`, for the targets
+//! sys-lib has no backend for yet (the `unsupported` module glob-imports it).
+//! Linux, macOS, and Windows define every item themselves and do not import
+//! this module, so a missing item there is a build error. The list below is
+//! the interface each backend provides.
 //!
 //! The interface, by area (each function's contract is its caller's
 //! documentation in the public module):
@@ -32,7 +30,7 @@ use crate::{
     cpu::{CpuQuota, Frequency, Load, States, Times},
     disk::{Disk, DiskRaw, ListOptions, Space},
     host::{OpenFiles, Processes},
-    mem::{HugePages, MemRaw, MemoryEvents, PagingRaw},
+    mem::{HugePages, MemRaw, MemWant, MemoryEvents, PagingRaw},
     net::{Connections, Counters, Interface, InterfaceOptions, Totals},
     process::{CpuTime, Limits, ProcessIo, ProcessMemory},
 };
@@ -46,7 +44,7 @@ fn no(what: &'static str) -> Error {
 
 // Memory.
 
-pub(crate) fn memory(_with_swap: bool) -> Result<MemRaw> {
+pub(crate) fn memory(_want: MemWant) -> Result<MemRaw> {
     Err(no("memory"))
 }
 

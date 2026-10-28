@@ -8,10 +8,12 @@ use super::{
 };
 use crate::{
     Bytes, Pressure, PressureLevel, Result,
-    mem::{HugePages, LimitSource, MemRaw, MemoryEvents, MemoryLimit, MemorySource, PagingRaw},
+    mem::{
+        HugePages, LimitSource, MemRaw, MemWant, MemoryEvents, MemoryLimit, MemorySource, PagingRaw,
+    },
 };
 
-pub(crate) fn memory(with_swap: bool) -> Result<MemRaw> {
+pub(crate) fn memory(want: MemWant) -> Result<MemRaw> {
     let status = memory_status()?;
     let mut raw = MemRaw {
         host_total: status.total_phys,
@@ -21,7 +23,7 @@ pub(crate) fn memory(with_swap: bool) -> Result<MemRaw> {
     };
     // The cache and the commit counters come from GetPerformanceInfo, which
     // counts handles across the machine: only the full snapshot pays for it.
-    if with_swap {
+    if want.swap {
         let info = performance_info("memory")?;
         let page = info.page_size as u64;
         raw.cached = Some((info.system_cache as u64).saturating_mul(page));
@@ -32,7 +34,7 @@ pub(crate) fn memory(with_swap: bool) -> Result<MemRaw> {
             page,
         ));
     }
-    if let Some(job) = job_limits() {
+    if let Some(job) = job_limits().filter(|_| want.limit) {
         let flags = job.basic_limit_information.limit_flags;
         if let Some((hard, per_process)) = job_memory_limit(
             flags,
@@ -203,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_mem_windows_live_readings() {
-        let m = memory(true).unwrap();
+        let m = memory(MemWant::ALL).unwrap();
         assert!(m.host_total > 0 && m.host_available <= m.host_total);
         assert!(m.cached.is_some_and(|c| c <= m.host_total));
         let (total, free) = m.swap.unwrap();
@@ -211,7 +213,7 @@ mod tests {
         if let (Some(limit), Some(used)) = (m.limit, m.limited_used) {
             assert!(limit.hard.raw() > 0 && used > 0);
         }
-        let quick = memory(false).unwrap();
+        let quick = memory(MemWant::USED).unwrap();
         assert!(quick.swap.is_none() && quick.cached.is_none());
         assert!(page_size().is_power_of_two() && page_size() >= 4096);
         let p = mem_pressure().unwrap().unwrap();
