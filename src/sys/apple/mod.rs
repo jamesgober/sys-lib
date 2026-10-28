@@ -1,13 +1,24 @@
 //! macOS and iOS: sysctl, Mach, libproc, CoreFoundation, and (macOS only) IOKit.
+//!
+//! The live readings (0.4) are split by area: `mem`, `cpu`, `disk`, `net`,
+//! `process` (this process), and `host`. This file keeps the static facts, the
+//! process guard's needs, and the helpers the areas share: sysctl reads, errno
+//! mapping, byte readers, and the Mach send-right wrapper.
 
+mod cpu;
+mod disk;
 mod ffi;
+mod host;
+mod mem;
+mod net;
+mod process;
 
-// Removed before release: every item must be this platform's own.
-pub(crate) use super::pending::*;
+pub(crate) use self::{cpu::*, disk::*, host::*, mem::*, net::*, process::*};
 
 use std::{
     ffi::{CStr, c_char, c_void},
     mem::MaybeUninit,
+    time::Duration,
 };
 #[cfg(feature = "guard")]
 use std::{fs::OpenOptions, path::Path};
@@ -21,6 +32,206 @@ use crate::{
 };
 #[cfg(feature = "guard")]
 use crate::{process::Limit, sys::FsKind};
+
+// ---------------------------------------------------------------------------
+// Helpers shared by the readings
+// ---------------------------------------------------------------------------
+
+/// `Unsupported` on this platform (iOS lacks libproc, IOKit, and `getfsstat`).
+#[cfg(not(target_os = "macos"))]
+fn unsupported(what: &'static str) -> Error {
+    Error::Unsupported {
+        what,
+        platform: crate::os::kind().name(),
+    }
+}
+
+/// The error for a failed BSD call: `NotFound` and `PermissionDenied` where
+/// `errno` says so, else `Os` with the code.
+fn os_error(what: &'static str, call: &'static str, code: i32) -> Error {
+    match code {
+        ffi::ENOENT => Error::NotFound { what, source: call },
+        ffi::EPERM | ffi::EACCES => Error::PermissionDenied {
+            what,
+            hint: "run outside the sandbox that refuses it, or treat the value as unknown",
+        },
+        _ => Error::Os { what, call, code },
+    }
+}
+
+/// The error for a failed Mach or IOKit call (`kern_return_t`).
+fn kern_error(what: &'static str, call: &'static str, code: ffi::KernReturn) -> Error {
+    Error::Os { what, call, code }
+}
+
+/// Why a sysctl gave no value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SysctlError {
+    /// The call failed with this `errno`.
+    Errno(i32),
+    /// The call answered with this many bytes, not the size expected.
+    Size(usize),
+}
+
+impl SysctlError {
+    /// The public error, naming the sysctl.
+    fn into_error(self, what: &'static str, name: &'static CStr) -> Error {
+        let source = name.to_str().unwrap_or("sysctl");
+        match self {
+            SysctlError::Errno(code) => os_error(what, source, code),
+            SysctlError::Size(_) => Error::Malformed {
+                what,
+                source,
+                line: None,
+            },
+        }
+    }
+}
+
+/// A plain C struct a sysctl may fill: integers and arrays of them only, so
+/// every byte pattern is a valid value.
+///
+/// # Safety
+///
+/// Every bit pattern of `size_of::<Self>()` bytes must be a valid `Self`.
+unsafe trait Plain: Default {}
+
+// SAFETY: `timeval` is two integers (and tail padding).
+unsafe impl Plain for ffi::Timeval {}
+// SAFETY: `xsw_usage` is five integers.
+unsafe impl Plain for ffi::XswUsage {}
+
+/// A sysctl that answers with exactly one `T`.
+fn sysctl_value<T: Plain>(name: &CStr) -> core::result::Result<T, SysctlError> {
+    let mut value = T::default();
+    let mut len = core::mem::size_of::<T>();
+    // SAFETY: `name` is NUL-terminated; `value` is `len` writable bytes, the
+    // call writes at most `len`, and `Plain` makes any bytes it writes a valid
+    // `T`.
+    let rc = unsafe {
+        ffi::sysctlbyname(
+            name.as_ptr(),
+            (&raw mut value).cast::<c_void>(),
+            &raw mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return Err(SysctlError::Errno(last_errno()));
+    }
+    if len != core::mem::size_of::<T>() {
+        return Err(SysctlError::Size(len));
+    }
+    Ok(value)
+}
+
+/// An integer sysctl of 4 or 8 bytes (`int`, `unsigned`, `quad`).
+fn sysctl_int(name: &CStr) -> core::result::Result<u64, SysctlError> {
+    let mut buf = [0u8; 8];
+    let mut len = buf.len();
+    // SAFETY: as in `sysctl_value`, with an 8-byte buffer.
+    let rc = unsafe {
+        ffi::sysctlbyname(
+            name.as_ptr(),
+            buf.as_mut_ptr().cast::<c_void>(),
+            &raw mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return Err(SysctlError::Errno(last_errno()));
+    }
+    match len {
+        4 => Ok(u64::from(u32::from_ne_bytes([
+            buf[0], buf[1], buf[2], buf[3],
+        ]))),
+        8 => Ok(u64::from_ne_bytes(buf)),
+        n => Err(SysctlError::Size(n)),
+    }
+}
+
+/// `N` bytes of `data` at `at`, when they are all there.
+fn bytes_at<const N: usize>(data: &[u8], at: usize) -> Option<[u8; N]> {
+    data.get(at..at.checked_add(N)?)?.try_into().ok()
+}
+
+fn u16_at(data: &[u8], at: usize) -> Option<u16> {
+    bytes_at(data, at).map(u16::from_ne_bytes)
+}
+
+fn u32_at(data: &[u8], at: usize) -> Option<u32> {
+    bytes_at(data, at).map(u32::from_ne_bytes)
+}
+
+fn i32_at(data: &[u8], at: usize) -> Option<i32> {
+    bytes_at(data, at).map(i32::from_ne_bytes)
+}
+
+fn u64_at(data: &[u8], at: usize) -> Option<u64> {
+    bytes_at(data, at).map(u64::from_ne_bytes)
+}
+
+/// The bytes of a fixed C character array up to its first NUL.
+#[cfg(target_os = "macos")]
+fn c_array_bytes(chars: &[c_char]) -> Vec<u8> {
+    chars
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c.cast_unsigned())
+        .collect()
+}
+
+/// A `timeval` as a duration; a negative or out-of-range field counts as zero.
+fn timeval_duration(tv: ffi::Timeval) -> Duration {
+    let usec = u32::try_from(tv.usec).unwrap_or(0).min(999_999);
+    Duration::new(u64::try_from(tv.sec).unwrap_or(0), usec * 1_000)
+}
+
+/// This process's id as a `pid_t`.
+#[cfg(target_os = "macos")]
+fn own_pid() -> i32 {
+    std::process::id().cast_signed()
+}
+
+/// A send right to a Mach port this code holds one user reference to,
+/// returned on drop. Ports are never cached: a cached name would not survive
+/// `fork`.
+struct SendRight(ffi::MachPort);
+
+impl SendRight {
+    /// The host's name port.
+    fn host(what: &'static str) -> Result<SendRight> {
+        match ffi::mach_host_self() {
+            0 => Err(kern_error(what, "mach_host_self", 0)),
+            port => Ok(SendRight(port)),
+        }
+    }
+}
+
+impl Drop for SendRight {
+    fn drop(&mut self) {
+        // SAFETY: this value owns one user reference to the right; returning
+        // it once is correct.
+        unsafe { ffi::mach_port_deallocate(ffi::mach_task_self_, self.0) };
+    }
+}
+
+/// One resource limit.
+fn rlimit(resource: core::ffi::c_int, what: &'static str) -> Result<ffi::Rlimit> {
+    let mut lim = ffi::Rlimit::default();
+    // SAFETY: `lim` is a writable `rlimit`.
+    let rc = unsafe { ffi::getrlimit(resource, &raw mut lim) };
+    if rc != 0 {
+        return Err(os_error(what, "getrlimit", last_errno()));
+    }
+    Ok(lim)
+}
+
+// ---------------------------------------------------------------------------
+// Static facts
+// ---------------------------------------------------------------------------
 
 /// A string sysctl, bounded to 1 KiB.
 fn sysctl_string(name: &CStr) -> Option<String> {
@@ -46,30 +257,9 @@ fn sysctl_string(name: &CStr) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-/// An integer sysctl of 4 or 8 bytes.
+/// An integer sysctl of 4 or 8 bytes, or `None`.
 fn sysctl_u64(name: &CStr) -> Option<u64> {
-    let mut buf = [0u8; 8];
-    let mut len = buf.len();
-    // SAFETY: as in `sysctl_string`, with an 8-byte buffer.
-    let rc = unsafe {
-        ffi::sysctlbyname(
-            name.as_ptr(),
-            buf.as_mut_ptr().cast::<c_void>(),
-            &raw mut len,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if rc != 0 {
-        return None;
-    }
-    match len {
-        4 => Some(u64::from(u32::from_ne_bytes([
-            buf[0], buf[1], buf[2], buf[3],
-        ]))),
-        8 => Some(u64::from_ne_bytes(buf)),
-        _ => None,
-    }
+    sysctl_int(name).ok()
 }
 
 /// The marketing name of a macOS major version, for the ones released.
@@ -262,17 +452,7 @@ pub(crate) fn swap_umask(mask: u32) -> Option<u32> {
 
 #[cfg(feature = "guard")]
 fn get_nofile() -> Result<ffi::Rlimit> {
-    let mut lim = ffi::Rlimit::default();
-    // SAFETY: `lim` is a writable `rlimit`.
-    let rc = unsafe { ffi::getrlimit(ffi::RLIMIT_NOFILE, &raw mut lim) };
-    if rc != 0 {
-        return Err(Error::Os {
-            what: "open-file limit",
-            call: "getrlimit",
-            code: last_errno(),
-        });
-    }
-    Ok(lim)
+    rlimit(ffi::RLIMIT_NOFILE, "open-file limit")
 }
 
 #[cfg(feature = "guard")]
@@ -307,33 +487,11 @@ pub(crate) fn open_files_ceiling() -> Option<u64> {
     sysctl_u64(c"kern.maxfilesperproc")
 }
 
+/// The thread count for the guard's check: `threads`, or `None` where it is
+/// unavailable (iOS).
 #[cfg(feature = "guard")]
 pub(crate) fn thread_count() -> Option<usize> {
-    #[cfg(target_os = "macos")]
-    {
-        let mut info = MaybeUninit::<ffi::ProcTaskinfo>::zeroed();
-        let size = core::mem::size_of::<ffi::ProcTaskinfo>() as i32;
-        // SAFETY: `info` is `size` writable bytes for the PROC_PIDTASKINFO flavour.
-        let n = unsafe {
-            ffi::proc_pidinfo(
-                std::process::id() as i32,
-                ffi::PROC_PIDTASKINFO,
-                0,
-                info.as_mut_ptr().cast::<c_void>(),
-                size,
-            )
-        };
-        if n != size {
-            return None;
-        }
-        // SAFETY: the call filled all `size` bytes.
-        let info = unsafe { info.assume_init() };
-        usize::try_from(info.threadnum).ok()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        None
-    }
+    threads().ok()
 }
 
 #[cfg(feature = "guard")]
