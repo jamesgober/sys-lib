@@ -141,11 +141,8 @@ fn split_cores(ticks: &[c_int], cores: usize, out: &mut [Times]) -> Result<(Time
         });
     }
     let mut total = [0u64; ffi::CPU_STATE_MAX];
-    for (core, slot) in ticks
-        .chunks_exact(ffi::CPU_STATE_MAX)
-        .take(cores)
-        .zip(out.iter_mut())
-    {
+    let (per_core, _) = ticks.as_chunks::<{ ffi::CPU_STATE_MAX }>();
+    for (core, slot) in per_core.iter().take(cores).zip(out.iter_mut()) {
         let mut t = [0u64; ffi::CPU_STATE_MAX];
         for (state, &n) in core.iter().enumerate() {
             t[state] = u64::from(n.cast_unsigned());
