@@ -1,6 +1,7 @@
 //! Windows: kernel32, advapi32, iphlpapi, powrprof, and ntdll, called directly.
 
 mod cpu;
+mod disk;
 mod ffi;
 mod host;
 mod mem;
@@ -13,6 +14,7 @@ pub(crate) use cpu::{
     CPU_STATES, CPU_TICK, cpu, cpu_available, cpu_online, cpu_pressure, cpu_quota, cpu_times,
     cpu_times_per_core, current_frequency, frequency, load, processor_is_64bit,
 };
+pub(crate) use disk::{disk_io_counters, disk_io_totals, disk_pressure, disk_space, disks};
 #[cfg(feature = "guard")]
 pub(crate) use ffi::FILE_ATTRIBUTE_REPARSE_POINT;
 pub(crate) use host::{boot_time, host_open_files, processes, uptime};
@@ -172,6 +174,30 @@ impl Drop for Owned {
     fn drop(&mut self) {
         // SAFETY: the handle is valid and owned here; it is closed once.
         unsafe { ffi::CloseHandle(self.0) };
+    }
+}
+
+/// Critical-error dialogs ("insert a disk in drive E:") are off for this
+/// thread while a value lives, and the previous mode comes back on drop
+/// (threat T8). Every volume call runs under one.
+struct NoDialogs(Option<u32>);
+
+impl NoDialogs {
+    fn new() -> NoDialogs {
+        let mut previous = 0u32;
+        // SAFETY: `previous` is a writable local.
+        let ok = unsafe { ffi::SetThreadErrorMode(ffi::SEM_FAILCRITICALERRORS, &raw mut previous) };
+        NoDialogs((ok != 0).then_some(previous))
+    }
+}
+
+impl Drop for NoDialogs {
+    fn drop(&mut self) {
+        if let Some(previous) = self.0 {
+            // SAFETY: restores the mode saved by `new`; the old-mode output is
+            // optional.
+            unsafe { ffi::SetThreadErrorMode(previous, std::ptr::null_mut()) };
+        }
     }
 }
 
@@ -404,6 +430,7 @@ pub(crate) fn filesystem(path: &Path) -> Option<FsKind> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
+    let _quiet = NoDialogs::new();
     let mut root = [0u16; 1024];
     // SAFETY: `path` is NUL-terminated; `root` has its length in units.
     let ok =
