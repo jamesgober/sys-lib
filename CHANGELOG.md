@@ -13,6 +13,69 @@
 
 ---
 
+## [0.4.0] - 2026-10-28
+
+Live readings: memory and swap with container limits, CPU usage and load,
+disks and disk I/O rates, network interfaces, traffic and connections,
+pressure and out-of-memory events, and this process's resources.
+
+### Added
+
+- `mem`: `total()`, `used()`, `free()`, `used_percent()`, `free_percent()`,
+  `snapshot()`, `host_total()`, `host_free()`, `limit()` (cgroup v1 and v2,
+  the Windows job object), `swap()`, `page_size()`, `pressure()`, `events()`
+  (out-of-memory kills), `activity()` and `Sampler` (swap and paging rates),
+  and `huge_pages()`. Inside a container the totals are the container's.
+- `cpu`: `usage()`, `usage_over()`, `used()`, `free()`, `times()`, `Sampler`
+  (total and per core, with `sample_per_core_into` for a caller's buffer),
+  `load()`, `count()`, `online()`, `packages()`, `quota()`, `frequency()`,
+  `current_frequency()`, `pressure()`, `features()`, `has()`, and
+  `x86_level()` (planned for 0.5, D-052).
+- `disk`: `space()`, `list()`, `list_with()`, `io()`, `io_over()`,
+  `io_totals()`, `io_counters()`, `IoSampler`, and `pressure()`.
+- `net`: `interfaces()`, `interfaces_with()`, `addresses()`, `Mac`,
+  `totals()`, `counters()`, `traffic()`, `traffic_over()`, `Sampler`, and
+  `connections()`.
+- `process`: `parent_id()`, `memory()`, `peak_memory()`, `memory_detail()`
+  (planned for 0.5, D-044), `cpu_time()`, `threads()`, `open_files()`,
+  `limits()`, `started_at()`, `io()`, `info()`, `info_with()`, and
+  `CpuSampler`.
+- `host`: `uptime()`, `boot_time()`, `processes()`, and `open_files()`.
+- `Pressure`, `PressureLevel`, and `Stall`; `Rate` and `Mhz`.
+- Examples `monitor` (a live view built on the samplers) and an extended
+  `facts`.
+- Tests: a counting-allocator test that every scalar reading and every
+  sampler step allocates nothing after warm-up; attack tests T5 to T8 over a
+  hostile `/proc` and `/sys` tree; live comparisons against the OS's own
+  tools; a `container` CI job that runs the tests under `docker run --memory
+  --cpus --cpuset-cpus` and checks the limits are read; the `procfs` fuzz
+  target for the new parsers.
+- Fixtures recaptured with `capture.sh` v3, which records the live-reading
+  files.
+
+### Fixed
+
+- A hybrid cgroup host (v1 controllers with a unified hierarchy mounted
+  beside them) read the empty unified hierarchy for memory and CPU limits.
+  Each controller now comes from the v1 hierarchy that carries it first
+  (D-046). Found by the recaptured fixtures.
+- An enormous uptime value in `/proc/uptime` panicked in the duration
+  conversion; it is now reported as malformed. Found by the hostile tree.
+- WSL's `rootfs` mount at `/init` was listed as a disk; `rootfs` is now a
+  pseudo filesystem unless it is the root (D-050).
+
+### Changed
+
+- `docs/API.md` and `docs/SOURCES.md` corrected to the shipped code
+  (D-047 to D-049, D-053): Windows per-core usage past 64 processors or
+  several processor groups is `Unsupported` with the total correct; Windows
+  paging activity is `Unsupported`; macOS threads and connection counts come
+  from the kernel calls the code uses; `Disk::label` is Windows only until
+  0.5.
+- The `ubuntu-24.04-desktop-amd` fixture moves to 0.5 (D-051).
+
+---
+
 ## [0.3.0] - 2026-10-23
 
 The boot kit: OS identity and the distribution, CPU counts and names, the
@@ -140,7 +203,8 @@ The scaffold and the plan. No functional code yet.
   `dev/ROADMAP.md`.
 - `tests/fixtures/` and `fuzz/` skeletons.
 
-[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jamesgober/sys-lib/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/sys-lib/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/sys-lib/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/sys-lib/releases/tag/v0.1.0

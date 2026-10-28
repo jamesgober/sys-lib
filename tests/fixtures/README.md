@@ -23,7 +23,7 @@ Run by hand on a real Linux machine, inside a container, or inside a limited sys
 - records symbolic links as `<path>.link` files holding the target (so fixtures contain no real links and survive any checkout);
 - writes `TOOLS.txt` with the output of the OS's own tools, the answers the real machine gave.
 
-Review a capture before committing it.
+Review a capture before committing it. `CAPTURED.txt` records the script version; version 3 (0.4) adds the live-reading files (`/proc/stat`, `/proc/vmstat`, `/proc/diskstats`, `/proc/net/dev`, pressure, and the memory and I/O cgroup files), and every fixture above was recaptured with it.
 
 ## Captured
 
@@ -43,7 +43,7 @@ Review a capture before committing it.
 
 | Fixture | How |
 |---|---|
-| `ubuntu-24.04-desktop-amd` | a bare-metal Linux desktop (moved to 0.4, D-039) |
+| `ubuntu-24.04-desktop-amd` | a bare-metal Linux desktop (moved to 0.5, D-051) |
 
 The full planned set, with the reason for each machine, is in [`../../dev/PLAN.md`](../../dev/PLAN.md) section 19.2.
 

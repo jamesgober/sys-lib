@@ -40,21 +40,24 @@ Exit: WASP's phase 0 can be written against 0.3 (build info first line, instance
 - [x] Live comparison with the OS's own tools on every runner (`tests/live.rs`), 64 threads at first use (`tests/concurrency.rs`).
 - [x] README quick start (Tier 1 first).
 
-## v0.4.0 - Extended: live readings
-API: ROOT-05, ROOT-07, ROOT-08 · PRC-02 to PRC-04, PRC-06 to PRC-10, PRC-13 to PRC-15 · CPU-07 to CPU-12, CPU-14, CPU-15, CPU-20 to CPU-25, CPU-30, CPU-31 · MEM-01 to MEM-11, MEM-13 · DSK-01 to DSK-03, DSK-06, DSK-07 · NET-01 to NET-05, NET-07 to NET-09 · HST-02, HST-03, HST-09, HST-10.
+## v0.4.0 - Extended: live readings (DONE, 2026-10-28)
+API: ROOT-05, ROOT-07, ROOT-08 · PRC-02 to PRC-10 (PRC-05 from 0.5, D-044), PRC-13 to PRC-15 · CPU-07 to CPU-12, CPU-14, CPU-15, CPU-20 to CPU-25, CPU-30 to CPU-32 (CPU-32 from 0.5, D-052) · MEM-01 to MEM-11, MEM-13 · DSK-01 to DSK-03, DSK-06, DSK-07 · NET-01 to NET-05, NET-07 to NET-09 · HST-02, HST-03, HST-09, HST-10.
 Exit: tower's memory watermark and load shedding and metrics-lib's system collector can be built on 0.4; every live reading allocation-free where promised; all container fixtures pass.
-- [ ] Fixture moved from 0.3 (D-039): `ubuntu-24.04-desktop-amd`, captured with `tests/fixtures/capture.sh` on a bare-metal Linux desktop.
-- [ ] cgroup v1 and v2 and job-object memory limits with E-1 to E-12; the container CI job (`--memory`, `--cpus`) asserts real limits; nested job objects verified.
-- [ ] CPU sampler with E-20 to E-27; per-core usage on Windows above 64 CPUs verified (D-031); counting-allocator tests for every scalar reading.
-- [ ] Disk listing with E-36 to E-39; interfaces and `interfaces_with` with E-53 to E-58.
-- [ ] Network traffic (`totals`, `traffic`, `Sampler`) and connection counts, with counter resets and wraps tested; `cpu::load()` (D-023, D-025).
-- [ ] Disk I/O rates (`io`, `IoSampler`, totals, per disk) and `process::io()`, with re-attached disks and partitions not double counted (D-029).
-- [ ] Pressure for CPU, memory, and I/O (cgroup and host), out-of-memory events, swap and paging activity, huge pages; system-wide process and open-file counts (D-029).
-- [ ] Memory with E-28 to E-35; attack tests T5, T6, T7, T8.
+- Moved to 0.5 (D-051): `ubuntu-24.04-desktop-amd`, which still needs a bare-metal Linux desktop.
+- [x] cgroup v1 and v2 and job-object memory limits with E-1 to E-12; the container CI job (`--memory`, `--cpus`, `--cpuset-cpus`) asserts real limits; nested job objects settled from Microsoft's documentation (D-053). The hybrid host fix: each controller from its v1 hierarchy first (D-046).
+- [x] CPU sampler with E-20 to E-27; per-core usage indexed by CPU number; Windows above 64 CPUs or with several processor groups is `Unsupported` per core with the total correct (D-047); counting-allocator test for every scalar reading and sampler (`tests/alloc.rs`).
+- [x] Disk listing with E-36 to E-39; interfaces and `interfaces_with` with E-53 to E-58.
+- [x] Network traffic (`totals`, `traffic`, `Sampler`) and connection counts, with counter resets and wraps tested; `cpu::load()` (D-023, D-025).
+- [x] Disk I/O rates (`io`, `IoSampler`, totals, per disk) and `process::io()`, with re-attached disks and partitions not double counted (D-029).
+- [x] Pressure for CPU, memory, and I/O (cgroup and host), out-of-memory events, swap and paging activity (Windows paging `Unsupported`, D-049), huge pages; system-wide process and open-file counts (D-029).
+- [x] Memory with E-28 to E-35; attack tests T5, T6, T7, T8 (`src/linux/hostile.rs`, which found an uptime panic, fixed).
+- [x] Fixtures recaptured with `capture.sh` v3 (the live-reading files); fuzz target `procfs` for the new parsers.
 
 ## v0.5.0 - Detection and identity
-API: OS-08 to OS-13 · CPU-13, CPU-32, CPU-40 to CPU-44 · MEM-12 · DSK-04, DSK-05 · NET-06, NET-10 · HST-05 to HST-08, HST-11 to HST-13 · VRT-01 to VRT-05 · PWR-01 to PWR-04 · PRC-05, PRC-24, PRC-25 · DEV-01 to DEV-07 · ROOT-06.
+API: OS-08 to OS-13 · CPU-13, CPU-40 to CPU-44 · MEM-12 · DSK-04, DSK-05 · NET-06, NET-10 · HST-05 to HST-08, HST-11 to HST-13 · VRT-01 to VRT-05 · PWR-01 to PWR-04 · PRC-24, PRC-25 · DEV-01 to DEV-07 · ROOT-06.
 Exit: every item above implemented and tested on Linux, macOS, Windows; `docs/SOURCES.md`, `docs/PLATFORM-NOTES.md`, `docs/ARCHITECTURE.md` complete for everything shipped so far.
+- [ ] Fixture moved from 0.4 (D-051): `ubuntu-24.04-desktop-amd`, captured with `tests/fixtures/capture.sh` on a bare-metal Linux desktop.
+- [ ] `Disk::label` on macOS (D-053).
 - [ ] Form factor, virtualization and cloud vendor (E-79 to E-91), power and each battery, time zone and locale (E-92 to E-95), hardware model, firmware and motherboard.
 - [ ] How the program was started (systemd, launchd, Windows service, container init, terminal, SSH, cron), with evidence strength.
 - [ ] DNS servers (resolv.conf, the systemd-resolved stub, SystemConfiguration, adapter lists); clock synchronization; sessions; memory modules (SMBIOS type 17).

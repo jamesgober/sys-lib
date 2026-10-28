@@ -124,7 +124,7 @@ Quirks:
 | per core | lines `cpuN` of `/proc/stat` | `host_processor_info(PROCESSOR_CPU_LOAD_INFO)` | `NtQuerySystemInformation(SystemProcessorPerformanceInformation)` |
 | states | user, nice, system, idle, iowait, irq, softirq, steal (guest and guest_nice are already in user and nice) | user, system, idle, nice | idle, kernel (includes idle), user, dpc, interrupt |
 
-Busy on Windows is `kernel + user - idle`, because kernel time includes idle; a reading where idle exceeds kernel saturates. Per-core values on Windows with more than 64 logical processors need the per-group variant of the call [verify]; until then they are `Unsupported` while the total stays correct.
+Busy on Windows is `kernel + user - idle`, because kernel time includes idle; a reading where idle exceeds kernel saturates. Per-core values on Windows with more than 64 logical processors, or more than one processor group, need the per-group variant of the call, which is not yet verified (D-047); until then they are `Unsupported` while the total stays correct.
 
 ## Memory
 
@@ -134,7 +134,7 @@ Busy on Windows is `kernel + user - idle`, because kernel time includes idle; a 
 | host free (available) | `MemAvailable` (kernel 3.14 and later; older: `MemFree + Buffers + Cached`) | `(free_count + inactive_count) × kernel page size` from `host_statistics64(HOST_VM_INFO64)`; the counts are in kernel pages (`host_page_size`), which differ from the process page size under Rosetta 2 | `ullAvailPhys` |
 | unused | `MemFree` | `free_count - speculative_count` | not exposed separately |
 | cached | `Cached + SReclaimable - Shmem` | `external_page_count × page size` | `CacheBytes` (`GetPerformanceInfo`) |
-| swap | `SwapTotal`, `SwapFree` | `vm.swapusage` (`xsw_usage`) | `CommitLimit - PhysicalTotal` (`GetPerformanceInfo`), an approximation: the commit limit covers every pagefile |
+| swap | `SwapTotal`, `SwapFree` | `vm.swapusage` (`xsw_usage`) | total `CommitLimit - PhysicalTotal`, used the commit charge above physical memory (`GetPerformanceInfo`): the commit the paging files must back, not pages written, so it can overstate paging-file use (D-049) |
 | page size | `sysconf(_SC_PAGESIZE)` | `vm.pagesize` | `GetSystemInfo().dwPageSize` |
 | pressure | PSI `/proc/pressure/memory` (kernel 4.20 and later) | `kern.memorystatus_vm_pressure_level` | `QueryMemoryResourceNotification` on a low-memory notification handle |
 
@@ -148,12 +148,12 @@ Quirks: zram devices count as swap, zswap is invisible to these counters; ZFS AR
 |---|---|---|---|
 | memory hard | minimum `memory.max` over the cgroup and its ancestors (`max` is none) | `hierarchical_memory_limit` in `memory.stat` (2^63 minus one page and anything at or above host RAM mean none) | `QueryInformationJobObject(NULL, JobObjectExtendedLimitInformation)`: `ProcessMemoryLimit`, `JobMemoryLimit` when their flags are set |
 | memory soft | `memory.high` | `memory.soft_limit_in_bytes` | none |
-| swap | `memory.swap.max` | `memory.memsw.limit_in_bytes` minus the memory limit [verify] | none |
-| memory used | `memory.current - inactive_file` (`memory.stat`) | `memory.usage_in_bytes - total_inactive_file` | `PeakProcessMemoryUsed`/job accounting [verify] |
+| swap | `memory.swap.max` | `memory.memsw.limit_in_bytes` minus the memory limit (the file exists only with swap accounting on; no fixture has it yet, so the arithmetic is unit-tested only) | none |
+| memory used | `memory.current - inactive_file` (`memory.stat`) | `memory.usage_in_bytes - total_inactive_file` | a per-process limit: this process's `PrivateUsage`; a job limit: the host's usage capped at the limit (no reliable current job usage) |
 | CPU quota | `cpu.max` (`max 100000` or `150000 100000`), minimum over ancestors | `cpu.cfs_quota_us` and `cpu.cfs_period_us` (`-1` is none) | `JobObjectCpuRateControlInformation` |
 | CPU set | `cpuset.cpus.effective` | `cpuset.cpus` | job group affinity [verify] |
 
-LXCFS: a `fuse.lxcfs` mount over `/proc/meminfo`, `/proc/stat`, or `/proc/cpuinfo` (seen in mountinfo) already shows container values; the cgroup limit is not applied a second time. Nested job objects: whether the query returns the effective minimum of nested jobs is [verify], settled by a nested-job test before 0.4. macOS has no equivalent: `mem::limit()` is `Ok(None)`.
+LXCFS: a `fuse.lxcfs` mount over `/proc/meminfo`, `/proc/stat`, or `/proc/cpuinfo` (seen in mountinfo) already shows container values; the cgroup limit is not applied a second time. Nested job objects: a query with a null handle reads the job the process is directly in; an enclosing job with a tighter limit is not seen (Windows has no call that walks up the chain), documented on `mem::limit()`. macOS has no equivalent: `mem::limit()` is `Ok(None)`.
 
 ## Disks
 
@@ -171,7 +171,7 @@ Network filesystems (`nfs`, `nfs4`, `cifs`, `smb3`, `smbfs`, `fuse.sshfs`, `9p`,
 | Reading | Linux | macOS | Windows |
 |---|---|---|---|
 | addresses and prefixes | `getifaddrs` | `getifaddrs` | `GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX)` |
-| MAC | `/sys/class/net/<if>/address` | `AF_LINK` entries (`sockaddr_dl`) of `getifaddrs` | `PhysicalAddress` |
+| MAC | the `AF_PACKET` entry of `getifaddrs` (`sockaddr_ll`) | `AF_LINK` entries (`sockaddr_dl`) of `getifaddrs` | `PhysicalAddress` |
 | MAC kind | `addr_assign_type`: 0 permanent, 1 random; 2 (stolen) and 3 (set) unknown | locally administered bit | locally administered bit |
 | state | `operstate`, `flags` | `if_flags` | `OperStatus` |
 | kind | `type` (ARPHRD), `wireless/` or `phy80211/` present for Wi-Fi | `if_data.ifi_type` | `IfType` |
@@ -254,11 +254,11 @@ Interface names from the OS are validated before they are used in a `/sys` path:
 | `mem::pressure()` | the cgroup's `memory.pressure`, else `/proc/pressure/memory` | `kern.memorystatus_vm_pressure_level` (level only) | `QueryMemoryResourceNotification` (level only) |
 | `disk::pressure()` | the cgroup's `io.pressure`, else `/proc/pressure/io` | `Ok(None)` | `Ok(None)` |
 | `mem::events()` | cgroup v2 `memory.events` (`oom_kill`, `oom`, `max`, `high`); v1 `memory.oom_control` (`oom_kill`); else `/proc/vmstat` `oom_kill` | `Ok(None)` | `Ok(None)` |
-| `mem::activity()`, `mem::Sampler` | `/proc/vmstat` `pswpin`, `pswpout`, `pgmajfault` (pages) | `vm_statistics64` `swapins`, `swapouts`, `pageins` | `NtQuerySystemInformation(SystemPerformanceInformation)` [verify against the headers]; `Unsupported` otherwise |
+| `mem::activity()`, `mem::Sampler` | `/proc/vmstat` `pswpin`, `pswpout`, `pgmajfault` (pages) | `vm_statistics64` `swapins`, `swapouts`, `pageins` | `Unsupported` (the `SYSTEM_PERFORMANCE_INFORMATION` layout cannot be checked against the headers, D-049) |
 | `mem::huge_pages()` | `/proc/meminfo` `HugePages_Total`, `_Free`, `_Rsvd`, `Hugepagesize`; `/sys/kernel/mm/transparent_hugepage/enabled` | `Ok(None)` | `GetLargePageMinimum` |
 | `mem::modules()` | SMBIOS type 17 from `/sys/firmware/dmi/tables/DMI` (mode 0400: root only) | Intel: IORegistry memory node [verify]; Apple silicon: `Unsupported` | SMBIOS type 17 from `GetSystemFirmwareTable('RSMB')` |
 
-PSI files need kernel 4.20 or later; without them the readings are `Ok(None)`. cgroup v1 has no per-cgroup pressure, so the host's is used and the result says so.
+PSI files need kernel 4.20 or later; without them the readings are `Ok(None)`. cgroup v1 has no per-cgroup pressure, so the host's is used.
 
 ## Disk I/O
 
