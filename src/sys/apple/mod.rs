@@ -2,6 +2,9 @@
 
 mod ffi;
 
+// Removed before release: every item must be this platform's own.
+pub(crate) use super::pending::*;
+
 use std::{
     ffi::{CStr, c_char, c_void},
     mem::MaybeUninit,
@@ -137,6 +140,7 @@ pub(crate) fn cpu() -> CpuFacts {
     CpuFacts {
         logical,
         physical: count(c"hw.physicalcpu_max"),
+        packages: count(c"hw.packages"),
         raw_name: sysctl_string(c"machdep.cpu.brand_string"),
         name: None,
         vendor,

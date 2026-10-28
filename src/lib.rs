@@ -82,10 +82,13 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod build;
 pub mod cpu;
+pub mod disk;
 pub mod host;
 #[cfg(feature = "instance")]
 #[cfg_attr(docsrs, doc(cfg(feature = "instance")))]
 pub mod instance;
+pub mod mem;
+pub mod net;
 pub mod os;
 pub mod process;
 
@@ -102,6 +105,7 @@ mod fuzz;
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 mod linux;
 mod parse;
+mod pressure;
 mod sys;
 mod units;
 
@@ -110,7 +114,8 @@ pub use error::{Error, Result};
 #[cfg(feature = "instance")]
 #[cfg_attr(docsrs, doc(cfg(feature = "instance")))]
 pub use instance::{Instance, InstanceId};
-pub use units::{Bytes, Percent, Units};
+pub use pressure::{Pressure, PressureLevel, Stall};
+pub use units::{Bytes, Mhz, Percent, Rate, Units};
 
 #[cfg(test)]
 mod tests {

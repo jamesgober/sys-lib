@@ -4,6 +4,9 @@
 
 mod ffi;
 
+// Removed before release: every item must be this platform's own.
+pub(crate) use super::pending::*;
+
 use std::{
     ffi::{CStr, c_char},
     mem::MaybeUninit,
@@ -79,6 +82,7 @@ pub(crate) fn cpu() -> CpuFacts {
     CpuFacts {
         logical,
         physical: t.physical,
+        packages: t.packages,
         raw_name: t.raw_name,
         name: t.arm_name,
         vendor: t.vendor,

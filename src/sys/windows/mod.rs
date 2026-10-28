@@ -2,6 +2,9 @@
 
 mod ffi;
 
+// Removed before release: every item must be this platform's own.
+pub(crate) use super::pending::*;
+
 #[cfg(feature = "guard")]
 pub(crate) use ffi::FILE_ATTRIBUTE_REPARSE_POINT;
 use std::{
@@ -223,6 +226,7 @@ pub(crate) fn cpu() -> CpuFacts {
     CpuFacts {
         logical,
         physical: physical_cores(),
+        packages: None,
         raw_name,
         name: None,
         vendor,

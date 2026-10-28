@@ -1,14 +1,16 @@
-//! Value types: [`Bytes`] and [`Percent`].
+//! Value types: [`Bytes`], [`Percent`], [`Rate`], and [`Mhz`].
 //!
-//! Both print themselves ("125.6 GiB", "32.8%") and expose exact values
-//! (`raw()`, `value()`). Formatting is deterministic, allocation-free, and for
-//! `Bytes` done entirely in integer arithmetic, so the output never depends on
+//! Each prints itself ("125.6 GiB", "32.8%", "12.5 MiB/s", "5.7 GHz") and
+//! exposes its exact value (`raw()`, `value()`, `bytes_per_sec()`). Formatting
+//! is deterministic, allocation-free, and for `Bytes`, `Rate`, and `Mhz` done
+//! entirely in integer arithmetic, so the output never depends on
 //! floating-point printing.
 
 use core::{
     cmp::Ordering,
     fmt::{self, Write as _},
     hash::{Hash, Hasher},
+    time::Duration,
 };
 
 use crate::fmt::{StackBuf, pad};
@@ -58,6 +60,7 @@ pub enum Units {
 const BINARY: [&str; 7] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
 const DECIMAL: [&str; 7] = ["B", "kB", "MB", "GB", "TB", "PB", "EB"];
 const JEDEC: [&str; 7] = ["B", "KB", "MB", "GB", "TB", "PB", "EB"];
+const BITS: [&str; 7] = ["bit", "kbit", "Mbit", "Gbit", "Tbit", "Pbit", "Ebit"];
 const MAX_PRECISION: usize = 9;
 
 impl Units {
@@ -245,11 +248,22 @@ pub(crate) fn render_bytes(
     units: Units,
     precision: Option<usize>,
 ) -> fmt::Result {
-    let base = units.base();
-    let labels = units.labels();
+    render_scaled(out, value, units.base(), units.labels(), precision, "")
+}
+
+/// `value` in the largest of `labels` (each `base` times the last) for which
+/// it is at least 1, with `suffix` after the label.
+fn render_scaled(
+    out: &mut impl fmt::Write,
+    value: u64,
+    base: u128,
+    labels: &[&str; 7],
+    precision: Option<usize>,
+    suffix: &str,
+) -> fmt::Result {
     let v = u128::from(value);
     if v < base {
-        return write!(out, "{value} {}", labels[0]);
+        return write!(out, "{value} {}{suffix}", labels[0]);
     }
     let digits = precision.unwrap_or(1).min(MAX_PRECISION);
     let scale = 10u128.pow(digits as u32);
@@ -275,7 +289,152 @@ pub(crate) fn render_bytes(
     if keep_fraction {
         write!(out, ".{fraction:0width$}", width = digits)?;
     }
-    write!(out, " {}", labels[index])
+    write!(out, " {}{suffix}", labels[index])
+}
+
+/// A transfer rate in bytes per second, for network download and upload and
+/// disk read and write.
+///
+/// `{}` prints like [`Bytes`] with `/s` (`12.5 MiB/s`), `{:#}` in decimal
+/// units (`13.1 MB/s`), and [`bits`](Rate::bits) the bit rate network links
+/// are sold in (`104.9 Mbit/s`). The same precision, width, and rounding rules
+/// as `Bytes` apply.
+///
+/// ```
+/// use sys_lib::Rate;
+///
+/// let r = Rate::from_bytes_per_sec(13_107_200);
+/// assert_eq!(r.to_string(), "12.5 MiB/s");
+/// assert_eq!(format!("{r:#}"), "13.1 MB/s");
+/// assert_eq!(r.bits().to_string(), "104.9 Mbit/s");
+/// assert_eq!(Rate::ZERO.to_string(), "0 B/s");
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Rate(u64);
+
+impl Rate {
+    /// Nothing moving.
+    pub const ZERO: Rate = Rate(0);
+
+    /// `n` bytes per second.
+    #[must_use]
+    pub const fn from_bytes_per_sec(n: u64) -> Rate {
+        Rate(n)
+    }
+
+    /// The rate in bytes per second.
+    #[must_use]
+    pub const fn bytes_per_sec(self) -> u64 {
+        self.0
+    }
+
+    /// The rate in bits per second, saturating at `u64::MAX`.
+    #[must_use]
+    pub const fn bits_per_sec(self) -> u64 {
+        self.0.saturating_mul(8)
+    }
+
+    /// `bytes` moved over `interval`, rounded to the nearest byte per second;
+    /// zero for an empty interval, saturating at `u64::MAX`.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use sys_lib::{Bytes, Rate};
+    ///
+    /// let r = Rate::per(Bytes::from_mib(25), Duration::from_secs(2));
+    /// assert_eq!(r.to_string(), "12.5 MiB/s");
+    /// assert_eq!(Rate::per(Bytes::new(5), Duration::ZERO), Rate::ZERO);
+    /// ```
+    #[must_use]
+    pub fn per(bytes: Bytes, interval: Duration) -> Rate {
+        Rate::from_delta(bytes.raw(), interval)
+    }
+
+    /// `delta` bytes over `interval`, in integer arithmetic.
+    pub(crate) fn from_delta(delta: u64, interval: Duration) -> Rate {
+        let nanos = interval.as_nanos();
+        if nanos == 0 {
+            return Rate::ZERO;
+        }
+        let per_sec = round_div(u128::from(delta) * 1_000_000_000, nanos);
+        Rate(u64::try_from(per_sec).unwrap_or(u64::MAX))
+    }
+
+    /// Formats the bit rate with SI labels: `104.9 Mbit/s`.
+    pub fn bits(self) -> impl fmt::Display {
+        RateBits(self)
+    }
+}
+
+impl fmt::Display for Rate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let units = if f.alternate() {
+            Units::Decimal
+        } else {
+            Units::Binary
+        };
+        let mut buf = StackBuf::<48>::new();
+        render_scaled(
+            &mut buf,
+            self.0,
+            units.base(),
+            units.labels(),
+            f.precision(),
+            "/s",
+        )?;
+        pad(f, buf.as_str())
+    }
+}
+
+impl fmt::Debug for Rate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Rate({}/s)", self.0)
+    }
+}
+
+struct RateBits(Rate);
+
+impl fmt::Display for RateBits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut buf = StackBuf::<48>::new();
+        render_scaled(
+            &mut buf,
+            self.0.bits_per_sec(),
+            1000,
+            &BITS,
+            f.precision(),
+            "/s",
+        )?;
+        pad(f, buf.as_str())
+    }
+}
+
+/// A clock frequency in megahertz.
+///
+/// Prints `GHz` with one decimal place at or above 1000 MHz (`5.7 GHz`,
+/// `3.0 GHz`) and whole `MHz` below (`800 MHz`).
+///
+/// ```
+/// use sys_lib::Mhz;
+///
+/// assert_eq!(Mhz(5_700).to_string(), "5.7 GHz");
+/// assert_eq!(Mhz(3_000).to_string(), "3.0 GHz");
+/// assert_eq!(Mhz(800).to_string(), "800 MHz");
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Mhz(pub u32);
+
+impl fmt::Display for Mhz {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut buf = StackBuf::<24>::new();
+        if self.0 >= 1000 {
+            let tenths = (u64::from(self.0) + 50) / 100;
+            write!(buf, "{}.{} GHz", tenths / 10, tenths % 10)?;
+        } else {
+            write!(buf, "{} MHz", self.0)?;
+        }
+        pad(f, buf.as_str())
+    }
 }
 
 /// `numerator / divisor`, rounded half away from zero (both are non-negative).
@@ -321,6 +480,15 @@ impl Percent {
         }
         let tenths = round_div(u128::from(part) * 1000, u128::from(whole)).min(1000);
         // At most 1000, so the conversion is exact.
+        Percent(tenths as f32 / 10.0)
+    }
+
+    /// `part` of `whole` for wide counters (nanoseconds of CPU time).
+    pub(crate) fn from_ratio_u128(part: u128, whole: u128) -> Percent {
+        if whole == 0 {
+            return Percent::ZERO;
+        }
+        let tenths = round_div(part.saturating_mul(1000), whole).min(1000);
         Percent(tenths as f32 / 10.0)
     }
 
@@ -400,6 +568,54 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn test_rate_display_and_bits() {
+        let r = Rate::from_bytes_per_sec(13_107_200);
+        assert_eq!(r.to_string(), "12.5 MiB/s");
+        assert_eq!(format!("{r:#}"), "13.1 MB/s");
+        assert_eq!(r.bits().to_string(), "104.9 Mbit/s");
+        assert_eq!(format!("{:.2}", r.bits()), "104.86 Mbit/s");
+        assert_eq!(format!("{r:?}"), "Rate(13107200/s)");
+        assert_eq!(
+            Rate::from_bytes_per_sec(100).bits().to_string(),
+            "800 bit/s"
+        );
+        assert_eq!(Rate::from_bytes_per_sec(u64::MAX).bits_per_sec(), u64::MAX);
+        assert_eq!(format!("{:>12}", Rate::ZERO), "       0 B/s");
+    }
+
+    #[test]
+    fn test_rate_from_delta_rounds_and_saturates() {
+        assert_eq!(
+            Rate::from_delta(1000, Duration::from_millis(500)).bytes_per_sec(),
+            2000
+        );
+        assert_eq!(
+            Rate::from_delta(1, Duration::from_secs(3)).bytes_per_sec(),
+            0
+        );
+        assert_eq!(
+            Rate::from_delta(2, Duration::from_secs(3)).bytes_per_sec(),
+            1
+        );
+        assert_eq!(
+            Rate::from_delta(u64::MAX, Duration::from_nanos(1)),
+            Rate(u64::MAX)
+        );
+        assert_eq!(Rate::from_delta(7, Duration::ZERO), Rate::ZERO);
+    }
+
+    #[test]
+    fn test_mhz_display() {
+        assert_eq!(Mhz(5_700).to_string(), "5.7 GHz");
+        assert_eq!(Mhz(999).to_string(), "999 MHz");
+        assert_eq!(Mhz(1_000).to_string(), "1.0 GHz");
+        assert_eq!(Mhz(2_449).to_string(), "2.4 GHz");
+        assert_eq!(Mhz(2_450).to_string(), "2.5 GHz");
+        assert_eq!(Mhz(u32::MAX).to_string(), "4294967.3 GHz");
+        assert_eq!(Mhz(0).to_string(), "0 MHz");
+    }
 
     #[test]
     fn test_bytes_display_examples_from_the_api() {
