@@ -5,26 +5,17 @@ mod disk;
 mod ffi;
 mod host;
 mod mem;
+mod net;
 mod process;
 
-// Removed before release: every item must be this platform's own.
-pub(crate) use super::pending::*;
-
-pub(crate) use cpu::{
-    CPU_STATES, CPU_TICK, cpu, cpu_available, cpu_online, cpu_pressure, cpu_quota, cpu_times,
-    cpu_times_per_core, current_frequency, frequency, load, processor_is_64bit,
-};
-pub(crate) use disk::{disk_io_counters, disk_io_totals, disk_pressure, disk_space, disks};
+pub(crate) use cpu::*;
+pub(crate) use disk::*;
 #[cfg(feature = "guard")]
 pub(crate) use ffi::FILE_ATTRIBUTE_REPARSE_POINT;
-pub(crate) use host::{boot_time, host_open_files, processes, uptime};
-pub(crate) use mem::{huge_pages, mem_events, mem_pressure, memory, page_size, paging};
-#[cfg(all(test, feature = "guard"))]
-pub(crate) use process::thread_count;
-pub(crate) use process::{
-    cpu_time, limits, memory_detail, open_files, parent_id, peak_memory, process_io,
-    process_memory, started_at, threads,
-};
+pub(crate) use host::*;
+pub(crate) use mem::*;
+pub(crate) use net::*;
+pub(crate) use process::*;
 use std::{
     ffi::c_void,
     mem::{MaybeUninit, size_of},
