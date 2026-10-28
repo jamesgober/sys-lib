@@ -12,10 +12,11 @@ use crate::{
 };
 
 /// Filesystems that report on the kernel, not on storage: skipped unless
-/// `include_pseudo`. `overlay` counts as pseudo except as the root (a
-/// container's root filesystem).
+/// `include_pseudo`. `overlay` and `rootfs` count as pseudo except as the
+/// root (a container's root filesystem; an initramfs system).
 const PSEUDO: &[&[u8]] = &[
     b"proc",
+    b"rootfs",
     b"sysfs",
     b"cgroup",
     b"cgroup2",
@@ -137,7 +138,8 @@ pub(crate) fn mounts(root: &Root, options: &ListOptions) -> Result<Vec<MountEntr
             };
             let is_root = &*m.mount_point == b"/";
             let network = NETWORK.contains(&m.fstype);
-            let pseudo = PSEUDO.contains(&m.fstype) && !(is_root && m.fstype == b"overlay");
+            let pseudo = PSEUDO.contains(&m.fstype)
+                && !(is_root && matches!(m.fstype, b"overlay" | b"rootfs"));
             if (network && !options.include_network) || (pseudo && !options.include_pseudo) {
                 return ControlFlow::Continue(());
             }
@@ -278,8 +280,9 @@ mod tests {
             "{m:?}"
         );
         assert!(
-            m.iter()
-                .all(|e| !e.network && e.filesystem != "tmpfs" && e.filesystem != "proc")
+            m.iter().all(
+                |e| !e.network && !matches!(e.filesystem.as_str(), "tmpfs" | "proc" | "rootfs")
+            )
         );
         let mut devs: Vec<_> = m.iter().map(|e| e.dev.clone()).collect();
         devs.sort();
