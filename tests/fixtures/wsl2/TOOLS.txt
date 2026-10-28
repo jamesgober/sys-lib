@@ -19,12 +19,12 @@
 
 ## free -b
                total        used        free      shared  buff/cache   available
-Mem:     67215908864 17481060352 46562426880     3727360  3830194176 49734848512
+Mem:     67215917056 11960680448 46540591104     3731456  9372446720 55255236608
 Swap:    17179869184           0 17179869184
 
 ## df -B1 --output=source,fstype,size,used,avail,target /
 Filesystem     Type     1B-blocks         Used        Avail Mounted on
-/dev/sdd       ext4 1081101176832 601595232256 424513589248 /
+/dev/sdd       ext4 1081101176832 154828828672 871279992832 /
 
 ## uname -srvmo
 Linux 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 GNU/Linux

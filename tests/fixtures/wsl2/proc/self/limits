@@ -5,12 +5,12 @@ Max data size             unlimited            unlimited            bytes
 Max stack size            8388608              unlimited            bytes     
 Max core file size        0                    unlimited            bytes     
 Max resident set          unlimited            unlimited            bytes     
-Max processes             256368               256368               processes 
+Max processes             256369               256369               processes 
 Max open files            10240                1048576              files     
 Max locked memory         67108864             67108864             bytes     
 Max address space         unlimited            unlimited            bytes     
 Max file locks            unlimited            unlimited            locks     
-Max pending signals       256368               256368               signals   
+Max pending signals       256369               256369               signals   
 Max msgqueue size         819200               819200               bytes     
 Max nice priority         0                    0                    
 Max realtime priority     0                    0                    

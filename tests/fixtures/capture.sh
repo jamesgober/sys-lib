@@ -26,7 +26,7 @@
 set -euo pipefail
 export LC_ALL=C
 
-readonly SCRIPT_VERSION=2
+readonly SCRIPT_VERSION=3
 readonly MAX_BYTES=1048576
 
 die() { echo "capture.sh: $*" >&2; exit 1; }
@@ -81,11 +81,12 @@ each() {
 }
 
 # --- /proc --------------------------------------------------------------------
-for f in meminfo stat loadavg uptime cpuinfo pressure/memory pressure/cpu \
-         net/dev net/route net/ipv6_route \
+for f in meminfo stat loadavg uptime cpuinfo vmstat diskstats \
+         pressure/memory pressure/cpu pressure/io \
+         net/dev net/route net/ipv6_route net/snmp net/sockstat net/sockstat6 \
          sys/kernel/osrelease sys/kernel/ostype sys/kernel/version sys/kernel/hostname \
-         xen/capabilities 1/cgroup \
-         self/status self/cgroup self/mountinfo self/statm self/stat self/limits; do
+         sys/fs/file-nr xen/capabilities 1/cgroup \
+         self/status self/cgroup self/mountinfo self/statm self/stat self/limits self/io; do
     copy "/proc/$f"
 done
 mark /proc/sys/fs/binfmt_misc/WSLInterop
@@ -119,19 +120,21 @@ for dir in /sys/class/net/*; do
         rx_dropped tx_dropped
 done
 each "/sys/class/power_supply/*" type scope online status capacity uevent
-each "/sys/block/*" removable
+each "/sys/block/*" removable dev
 each "/sys/block/*/queue" rotational
 # DMI: the world-readable files only (0444); serials and UUIDs are 0400 and never copied.
 each /sys/class/dmi/id chassis_type sys_vendor product_name product_family product_version \
     board_vendor board_name bios_vendor
 copy /sys/firmware/acpi/pm_profile
 copy /sys/hypervisor/type
+copy /sys/kernel/mm/transparent_hugepage/enabled
 
 # --- cgroups: the files of this process's cgroup and every ancestor ----------------
 cgroup_files_v2="cgroup.controllers memory.max memory.high memory.current memory.stat memory.swap.max \
-memory.pressure cpu.max cpuset.cpus.effective"
+memory.events memory.pressure cpu.max cpu.pressure io.pressure cpuset.cpus.effective"
 cgroup_files_v1="memory.stat memory.usage_in_bytes memory.limit_in_bytes memory.soft_limit_in_bytes \
-memory.memsw.limit_in_bytes cpu.cfs_quota_us cpu.cfs_period_us cpuset.cpus cpuset.effective_cpus"
+memory.memsw.limit_in_bytes memory.oom_control cpu.cfs_quota_us cpu.cfs_period_us cpuset.cpus \
+cpuset.effective_cpus"
 while IFS=' ' read -r _ _ _ root mount _ rest; do
     # The optional fields before " - " may be absent (Docker), so match on a
     # leading space added here rather than on the field after `options`.
