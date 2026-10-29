@@ -5,7 +5,24 @@
 /// "CPU", core-count suffixes, integrated-graphics suffixes, and repeated
 /// spaces go. The vendor-specific rules apply only to Intel, AMD, Hygon, and
 /// Zhaoxin names, so names like "QEMU Virtual CPU version 2.5+" stay intact.
+///
+/// Removing one part can expose another ("8-Core 16-Cores", "@ 3GHz
+/// Processor"), so the rules run until nothing changes: a cleaned name never
+/// cleans further. Each pass that changes the name shortens it or turns its
+/// whitespace into single spaces, so the loop ends.
 pub(crate) fn clean(raw: &str) -> String {
+    let mut name = clean_once(raw);
+    loop {
+        let next = clean_once(&name);
+        if next == name {
+            return name;
+        }
+        name = next;
+    }
+}
+
+/// One pass of [`clean`]'s rules.
+fn clean_once(raw: &str) -> String {
     // Marks vanish rather than becoming spaces: "FX(tm)-8350" is "FX-8350".
     // Repeated until none is left, since removing one can join another
     // ("(T(TM)M)"), so a cleaned name never cleans further (fuzzing).
@@ -341,6 +358,10 @@ mod tests {
             String::from_utf8_lossy(b"09<\x15.0\xe0\xff\xff\xff@@\xc780ghz@mhz").into_owned();
         let once = clean(&fuzzed);
         assert_eq!(clean(&once), once);
+        // Found by fuzzing: one suffix hiding another.
+        assert_eq!(clean("AMD X 8-core 16-Cores"), "AMD X");
+        assert_eq!(clean("Intel X @ 3.0GHz Processor"), "Intel X");
+        assert_eq!(clean("AMD X with Radeon Graphics CPU"), "AMD X");
     }
 
     #[test]

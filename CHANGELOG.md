@@ -61,6 +61,13 @@ pressure and out-of-memory events, and this process's resources.
   (D-046). Found by the recaptured fixtures.
 - An enormous uptime value in `/proc/uptime` panicked in the duration
   conversion; it is now reported as malformed. Found by the hostile tree.
+- macOS CPU usage read `host_statistics`, which the kernel rate-limits: a
+  reading taken soon after another could show no time passing. The totals
+  now come from `host_processor_info`, summed over every processor. Found
+  by the macOS CI runners.
+- `cpu::name()` cleaning ran its rules once, so removing one suffix could
+  leave another ("8-core 16-Cores"); the rules now run until nothing
+  changes. Found by fuzzing.
 - WSL's `rootfs` mount at `/init` was listed as a disk; `rootfs` is now a
   pseudo filesystem unless it is the root (D-050).
 

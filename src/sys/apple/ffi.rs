@@ -383,17 +383,17 @@ layout!(VmStatistics64, size = 152, align = 8);
 pub(crate) const VM_STATISTICS64_COUNT: u32 =
     (core::mem::size_of::<VmStatistics64>() / core::mem::size_of::<u32>()) as u32;
 
-/// `host_cpu_load_info` and `processor_cpu_load_info` (mach/host_info.h,
-/// mach/processor_info.h): ticks per CPU state.
+/// `processor_cpu_load_info` (mach/processor_info.h): ticks per CPU state.
+/// `host_processor_info` returns an array of these, read as a flat array of
+/// `CPU_STATE_MAX` integers per processor; the struct pins that layout.
+#[cfg(test)]
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub(crate) struct CpuLoadInfo {
     pub(crate) ticks: [u32; CPU_STATE_MAX],
 }
+#[cfg(test)]
 layout!(CpuLoadInfo, size = 16, align = 4);
-
-/// `HOST_CPU_LOAD_INFO_COUNT`.
-pub(crate) const CPU_LOAD_INFO_COUNT: u32 = CPU_STATE_MAX as u32;
 
 // CPU states (mach/machine.h).
 pub(crate) const CPU_STATE_USER: usize = 0;
@@ -403,7 +403,6 @@ pub(crate) const CPU_STATE_NICE: usize = 3;
 pub(crate) const CPU_STATE_MAX: usize = 4;
 
 // Flavors (mach/host_info.h, mach/processor_info.h, mach/task_info.h).
-pub(crate) const HOST_CPU_LOAD_INFO: c_int = 3;
 pub(crate) const HOST_VM_INFO64: c_int = 4;
 pub(crate) const PROCESSOR_CPU_LOAD_INFO: c_int = 2;
 pub(crate) const PROCESSOR_SET_LOAD_INFO: c_int = 4;
@@ -604,12 +603,6 @@ unsafe extern "C" {
     pub(crate) safe static mach_task_self_: MachPort;
     pub(crate) safe fn mach_host_self() -> MachPort;
     pub(crate) fn mach_port_deallocate(task: MachPort, name: MachPort) -> KernReturn;
-    pub(crate) fn host_statistics(
-        host: MachPort,
-        flavor: c_int,
-        info: *mut c_int,
-        count: *mut u32,
-    ) -> KernReturn;
     pub(crate) fn host_statistics64(
         host: MachPort,
         flavor: c_int,
@@ -817,7 +810,6 @@ mod tests {
         compressor_page_count => compressor_page_count, throttled_count => throttled_count,
         external_page_count => external_page_count, internal_page_count => internal_page_count,
         total_uncompressed_pages_in_compressor => total_uncompressed_pages_in_compressor);
-    same_layout!(CpuLoadInfo, libc::host_cpu_load_info, ticks => cpu_ticks);
     same_layout!(CpuLoadInfo, libc::processor_cpu_load_info, ticks => cpu_ticks);
     same_layout!(TimeValue, libc::time_value_t, seconds => seconds, microseconds => microseconds);
     same_layout!(MachTaskBasicInfo, libc::mach_task_basic_info,
@@ -887,7 +879,6 @@ mod tests {
         assert!(CTL_NET == libc::CTL_NET);
         assert!(PF_ROUTE == libc::PF_ROUTE);
         assert!(NET_RT_IFLIST2 == libc::NET_RT_IFLIST2);
-        assert!(HOST_CPU_LOAD_INFO == libc::HOST_CPU_LOAD_INFO);
         assert!(HOST_VM_INFO64 == libc::HOST_VM_INFO64);
         assert!(PROCESSOR_CPU_LOAD_INFO == libc::PROCESSOR_CPU_LOAD_INFO);
         assert!(MACH_TASK_BASIC_INFO == libc::MACH_TASK_BASIC_INFO);

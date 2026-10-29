@@ -1,5 +1,5 @@
-//! CPU: Mach tick counters (`host_statistics`, `host_processor_info`), the load
-//! average, and the frequency sysctls of Intel Macs.
+//! CPU: Mach tick counters (`host_processor_info`), the load average, and the
+//! frequency sysctls of Intel Macs.
 
 use core::{ffi::c_int, time::Duration};
 
@@ -37,34 +37,13 @@ fn times_from(t: [u64; ffi::CPU_STATE_MAX]) -> Times {
     }
 }
 
-/// The machine's counters: the kernel's sum over every processor. The sum is
-/// 32-bit and wraps (every 50 days of idle time on a 10-core machine); the
-/// samplers see a wrap as counters going backwards and re-base (E-20).
+/// The machine's counters: the sum of every processor's, in 64 bits. Not
+/// `host_statistics(HOST_CPU_LOAD_INFO)`: the kernel rate-limits that call
+/// for ordinary processes and answers a frequent caller with its last
+/// figures, so two readings a moment apart would show no time passing.
 pub(crate) fn cpu_times() -> Result<Times> {
-    let host = SendRight::host(WHAT)?;
-    let mut info = ffi::CpuLoadInfo::default();
-    let mut count = ffi::CPU_LOAD_INFO_COUNT;
-    // SAFETY: `info` is `count` `natural_t` units of writable memory; the
-    // kernel writes at most that many and updates `count`.
-    let kr = unsafe {
-        ffi::host_statistics(
-            host.0,
-            ffi::HOST_CPU_LOAD_INFO,
-            (&raw mut info).cast::<c_int>(),
-            &raw mut count,
-        )
-    };
-    if kr != ffi::KERN_SUCCESS {
-        return Err(kern_error(WHAT, "host_statistics", kr));
-    }
-    if count < ffi::CPU_LOAD_INFO_COUNT {
-        return Err(Error::Malformed {
-            what: WHAT,
-            source: "host_statistics",
-            line: None,
-        });
-    }
-    Ok(times_from(info.ticks.map(u64::from)))
+    let (info, cpus) = load_info()?;
+    Ok(split_cores(info.as_slice(), cpus, &mut [])?.0)
 }
 
 /// The array `host_processor_info` maps into this task, returned with
@@ -99,6 +78,19 @@ impl Drop for ProcessorInfo {
 }
 
 pub(crate) fn cpu_times_per_core(out: &mut [Times]) -> Result<(Times, usize)> {
+    let (info, cpus) = load_info()?;
+    if cpus > out.len() {
+        return Err(Error::TooLarge {
+            what: "per-core CPU times",
+            limit: out.len() as u64,
+        });
+    }
+    split_cores(info.as_slice(), cpus, out)
+}
+
+/// Every processor's tick counters (`host_processor_info`), and how many
+/// processors there are.
+fn load_info() -> Result<(ProcessorInfo, usize)> {
     let host = SendRight::host(WHAT)?;
     let mut cpus = 0u32;
     let mut addr: *mut c_int = core::ptr::null_mut();
@@ -117,12 +109,12 @@ pub(crate) fn cpu_times_per_core(out: &mut [Times]) -> Result<(Times, usize)> {
     if kr != ffi::KERN_SUCCESS {
         return Err(kern_error(WHAT, "host_processor_info", kr));
     }
-    let info = ProcessorInfo { addr, len };
-    split_cores(info.as_slice(), cpus as usize, out)
+    Ok((ProcessorInfo { addr, len }, cpus as usize))
 }
 
-/// Each core's counters from the flat array (`CPU_STATE_MAX` ticks per core)
-/// into `out`, and their sum, in 64 bits so the total does not wrap.
+/// The sum of every core's counters in the flat array (`CPU_STATE_MAX` ticks
+/// per core), in 64 bits so the total does not wrap, with each core's
+/// counters written to `out` as far as it reaches.
 fn split_cores(ticks: &[c_int], cores: usize, out: &mut [Times]) -> Result<(Times, usize)> {
     if cores
         .checked_mul(ffi::CPU_STATE_MAX)
@@ -134,21 +126,18 @@ fn split_cores(ticks: &[c_int], cores: usize, out: &mut [Times]) -> Result<(Time
             line: None,
         });
     }
-    if cores > out.len() {
-        return Err(Error::TooLarge {
-            what: "per-core CPU times",
-            limit: out.len() as u64,
-        });
-    }
     let mut total = [0u64; ffi::CPU_STATE_MAX];
     let (per_core, _) = ticks.as_chunks::<{ ffi::CPU_STATE_MAX }>();
-    for (core, slot) in per_core.iter().take(cores).zip(out.iter_mut()) {
+    let mut slots = out.iter_mut();
+    for core in per_core.iter().take(cores) {
         let mut t = [0u64; ffi::CPU_STATE_MAX];
         for (state, &n) in core.iter().enumerate() {
             t[state] = u64::from(n.cast_unsigned());
             total[state] = total[state].saturating_add(t[state]);
         }
-        *slot = times_from(t);
+        if let Some(slot) = slots.next() {
+            *slot = times_from(t);
+        }
     }
     Ok((times_from(total), cores))
 }
@@ -231,13 +220,19 @@ mod tests {
     }
 
     #[test]
-    fn test_cpu_apple_split_cores_short_buffer_too_large() {
-        let ticks = [1; 8];
+    fn test_cpu_apple_split_cores_short_buffer_still_sums_every_core() {
+        // The total (`cpu_times` passes no buffer) counts every core; only
+        // as many cores as fit are written.
+        let ticks = [1, 2, 3, 4, 10, 20, 30, 40];
+        let (total, n) = split_cores(&ticks, 2, &mut []).unwrap();
+        assert_eq!(
+            (n, total.user, total.nice),
+            (2, Duration::from_millis(110), Duration::from_millis(440))
+        );
         let mut out = [Times::default(); 1];
-        assert!(matches!(
-            split_cores(&ticks, 2, &mut out),
-            Err(Error::TooLarge { limit: 1, .. })
-        ));
+        let (again, _) = split_cores(&ticks, 2, &mut out).unwrap();
+        assert_eq!(again, total);
+        assert_eq!(out[0].user, Duration::from_millis(10));
     }
 
     #[test]

@@ -120,7 +120,7 @@ Quirks:
 
 | Reading | Linux | macOS | Windows |
 |---|---|---|---|
-| total | line `cpu` of `/proc/stat` (only the first line is read) | `host_statistics(HOST_CPU_LOAD_INFO)` (32-bit tick counters that wrap; the sampler re-bases on a wrap, E-20) | `GetSystemTimes` (idle, kernel, user) |
+| total | line `cpu` of `/proc/stat` (only the first line is read) | the sum of `host_processor_info(PROCESSOR_CPU_LOAD_INFO)` over every processor, in 64 bits; not `host_statistics(HOST_CPU_LOAD_INFO)`, which the kernel rate-limits for ordinary processes by answering frequent callers with its last figures (two readings a moment apart showed no time passing) | `GetSystemTimes` (idle, kernel, user) |
 | per core | lines `cpuN` of `/proc/stat` | `host_processor_info(PROCESSOR_CPU_LOAD_INFO)` | `NtQuerySystemInformation(SystemProcessorPerformanceInformation)` |
 | states | user, nice, system, idle, iowait, irq, softirq, steal (guest and guest_nice are already in user and nice) | user, system, idle, nice | idle, kernel (includes idle), user, dpc, interrupt |
 
@@ -131,7 +131,7 @@ Busy on Windows is `kernel + user - idle`, because kernel time includes idle; a 
 | Value | Linux | macOS | Windows |
 |---|---|---|---|
 | host total | `MemTotal` in `/proc/meminfo` | `hw.memsize` | `ullTotalPhys` (`GlobalMemoryStatusEx`) |
-| host free (available) | `MemAvailable` (kernel 3.14 and later; older: `MemFree + Buffers + Cached`) | `(free_count + inactive_count) × kernel page size` from `host_statistics64(HOST_VM_INFO64)`; the counts are in kernel pages (`host_page_size`), which differ from the process page size under Rosetta 2 | `ullAvailPhys` |
+| host free (available) | `MemAvailable` (kernel 3.14 and later; older: `MemFree + Buffers + Cached`) | `(free_count + inactive_count) × kernel page size` from `host_statistics64(HOST_VM_INFO64)`; the counts are in kernel pages (`host_page_size`), which differ from the process page size under Rosetta 2. The kernel rate-limits `host_statistics64` for ordinary processes too, so a process reading memory many times a second can be given figures up to a moment old | `ullAvailPhys` |
 | unused | `MemFree` | `free_count - speculative_count` | not exposed separately |
 | cached | `Cached + SReclaimable - Shmem` | `external_page_count × page size` | `CacheBytes` (`GetPerformanceInfo`) |
 | swap | `SwapTotal`, `SwapFree` | `vm.swapusage` (`xsw_usage`) | total `CommitLimit - PhysicalTotal`, used the commit charge above physical memory (`GetPerformanceInfo`): the commit the paging files must back, not pages written, so it can overstate paging-file use (D-049) |
