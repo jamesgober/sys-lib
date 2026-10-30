@@ -5,8 +5,8 @@
 81 80 0:38 / /mnt/wslg rw,relatime shared:2 - tmpfs none rw
 82 81 8:48 / /mnt/wslg/distro ro,relatime shared:3 - ext4 /dev/sdd rw,discard,errors=remount-ro,data=ordered
 108 80 0:55 / /usr/lib/wsl/lib rw,nosuid,nodev,noatime - overlay none rw,lowerdir=/gpu_lib_packaged:/gpu_lib_inbox,upperdir=/gpu_lib/rw/upper,workdir=/gpu_lib/rw/work,uuid=on
-109 80 0:2 /init /init ro - rootfs rootfs rw,size=32815228k,nr_inodes=8203807
-110 80 0:5 / /dev rw,nosuid,relatime shared:14 - devtmpfs none rw,size=32815228k,nr_inodes=8203807,mode=755
+109 80 0:2 /init /init ro - rootfs rootfs rw,size=32815232k,nr_inodes=8203808
+110 80 0:5 / /dev rw,nosuid,relatime shared:14 - devtmpfs none rw,size=32815232k,nr_inodes=8203808,mode=755
 111 80 0:22 / /sys rw,nosuid,nodev,noexec,noatime shared:15 - sysfs sysfs rw
 112 80 0:59 / /proc rw,nosuid,nodev,noexec,noatime shared:16 - proc proc rw
 113 110 0:60 / /dev/pts rw,nosuid,noexec,noatime shared:17 - devpts devpts rw,gid=5,mode=620,ptmxmode=000
@@ -29,5 +29,5 @@
 136 111 0:12 / /sys/kernel/tracing rw,nosuid,nodev,noexec,relatime shared:29 - tracefs tracefs rw
 137 111 0:71 / /sys/fs/fuse/connections rw,nosuid,nodev,noexec,relatime shared:30 - fusectl fusectl rw
 138 111 0:72 / /sys/kernel/config rw,nosuid,nodev,noexec,relatime shared:31 - configfs configfs rw
-265 132 0:82 / /run/user/1000 rw,nosuid,nodev,relatime shared:289 - tmpfs tmpfs rw,size=6564052k,nr_inodes=1641013,mode=700,uid=1000,gid=1000
-275 81 0:82 / /mnt/wslg/run/user/1000 rw,nosuid,nodev,relatime shared:289 - tmpfs tmpfs rw,size=6564052k,nr_inodes=1641013,mode=700,uid=1000,gid=1000
+264 132 0:82 / /run/user/1000 rw,nosuid,nodev,relatime shared:289 - tmpfs tmpfs rw,size=6564052k,nr_inodes=1641013,mode=700,uid=1000,gid=1000
+266 81 0:82 / /mnt/wslg/run/user/1000 rw,nosuid,nodev,relatime shared:289 - tmpfs tmpfs rw,size=6564052k,nr_inodes=1641013,mode=700,uid=1000,gid=1000

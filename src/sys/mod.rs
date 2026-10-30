@@ -63,6 +63,10 @@ macro_rules! same_layout {
     };
 }
 
+// The live-reading interface, answered `Unsupported` until a platform defines
+// its own (see the module's documentation).
+mod pending;
+
 // Linux and Android on 64-bit targets. Struct layouts are verified for LP64
 // (glibc, musl, bionic); a 32-bit Linux target has no verified layout yet and
 // gets no implementation (D-003).
@@ -160,6 +164,8 @@ pub(crate) struct CpuFacts {
     pub(crate) logical: usize,
     /// Physical cores, when the platform can tell.
     pub(crate) physical: Option<usize>,
+    /// Processor packages (sockets), when the platform can tell.
+    pub(crate) packages: Option<usize>,
     /// The brand string as reported, to be cleaned.
     pub(crate) raw_name: Option<String>,
     /// A name that needs no cleaning (ARM cores named from their part numbers).

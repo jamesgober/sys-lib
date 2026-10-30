@@ -22,6 +22,7 @@ pub(crate) mod os_release;
 #[cfg_attr(not(feature = "guard"), allow(dead_code))] // the guard's pid file
 pub(crate) mod pid_file;
 pub(crate) mod proc_status;
+pub(crate) mod procfs;
 pub(crate) mod release;
 pub(crate) mod version;
 

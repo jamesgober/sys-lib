@@ -19,13 +19,13 @@
 
 ## free -b
                total        used        free      shared  buff/cache   available
-Mem:     16766414848  1042661376 13333487616    44408832  2774585344 15723753472
+Mem:     16760344576   998039552 15007862784    45793280  1104773120 15762305024
 Swap:     3221221376           0  3221221376
 
 ## df -B1 --output=source,fstype,size,used,avail,target /
 Filesystem     Type       1B-blocks        Used       Avail Mounted on
-overlay        overlay 154894188544 62867529728 92009881600 /
+overlay        overlay 154894188544 63093972992 91783438336 /
 
 ## uname -srvmo
-Linux 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 GNU/Linux
+Linux 7.0.0-1017-azure #17~24.04.1-Ubuntu SMP PREEMPT Thu Sep 24 18:46:57 UTC 2026 x86_64 GNU/Linux
 

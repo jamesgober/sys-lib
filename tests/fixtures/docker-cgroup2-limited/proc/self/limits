@@ -10,7 +10,7 @@ Max open files            65536                65536                files
 Max locked memory         8388608              8388608              bytes     
 Max address space         unlimited            unlimited            bytes     
 Max file locks            unlimited            unlimited            locks     
-Max pending signals       63795                63795                signals   
+Max pending signals       58121                58121                signals   
 Max msgqueue size         819200               819200               bytes     
 Max nice priority         0                    0                    
 Max realtime priority     0                    0                    

@@ -202,6 +202,208 @@ fn test_live_windows_matches_cim_and_dotnet() {
     );
 }
 
+/// `a` and `b` agree to within 2% of the larger plus `slack` bytes: memory
+/// and free space move between the two readings (PLAN.md 19.1).
+#[allow(dead_code)]
+fn close(a: u64, b: u64, slack: u64) -> bool {
+    a.abs_diff(b) <= a.max(b) / 50 + slack
+}
+
+#[allow(dead_code)]
+const MIB: u64 = 1 << 20;
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_live_linux_memory_disk_and_uptime_match_the_tools() {
+    use sys_lib::{disk, mem};
+    if let Some(free) = need("free", &["-b"]) {
+        let row = |label: &str| -> Vec<u64> {
+            free.lines()
+                .find(|l| l.starts_with(label))
+                .map(|l| {
+                    l.split_whitespace()
+                        .skip(1)
+                        .filter_map(|v| v.parse().ok())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let m = mem::snapshot().unwrap();
+        let memrow = row("Mem:");
+        assert_eq!(m.host_total.raw(), memrow[0], "MemTotal");
+        assert!(
+            close(m.host_free.raw(), memrow[5], 16 * MIB),
+            "available {} vs {}",
+            m.host_free,
+            memrow[5]
+        );
+        assert_eq!(m.swap.total.raw(), row("Swap:")[0], "SwapTotal");
+    }
+    if let Some(df) = need("df", &["-B1", "--output=size,avail", "/"]) {
+        let values: Vec<u64> = df
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .filter_map(|v| v.parse().ok())
+            .collect();
+        let s = disk::space("/").unwrap();
+        assert_eq!(s.total.raw(), values[0], "df size");
+        assert!(close(s.available.raw(), values[1], 16 * MIB), "df avail");
+    }
+    if let Some(online) = need("getconf", &["_NPROCESSORS_ONLN"]) {
+        assert_eq!(cpu::online(), number(&online));
+    }
+    let proc_uptime: f64 = std::fs::read_to_string("/proc/uptime")
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let up = host::uptime().unwrap().as_secs_f64();
+    assert!(
+        (up - proc_uptime).abs() < 2.0,
+        "uptime {up} vs /proc/uptime {proc_uptime}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_memory_disk_load_and_uptime_match_the_tools() {
+    use sys_lib::{disk, mem};
+    if let Some(n) = need("sysctl", &["-n", "hw.memsize"]) {
+        assert_eq!(mem::host_total().unwrap().raw(), n.parse::<u64>().unwrap());
+    }
+    if let Some(df) = need("df", &["-k", "/"]) {
+        let blocks: u64 = df
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let s = disk::space("/").unwrap();
+        assert!(
+            close(s.total.raw(), blocks * 1024, 16 * MIB),
+            "{} vs {}",
+            s.total,
+            blocks * 1024
+        );
+    }
+    if let Some(n) = need("sysctl", &["-n", "hw.activecpu"]) {
+        assert_eq!(cpu::online(), number(&n));
+    }
+    if let Some(l) = need("sysctl", &["-n", "vm.loadavg"]) {
+        let one: f32 = l
+            .trim_matches(|c| c == '{' || c == '}' || c == ' ')
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let load = cpu::load().unwrap().unwrap();
+        assert!((load.one - one).abs() < 1.0, "{} vs {one}", load.one);
+    }
+    if let Some(b) = need("sysctl", &["-n", "kern.boottime"]) {
+        // "{ sec = 1700000000, usec = 123456 } Tue Nov 14 ..."
+        let sec: u64 = b
+            .split("sec = ")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let boot = host::boot_time()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(boot.abs_diff(sec) <= 2, "{boot} vs {sec}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn test_live_windows_memory_disk_and_uptime_match_cim_and_dotnet() {
+    use sys_lib::{disk, mem};
+    let script = "$cs = Get-CimInstance Win32_ComputerSystem; $os = Get-CimInstance Win32_OperatingSystem; \
+        $d = [System.IO.DriveInfo]::new($env:SystemDrive); \
+        $cs.TotalPhysicalMemory; $os.FreePhysicalMemory; $d.TotalSize; $d.AvailableFreeSpace; \
+        [long]((Get-Date) - $os.LastBootUpTime).TotalMilliseconds";
+    let Some(out) = need(
+        "powershell",
+        &["-NoProfile", "-NonInteractive", "-Command", script],
+    ) else {
+        return;
+    };
+    let v: Vec<u64> = out.lines().map(|l| l.trim().parse().unwrap()).collect();
+    assert_eq!(v.len(), 5, "{out}");
+    let m = mem::snapshot().unwrap();
+    assert_eq!(m.host_total.raw(), v[0], "TotalPhysicalMemory");
+    assert!(
+        close(m.host_free.raw(), v[1] * 1024, 64 * MIB),
+        "free {} vs {}",
+        m.host_free,
+        v[1] * 1024
+    );
+    let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned()) + "\\";
+    let s = disk::space(&drive).unwrap();
+    assert_eq!(s.total.raw(), v[2], "drive size");
+    assert!(close(s.available.raw(), v[3], 64 * MIB), "drive available");
+    // The boot time from CIM (Windows PowerShell 5.1 has no TickCount64).
+    // Fast Startup and sleep can separate the two clocks on a desktop, so
+    // the comparison is strict only on CI's virtual machines.
+    let up = host::uptime().unwrap().as_millis() as u64;
+    if std::env::var_os("CI").is_some() {
+        assert!(
+            up.abs_diff(v[4]) < 5_000,
+            "uptime {up} vs LastBootUpTime {}",
+            v[4]
+        );
+    }
+}
+
+#[test]
+fn test_live_samplers_measure_real_activity() {
+    use std::time::Duration;
+    // This process burns CPU for 100 ms: its sampler sees most of one core.
+    let mut cpu = process::CpuSampler::new().unwrap();
+    let start = std::time::Instant::now();
+    let mut x = 1u64;
+    while start.elapsed() < Duration::from_millis(100) {
+        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    }
+    std::hint::black_box(x);
+    let u = cpu.sample().unwrap();
+    assert!(
+        u.of_one_core > 30.0,
+        "a busy loop used {:.1}% of a core",
+        u.of_one_core
+    );
+    // Writing and syncing a file shows up as this process's storage writes
+    // where the OS counts them per process.
+    let before = process::io().ok();
+    let path = std::env::temp_dir().join(format!("sys-lib-live-io-{}", std::process::id()));
+    std::fs::write(&path, vec![7u8; 4 << 20]).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .sync_all()
+        .unwrap();
+    let after = process::io().ok();
+    let _ = std::fs::remove_file(&path);
+    if let (Some(b), Some(a)) = (before, after) {
+        assert!((a - b).written.raw() > 0 || !a.storage_only || cfg!(target_os = "macos"));
+    }
+}
+
 #[test]
 fn test_live_counts_are_consistent_everywhere() {
     assert!(cpu::logical() >= 1);

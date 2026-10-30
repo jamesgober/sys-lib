@@ -186,6 +186,7 @@ layout!(Sockaddr, size = 16, align = 2);
 
 /// `struct sockaddr_in` (netinet/in.h). The address is in network byte order.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub(crate) struct SockaddrIn {
     pub(crate) family: u16,
     pub(crate) port: u16,
@@ -196,6 +197,7 @@ layout!(SockaddrIn, size = 16, align = 4);
 
 /// `struct sockaddr_in6` (netinet/in.h).
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub(crate) struct SockaddrIn6 {
     pub(crate) family: u16,
     pub(crate) port: u16,
@@ -218,6 +220,41 @@ pub(crate) struct Ifaddrs {
     pub(crate) data: *mut c_void,
 }
 layout!(Ifaddrs, size = 56, align = 8);
+
+/// `struct sockaddr_ll` (linux/if_packet.h): the `AF_PACKET` entry
+/// `getifaddrs` returns for every interface, with its index, hardware type,
+/// and hardware address.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SockaddrLl {
+    pub(crate) family: u16,
+    pub(crate) protocol: u16,
+    pub(crate) ifindex: c_int,
+    pub(crate) hatype: u16,
+    pub(crate) pkttype: u8,
+    pub(crate) halen: u8,
+    pub(crate) addr: [u8; 8],
+}
+layout!(SockaddrLl, size = 20, align = 4);
+
+/// `struct dirent` (dirent.h), the 64-bit layout glibc, musl, and bionic share
+/// on LP64 targets.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Dirent {
+    pub(crate) ino: u64,
+    pub(crate) off: i64,
+    pub(crate) reclen: u16,
+    pub(crate) dtype: u8,
+    pub(crate) name: [c_char; 256],
+}
+layout!(Dirent, size = 280, align = 8);
+
+/// `DIR` (dirent.h), opaque.
+#[repr(C)]
+pub(crate) struct Dir {
+    _private: [u8; 0],
+}
 
 // Address families (bits/socket.h).
 pub(crate) const AF_INET: u16 = 2;
@@ -292,6 +329,10 @@ unsafe extern "C" {
     // ifaddrs.h
     pub(crate) fn getifaddrs(ifap: *mut *mut Ifaddrs) -> c_int;
     pub(crate) fn freeifaddrs(ifa: *mut Ifaddrs);
+    // dirent.h
+    pub(crate) fn opendir(name: *const c_char) -> *mut Dir;
+    pub(crate) fn readdir(dir: *mut Dir) -> *mut Dirent;
+    pub(crate) fn closedir(dir: *mut Dir) -> c_int;
 }
 
 #[cfg(target_os = "android")]
@@ -335,6 +376,11 @@ mod tests {
     same_layout!(SockaddrIn6, libc::sockaddr_in6,
         family => sin6_family, port => sin6_port, flowinfo => sin6_flowinfo,
         addr => sin6_addr, scope_id => sin6_scope_id);
+    same_layout!(SockaddrLl, libc::sockaddr_ll,
+        family => sll_family, protocol => sll_protocol, ifindex => sll_ifindex,
+        hatype => sll_hatype, pkttype => sll_pkttype, halen => sll_halen, addr => sll_addr);
+    same_layout!(Dirent, libc::dirent,
+        ino => d_ino, off => d_off, reclen => d_reclen, dtype => d_type, name => d_name);
     same_layout!(Ifaddrs, libc::ifaddrs,
         next => ifa_next, name => ifa_name, flags => ifa_flags, addr => ifa_addr,
         netmask => ifa_netmask, ifu => ifa_ifu, data => ifa_data);

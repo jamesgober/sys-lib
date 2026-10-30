@@ -14,6 +14,9 @@ use crate::{
 #[cfg(feature = "guard")]
 use crate::{process::Limit, sys::FsKind};
 
+// The live readings: unknown on these platforms.
+pub(crate) use super::pending::*;
+
 fn unsupported(what: &'static str) -> Error {
     Error::Unsupported {
         what,
@@ -50,6 +53,7 @@ pub(crate) fn cpu() -> CpuFacts {
     CpuFacts {
         logical,
         physical: None,
+        packages: None,
         raw_name: None,
         name: None,
         vendor: Vendor::Unknown,

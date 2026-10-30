@@ -100,6 +100,30 @@ jobs:
       - name: Clippy and layout oracles (no default features)
         run: cargo clippy --target ${{ matrix.target }} --all-targets --no-default-features -- -D warnings
 
+  container:
+    name: Container limits (cgroup v2)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Built on the runner, run inside a container with real limits: the test
+      # asserts sys-lib reports the container's memory and CPUs, not the host's.
+      - name: Build the container test
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=$(cargo test --test container --no-run --message-format=json \
+            | jq -r 'select(.executable != null and .target.name == "container") | .executable')
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+      - name: Run it under --memory=256m --cpus=1.5 --cpuset-cpus=0-1
+        shell: bash
+        run: |
+          docker run --rm --memory=256m --cpus=1.5 --cpuset-cpus=0-1 \
+            -e SYS_LIB_EXPECT_MEMORY=268435456 -e SYS_LIB_EXPECT_CPUS=2 \
+            -v "${{ steps.build.outputs.exe }}:/test:ro" ubuntu:24.04 /test --nocapture
+
   miri:
     name: Miri (parsers and units)
     runs-on: ubuntu-latest

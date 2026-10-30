@@ -30,6 +30,10 @@ pub(crate) const INVALID_HANDLE_VALUE: Handle = core::ptr::without_provenance_mu
 // Win32 error codes (winerror.h).
 pub(crate) const ERROR_SUCCESS: u32 = 0;
 pub(crate) const ERROR_FILE_NOT_FOUND: u32 = 2;
+pub(crate) const ERROR_PATH_NOT_FOUND: u32 = 3;
+pub(crate) const ERROR_INVALID_DRIVE: u32 = 15;
+pub(crate) const ERROR_NO_DATA: u32 = 232;
+pub(crate) const ERROR_DIRECTORY: u32 = 267;
 pub(crate) const ERROR_ACCESS_DENIED: u32 = 5;
 pub(crate) const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 pub(crate) const ERROR_MORE_DATA: u32 = 234;
@@ -39,6 +43,8 @@ pub(crate) const ERROR_NOT_READY: u32 = 21;
 
 /// `STATUS_INFO_LENGTH_MISMATCH` (ntstatus.h).
 pub(crate) const STATUS_INFO_LENGTH_MISMATCH: NtStatus = 0xC000_0004_u32 as i32;
+/// `STATUS_BUFFER_TOO_SMALL` (ntstatus.h).
+pub(crate) const STATUS_BUFFER_TOO_SMALL: NtStatus = 0xC000_0023_u32 as i32;
 
 macro_rules! dll {
     ($lib:literal { $($item:tt)* }) => {
@@ -72,6 +78,7 @@ impl FileTime {
 }
 
 /// `MEMORYSTATUSEX` (sysinfoapi.h).
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct MemoryStatusEx {
     pub(crate) length: u32,
@@ -130,6 +137,7 @@ pub(crate) const VER_NT_DOMAIN_CONTROLLER: u8 = 2;
 pub(crate) const VER_NT_SERVER: u8 = 3;
 
 /// `PROCESS_MEMORY_COUNTERS_EX` (psapi.h).
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct ProcessMemoryCountersEx {
     pub(crate) cb: u32,
@@ -150,6 +158,7 @@ layout!(ProcessMemoryCountersEx, size = 80, align = 8);
 layout!(ProcessMemoryCountersEx, size = 44, align = 4);
 
 /// `PERFORMANCE_INFORMATION` (psapi.h). Counts are in pages of `page_size`.
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct PerformanceInformation {
     pub(crate) cb: u32,
@@ -173,6 +182,7 @@ layout!(PerformanceInformation, size = 104, align = 8);
 layout!(PerformanceInformation, size = 56, align = 4);
 
 /// `IO_COUNTERS` (winnt.h).
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct IoCounters {
     pub(crate) read_operation_count: u64,
@@ -185,6 +195,7 @@ pub(crate) struct IoCounters {
 layout!(IoCounters, size = 48, align = 8);
 
 /// `JOBOBJECT_BASIC_LIMIT_INFORMATION` (winnt.h).
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct JobObjectBasicLimitInformation {
     pub(crate) per_process_user_time_limit: i64,
@@ -203,6 +214,7 @@ layout!(JobObjectBasicLimitInformation, size = 64, align = 8);
 layout!(JobObjectBasicLimitInformation, size = 48, align = 8);
 
 /// `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` (winnt.h).
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct JobObjectExtendedLimitInformation {
     pub(crate) basic_limit_information: JobObjectBasicLimitInformation,
@@ -229,6 +241,7 @@ layout!(JobObjectCpuRateControlInformation, size = 8, align = 4);
 // JOBOBJECTINFOCLASS (winnt.h) and limit flags.
 pub(crate) const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
 pub(crate) const JOB_OBJECT_CPU_RATE_CONTROL_INFORMATION: i32 = 15;
+pub(crate) const JOB_OBJECT_LIMIT_ACTIVE_PROCESS: u32 = 0x0000_0008;
 pub(crate) const JOB_OBJECT_LIMIT_PROCESS_MEMORY: u32 = 0x0000_0100;
 pub(crate) const JOB_OBJECT_LIMIT_JOB_MEMORY: u32 = 0x0000_0200;
 pub(crate) const JOB_OBJECT_CPU_RATE_CONTROL_ENABLE: u32 = 0x1;
@@ -249,6 +262,7 @@ pub(crate) struct SystemPowerStatus {
 layout!(SystemPowerStatus, size = 12, align = 4);
 
 /// `PROCESSOR_POWER_INFORMATION` (powrprof.h), one per logical processor.
+#[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub(crate) struct ProcessorPowerInformation {
     pub(crate) number: u32,
@@ -348,6 +362,7 @@ pub(crate) const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
 /// `SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION` (winternl.h), one per logical
 /// processor. `idle` is part of `kernel`. The two trailing fields are the DPC
 /// and interrupt times and the interrupt count (documented as reserved).
+#[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub(crate) struct SystemProcessorPerformanceInformation {
     pub(crate) idle_time: i64,
@@ -392,6 +407,29 @@ pub(crate) struct DeviceSeekPenaltyDescriptor {
 }
 layout!(DeviceSeekPenaltyDescriptor, size = 12, align = 4);
 
+/// `DISK_PERFORMANCE` (winioctl.h): one disk's cumulative counters. Times are
+/// in 100 ns units; `query_time` is the system time of the query.
+#[derive(Default)]
+#[repr(C)]
+pub(crate) struct DiskPerformance {
+    pub(crate) bytes_read: i64,
+    pub(crate) bytes_written: i64,
+    pub(crate) read_time: i64,
+    pub(crate) write_time: i64,
+    pub(crate) idle_time: i64,
+    pub(crate) read_count: u32,
+    pub(crate) write_count: u32,
+    pub(crate) queue_depth: u32,
+    pub(crate) split_count: u32,
+    pub(crate) query_time: i64,
+    pub(crate) storage_device_number: u32,
+    pub(crate) storage_manager_name: [u16; 8],
+}
+layout!(DiskPerformance, size = 88, align = 8);
+
+/// `IOCTL_DISK_PERFORMANCE` (winioctl.h): `FILE_ANY_ACCESS`, so a handle opened
+/// with no access rights may send it.
+pub(crate) const IOCTL_DISK_PERFORMANCE: u32 = 0x0007_0020;
 /// `IOCTL_STORAGE_QUERY_PROPERTY` (winioctl.h).
 pub(crate) const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D_1400;
 /// `STORAGE_PROPERTY_ID::StorageDeviceSeekPenaltyProperty` (winioctl.h).
@@ -677,6 +715,50 @@ pub(crate) struct MibIfTable2 {
 }
 layout!(MibIfTable2, size = 1360, align = 8);
 
+// MIB_IF_ROW2 `InterfaceAndOperStatusFlags` bits (netioapi.h bit fields).
+pub(crate) const IF_FLAG_HARDWARE_INTERFACE: u8 = 0x01;
+pub(crate) const IF_FLAG_FILTER_INTERFACE: u8 = 0x02;
+pub(crate) const IF_FLAG_CONNECTOR_PRESENT: u8 = 0x04;
+/// `NET_IF_ADMIN_STATUS_UP` (ifdef.h).
+pub(crate) const NET_IF_ADMIN_STATUS_UP: i32 = 1;
+/// `TUNNEL_TYPE_NONE` (ifdef.h).
+pub(crate) const TUNNEL_TYPE_NONE: i32 = 0;
+
+/// `MIB_TCPSTATS_LH` (tcpmib.h). The first field is the `RtoAlgorithm` union,
+/// one `DWORD`.
+#[derive(Default)]
+#[repr(C)]
+pub(crate) struct MibTcpStats {
+    pub(crate) rto_algorithm: u32,
+    pub(crate) rto_min: u32,
+    pub(crate) rto_max: u32,
+    pub(crate) max_conn: u32,
+    pub(crate) active_opens: u32,
+    pub(crate) passive_opens: u32,
+    pub(crate) attempt_fails: u32,
+    pub(crate) estab_resets: u32,
+    pub(crate) curr_estab: u32,
+    pub(crate) in_segs: u32,
+    pub(crate) out_segs: u32,
+    pub(crate) retrans_segs: u32,
+    pub(crate) in_errs: u32,
+    pub(crate) out_rsts: u32,
+    pub(crate) num_conns: u32,
+}
+layout!(MibTcpStats, size = 60, align = 4);
+
+/// `MIB_UDPSTATS` (udpmib.h).
+#[derive(Default)]
+#[repr(C)]
+pub(crate) struct MibUdpStats {
+    pub(crate) in_datagrams: u32,
+    pub(crate) no_ports: u32,
+    pub(crate) in_errors: u32,
+    pub(crate) out_datagrams: u32,
+    pub(crate) num_addrs: u32,
+}
+layout!(MibUdpStats, size = 20, align = 4);
+
 // Registry (winreg.h, winnt.h).
 /// `(HKEY)(ULONG_PTR)((LONG)0x80000002)`: sign-extended on 64-bit targets.
 pub(crate) const HKEY_LOCAL_MACHINE: Hkey =
@@ -762,6 +844,7 @@ dll!("kernel32.dll" {
     pub(crate) fn IsWow64Process2(process: Handle, process_machine: *mut u16, native_machine: *mut u16) -> Bool;
     pub(crate) fn GetSystemPowerStatus(status: *mut SystemPowerStatus) -> Bool;
     pub(crate) fn SetThreadErrorMode(new_mode: u32, old_mode: *mut u32) -> Bool;
+    pub(crate) fn GetProcessIoCounters(process: Handle, counters: *mut IoCounters) -> Bool;
     // psapi.h (the K32 forms live in kernel32 from Windows 7 on)
     pub(crate) fn K32GetProcessMemoryInfo(process: Handle, counters: *mut ProcessMemoryCountersEx, cb: u32) -> Bool;
     pub(crate) fn K32GetPerformanceInfo(info: *mut PerformanceInformation, cb: u32) -> Bool;
@@ -774,6 +857,7 @@ dll!("kernel32.dll" {
         return_length: *mut u32,
     ) -> Bool;
     // memoryapi.h
+    pub(crate) safe fn GetLargePageMinimum() -> usize;
     pub(crate) fn CreateMemoryResourceNotification(kind: i32) -> Handle;
     pub(crate) fn QueryMemoryResourceNotification(notification: Handle, state: *mut Bool) -> Bool;
     // fileapi.h
@@ -876,6 +960,8 @@ dll!("iphlpapi.dll" {
     pub(crate) fn GetIfTable2(table: *mut *mut MibIfTable2) -> u32;
     pub(crate) fn FreeMibTable(memory: *const c_void);
     pub(crate) fn GetBestInterfaceEx(destination: *const Sockaddr, index: *mut u32) -> u32;
+    pub(crate) fn GetTcpStatisticsEx(statistics: *mut MibTcpStats, family: u32) -> u32;
+    pub(crate) fn GetUdpStatisticsEx(statistics: *mut MibUdpStats, family: u32) -> u32;
 });
 
 dll!("powrprof.dll" {
@@ -909,10 +995,12 @@ mod tests {
 
     use windows_sys::{
         Win32::{
-            Foundation as f, NetworkManagement::IpHelper as ip, Networking::WinSock as ws,
-            Security as sec, System::Diagnostics::ToolHelp as th, System::Ioctl as io,
-            System::JobObjects as job, System::Power as pw, System::ProcessStatus as ps,
-            System::SystemInformation as si, System::Threading as thr, System::Time as tm,
+            Foundation as f, NetworkManagement::IpHelper as ip, NetworkManagement::Ndis as nd,
+            Networking::WinSock as ws, Security as sec, Storage::FileSystem as fs,
+            System::Diagnostics::Debug as dbg, System::Diagnostics::ToolHelp as th,
+            System::Ioctl as io, System::JobObjects as job, System::Memory as mem,
+            System::Power as pw, System::ProcessStatus as ps, System::SystemInformation as si,
+            System::SystemServices as ss, System::Threading as thr, System::Time as tm,
             System::WindowsProgramming as wp,
         },
         core::GUID,
@@ -1045,6 +1133,22 @@ mod tests {
         out_ucast_pkts => OutUcastPkts, out_n_ucast_pkts => OutNUcastPkts,
         out_discards => OutDiscards, out_errors => OutErrors, out_q_len => OutQLen);
     same_layout!(MibIfTable2, ip::MIB_IF_TABLE2, num_entries => NumEntries, table => Table);
+    same_layout!(DiskPerformance, io::DISK_PERFORMANCE,
+        bytes_read => BytesRead, bytes_written => BytesWritten, read_time => ReadTime,
+        write_time => WriteTime, idle_time => IdleTime, read_count => ReadCount,
+        write_count => WriteCount, queue_depth => QueueDepth, split_count => SplitCount,
+        query_time => QueryTime, storage_device_number => StorageDeviceNumber,
+        storage_manager_name => StorageManagerName);
+    same_layout!(MibTcpStats, ip::MIB_TCPSTATS_LH,
+        rto_algorithm => Anonymous, rto_min => dwRtoMin, rto_max => dwRtoMax,
+        max_conn => dwMaxConn, active_opens => dwActiveOpens, passive_opens => dwPassiveOpens,
+        attempt_fails => dwAttemptFails, estab_resets => dwEstabResets,
+        curr_estab => dwCurrEstab, in_segs => dwInSegs, out_segs => dwOutSegs,
+        retrans_segs => dwRetransSegs, in_errs => dwInErrs, out_rsts => dwOutRsts,
+        num_conns => dwNumConns);
+    same_layout!(MibUdpStats, ip::MIB_UDPSTATS,
+        in_datagrams => dwInDatagrams, no_ports => dwNoPorts, in_errors => dwInErrors,
+        out_datagrams => dwOutDatagrams, num_addrs => dwNumAddrs);
 
     // The byte offsets used to parse GetLogicalProcessorInformationEx records.
     const _: () = {
@@ -1125,6 +1229,43 @@ mod tests {
         assert!(IMAGE_FILE_MACHINE_ARM64 == si::IMAGE_FILE_MACHINE_ARM64);
         assert!(IMAGE_FILE_MACHINE_I386 == si::IMAGE_FILE_MACHINE_I386);
         assert!(IMAGE_FILE_MACHINE_ARMNT == si::IMAGE_FILE_MACHINE_ARMNT);
+        assert!(STATUS_BUFFER_TOO_SMALL == f::STATUS_BUFFER_TOO_SMALL);
+        assert!(ERROR_FILE_NOT_FOUND == f::ERROR_FILE_NOT_FOUND);
+        assert!(ERROR_ACCESS_DENIED == f::ERROR_ACCESS_DENIED);
+        assert!(ERROR_MORE_DATA == f::ERROR_MORE_DATA);
+        assert!(ERROR_NO_MORE_FILES == f::ERROR_NO_MORE_FILES);
+        assert!(ERROR_NOT_READY == f::ERROR_NOT_READY);
+        assert!(ERROR_PATH_NOT_FOUND == f::ERROR_PATH_NOT_FOUND);
+        assert!(ERROR_INVALID_DRIVE == f::ERROR_INVALID_DRIVE);
+        assert!(ERROR_NO_DATA == f::ERROR_NO_DATA);
+        assert!(ERROR_DIRECTORY == f::ERROR_DIRECTORY);
+        assert!(ERROR_SUCCESS == f::ERROR_SUCCESS);
+        assert!(JOB_OBJECT_LIMIT_ACTIVE_PROCESS == job::JOB_OBJECT_LIMIT_ACTIVE_PROCESS);
+        assert!(IOCTL_DISK_PERFORMANCE == io::IOCTL_DISK_PERFORMANCE);
+        assert!(DRIVE_UNKNOWN == wp::DRIVE_UNKNOWN);
+        assert!(DRIVE_NO_ROOT_DIR == wp::DRIVE_NO_ROOT_DIR);
+        assert!(DRIVE_REMOVABLE == wp::DRIVE_REMOVABLE);
+        assert!(DRIVE_FIXED == wp::DRIVE_FIXED);
+        assert!(DRIVE_REMOTE == wp::DRIVE_REMOTE);
+        assert!(DRIVE_CDROM == wp::DRIVE_CDROM);
+        assert!(DRIVE_RAMDISK == wp::DRIVE_RAMDISK);
+        assert!(FILE_READ_ONLY_VOLUME == ss::FILE_READ_ONLY_VOLUME);
+        assert!(SEM_FAILCRITICALERRORS == dbg::SEM_FAILCRITICALERRORS);
+        assert!(FILE_SHARE_READ == fs::FILE_SHARE_READ);
+        assert!(FILE_SHARE_WRITE == fs::FILE_SHARE_WRITE);
+        assert!(OPEN_EXISTING == fs::OPEN_EXISTING);
+        assert!(LOW_MEMORY_RESOURCE_NOTIFICATION == mem::LowMemoryResourceNotification);
+        assert!(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION == 8);
+        assert!(AF_UNSPEC == ws::AF_UNSPEC as u32);
+        assert!(IF_TYPE_ETHERNET_CSMACD == ip::IF_TYPE_ETHERNET_CSMACD);
+        assert!(IF_TYPE_SOFTWARE_LOOPBACK == ip::IF_TYPE_SOFTWARE_LOOPBACK);
+        assert!(IF_TYPE_IEEE80211 == ip::IF_TYPE_IEEE80211);
+        assert!(IF_TYPE_TUNNEL == ip::IF_TYPE_TUNNEL);
+        assert!(IF_TYPE_WWANPP == ip::IF_TYPE_WWANPP);
+        assert!(IF_TYPE_WWANPP2 == ip::IF_TYPE_WWANPP2);
+        assert!(IF_OPER_STATUS_UP == nd::IfOperStatusUp);
+        assert!(NET_IF_ADMIN_STATUS_UP == nd::NET_IF_ADMIN_STATUS_UP);
+        assert!(TUNNEL_TYPE_NONE == nd::TUNNEL_TYPE_NONE);
     };
 
     #[test]

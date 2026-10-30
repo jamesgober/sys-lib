@@ -1,7 +1,7 @@
 fixture: docker-cgroup2-limited
-captured: 2026-10-22T06:50:15Z
-capture.sh: version 2
-kernel: 6.17.0-1022-azure
+captured: 2026-10-28T17:10:47Z
+capture.sh: version 3
+kernel: 7.0.0-1017-azure
 machine: x86_64
 as root: yes
-files: 212
+files: 233

@@ -1,4 +1,4 @@
-//! Prints every fact sys-lib 0.3 reads about this machine.
+//! Prints every fact and live reading sys-lib reads about this machine.
 //!
 //! ```text
 //! cargo run --example facts
@@ -55,4 +55,92 @@ fn main() {
         sys::process::is_elevated().ok()
     );
     println!("build     {}", sys::build_info!());
+
+    // Live readings (0.4): each is read now, and an error means unknown here.
+    let c = sys::cpu::count();
+    println!(
+        "cpus      {} packages, {} online, quota {:?}",
+        c.packages,
+        c.online,
+        sys::cpu::quota().ok().flatten()
+    );
+    println!(
+        "  freq    {:?} now {:?}",
+        sys::cpu::frequency(),
+        sys::cpu::current_frequency().ok().flatten()
+    );
+    println!(
+        "  load    {:?}",
+        sys::cpu::load().ok().flatten().map(|l| l.to_string())
+    );
+    println!("  feats   {}", sys::cpu::features());
+    if let Ok(m) = sys::mem::snapshot() {
+        println!(
+            "memory    {} of {} used ({}), source {:?}",
+            m.used,
+            m.total,
+            m.used_percent(),
+            m.source
+        );
+        println!(
+            "  host    {} free of {}; swap {} of {}",
+            m.host_free, m.host_total, m.swap.used, m.swap.total
+        );
+        if let Some(l) = m.limit {
+            println!("  limit   {} ({:?})", l.hard, l.source);
+        }
+    }
+    for (what, p) in [
+        ("cpu", sys::cpu::pressure()),
+        ("memory", sys::mem::pressure()),
+        ("io", sys::disk::pressure()),
+    ] {
+        if let Ok(Some(p)) = p {
+            println!(
+                "pressure  {what}: {:?}, {} over 10 s",
+                p.level, p.some.avg10
+            );
+        }
+    }
+    if let Ok(disks) = sys::disk::list() {
+        for d in disks {
+            let space = d
+                .space
+                .map(|s| format!("{} free of {}", s.available, s.total))
+                .unwrap_or_default();
+            println!(
+                "disk      {} ({}, {:?}) {space}",
+                d.mount_point.display(),
+                d.filesystem,
+                d.kind
+            );
+        }
+    }
+    if let Ok(list) = sys::net::interfaces() {
+        for i in list {
+            let mac = i.mac.map(|m| m.to_string()).unwrap_or_default();
+            println!(
+                "net       {} {:?} up={} {mac} {:?}",
+                i.name,
+                i.kind,
+                i.running,
+                i.addresses
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+    println!("connections {:?}", sys::net::connections().ok());
+    println!(
+        "uptime    {:?}, {:?}",
+        sys::host::uptime().ok(),
+        sys::host::processes().ok()
+    );
+    if let Ok(info) = sys::process::info() {
+        println!(
+            "this      rss {} threads {:?} files {:?}",
+            info.memory.resident, info.threads, info.open_files
+        );
+    }
 }

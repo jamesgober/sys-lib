@@ -3,6 +3,9 @@
 //! value.
 
 mod ffi;
+mod live;
+
+pub(crate) use live::*;
 
 use std::{
     ffi::{CStr, c_char},
@@ -79,6 +82,7 @@ pub(crate) fn cpu() -> CpuFacts {
     CpuFacts {
         logical,
         physical: t.physical,
+        packages: t.packages,
         raw_name: t.raw_name,
         name: t.arm_name,
         vendor: t.vendor,
@@ -86,7 +90,7 @@ pub(crate) fn cpu() -> CpuFacts {
 }
 
 pub(crate) fn cpu_available(logical: usize) -> usize {
-    tree::cpu::available(&ROOT, logical)
+    live::available(logical)
 }
 
 /// A 64-bit build runs only on a 64-bit processor; 32-bit Linux has no

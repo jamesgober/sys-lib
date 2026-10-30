@@ -35,6 +35,7 @@ jobs:
           - pid_file
           - instance_id
           - bytes_display
+          - procfs
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@nightly

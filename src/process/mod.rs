@@ -15,6 +15,13 @@
 
 #[cfg(feature = "guard")]
 mod guard;
+mod usage;
+
+pub use usage::{
+    CpuSampler, CpuTime, InfoOptions, Limits, ProcessInfo, ProcessIo, ProcessMemory, ProcessUsage,
+    cpu_time, info, info_with, io, limits, memory, memory_detail, open_files, parent_id,
+    peak_memory, started_at, threads,
+};
 
 #[cfg(feature = "guard")]
 #[cfg_attr(docsrs, doc(cfg(feature = "guard")))]

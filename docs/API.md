@@ -94,14 +94,14 @@ Costs are estimates (marked [est.]) until they are measured in `0.7.0`; measured
 
 ```toml
 [dependencies]
-sys = { package = "sys-lib", version = "0.3" }
+sys = { package = "sys-lib", version = "0.4" }
 # Without instance info and the process guard (no dependencies at all):
-# sys = { package = "sys-lib", version = "0.3", default-features = false }
+# sys = { package = "sys-lib", version = "0.4", default-features = false }
 # With device identity (from 0.5):
 # sys = { package = "sys-lib", version = "0.5", features = ["device-id"] }
 ```
 
-The package is `sys-lib` on crates.io (`sys` and `system` were taken). Cargo's rename makes it `sys` in your code, so every file writes `sys::os::name()` with no import line. Without the rename (`sys-lib = "0.3"`), add `use sys_lib as sys;` at the top of a file and the code is the same.
+The package is `sys-lib` on crates.io (`sys` and `system` were taken). Cargo's rename makes it `sys` in your code, so every file writes `sys::os::name()` with no import line. Without the rename (`sys-lib = "0.4"`), add `use sys_lib as sys;` at the top of a file and the code is the same.
 
 | Feature | Default | Enables | Brings |
 |---|---|---|---|
@@ -356,6 +356,7 @@ impl Rate {
     pub const fn from_bytes_per_sec(n: u64) -> Rate;
     pub const fn bytes_per_sec(self) -> u64;
     pub const fn bits_per_sec(self) -> u64;           // saturating
+    pub fn per(bytes: Bytes, interval: Duration) -> Rate;   // zero for an empty interval
     pub fn bits(self) -> impl fmt::Display;           // "104.9 Mbit/s": how network links are rated
 }
 impl fmt::Display for Rate;   // "12.5 MiB/s"; {:#} "13.1 MB/s"; the same rules as Bytes
@@ -382,11 +383,17 @@ assert_eq!(r.bits().to_string(), "104.9 Mbit/s");
 pub struct Pressure {
     pub level: PressureLevel,
     pub some: Stall,               // share of time at least one task was stalled
-    pub full: Option<Stall>,       // share of time every non-idle task was stalled (None for CPU at the host level)
+    pub full: Option<Stall>,       // share of time every non-idle task was stalled (None where not reported: host CPU before Linux 5.13)
     pub total: Option<Duration>,   // cumulative stall time
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+impl Pressure {
+    pub const WARNING_SOME_AVG10: f32;    // 10.0
+    pub const CRITICAL_SOME_AVG10: f32;   // 40.0
+    pub const CRITICAL_FULL_AVG10: f32;   // 10.0
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 #[non_exhaustive]
 pub struct Stall { pub avg10: Percent, pub avg60: Percent, pub avg300: Percent }
 
@@ -606,7 +613,7 @@ eprintln!("instance={instance} event=boot phase=0");
 
 ### Readings
 
-**Since** 0.3 (PRC-01, PRC-11, PRC-12), 0.4 (PRC-02 to PRC-04, PRC-06 to PRC-10, PRC-13), 0.5 (PRC-05)
+**Since** 0.3 (PRC-01, PRC-11, PRC-12), 0.4 (PRC-02 to PRC-10, PRC-13; PRC-05 was planned for 0.5 and ships with `info()`, D-044)
 
 Facts about **this** process. sys-lib does not list or inspect other processes.
 
@@ -679,7 +686,7 @@ pub struct InfoOptions { pub with_threads: bool }   // Windows: the thread count
 | PRC-02 | `parent_id()` | 0.4 | `PPid` in `/proc/self/status` | `getppid` | toolhelp snapshot entry for this pid, cached after the first call | 2 µs / 0.1 µs / 1 ms first, then 1 ns |
 | PRC-03 | `memory()` | 0.4 | `/proc/self/statm` field 2 × page size | `task_info(MACH_TASK_BASIC_INFO)` | `K32GetProcessMemoryInfo` working set | 2 µs / 0.5 µs / 0.5 µs |
 | PRC-04 | `peak_memory()` | 0.4 | `VmHWM` | `getrusage` `ru_maxrss` (bytes on macOS, KiB on Linux) | `PeakWorkingSetSize` | 3 µs / 0.5 µs / 0.5 µs |
-| PRC-05 | `memory_detail()` | 0.5 | `/proc/self/status` | `task_info` + `proc_pid_rusage` | `PROCESS_MEMORY_COUNTERS_EX` | 4 µs / 2 µs / 1 µs |
+| PRC-05 | `memory_detail()` | 0.4 | `/proc/self/status` | `task_info` + `proc_pid_rusage` | `PROCESS_MEMORY_COUNTERS_EX` | 4 µs / 2 µs / 1 µs |
 | PRC-06 | `cpu_time()` | 0.4 | `getrusage` | `getrusage` | `GetProcessTimes` | 0.3 µs |
 | PRC-07 | `threads()` | 0.4 | `Threads` in `/proc/self/status` | `proc_pidinfo(PROC_PIDTASKINFO)` | toolhelp thread snapshot, filtered | 3 µs / 2 µs / 0.2 to 5 ms |
 | PRC-08 | `open_files()` | 0.4 | entries of `/proc/self/fd` | `proc_pidinfo(PROC_PIDLISTFDS)` | `GetProcessHandleCount` | 1 µs per 100 / 2 µs / 0.3 µs |
@@ -687,7 +694,7 @@ pub struct InfoOptions { pub with_threads: bool }   // Windows: the thread count
 | PRC-10 | `started_at()` | 0.4 | `/proc/self/stat` field 22 + boot time | `proc_pidinfo(PROC_PIDTBSDINFO)` | `GetProcessTimes` creation time | 4 µs / 2 µs / 0.3 µs |
 | PRC-11 | `user()` | 0.3 | `geteuid` + `getpwuid_r` | same | `GetUserNameW`; `is_admin` from the token | 5 to 50 µs |
 | PRC-12 | `is_elevated()` | 0.3 | `geteuid() == 0` | same | `GetTokenInformation(TokenElevation)` | 0.1 µs / 0.1 µs / 2 µs |
-| PRC-13 | `info()`, `info_with()` | 0.4 | `/proc/self/status` read once | | | the sum, minus shared reads |
+| PRC-13 | `info()`, `info_with()` | 0.4 | each reading once | | | about the sum of the readings |
 
 `memory()`, `peak_memory()`, `cpu_time()`, `threads()` (Linux, macOS), `open_files()`, and `limits()` allocate nothing. `user()` allocates the name. On Linux and macOS, `user()` goes through the system's user database (NSS), which can read `/etc/passwd` or, with LDAP users, wait on the network; that is stated so callers do not put it on a hot path. On Windows, `threads()` walks a system-wide thread snapshot whose cost grows with the machine's total thread count; `info()` skips it unless `InfoOptions { with_threads: true }` is passed.
 
@@ -1270,9 +1277,9 @@ CPU usage is the share of non-idle time **between two readings** of the OS's cum
 
 - Steal counts as busy (the CPU was not available to us) and iowait as idle (the CPU was free to run other work); both are also reported separately.
 - `TooSoon` when no tick passed on the OS clock since the previous sample (about 10 ms on Linux): never a meaningless 0% or 100%.
-- Counters that go backwards (a CPU taken offline and back, a VM migration, a wrap) re-base the sampler: `TooSoon` for that core, never a negative or above-100 value.
+- Counters that go backwards (a CPU taken offline and back, a VM migration, a wrap) re-base the sampler: `TooSoon` for the total, 0% for that interval for a core (a slice carries no error per core), never a negative or above-100 value. On Linux per-core values are indexed by CPU number: an offline CPU keeps its slot and reads 0%, and `out` must cover the highest CPU number plus one.
 - `sample_per_core_into` returns `TooLarge` without writing anything when `out` is shorter than `cpu::logical()`.
-- Windows with more than 64 logical processors: the total is correct (system-wide counters); per-core values return `Unsupported` until the per-group call is verified.
+- Windows with more than 64 logical processors, or more than one processor group: the total is correct (system-wide counters); per-core values return `Unsupported` until the per-group call is verified (D-047), and `Sampler::new()` then samples the total only.
 
 ```rust
 use sys_lib as sys;
@@ -1353,13 +1360,13 @@ How much runnable work waited for a CPU over the last 10, 60, and 300 seconds ([
 
 ### Features
 
-**Since** 0.4 (CPU-30, CPU-31), 0.5 (CPU-32)
+**Since** 0.4 (CPU-30 to CPU-32; CPU-32 `x86_level()` was planned for 0.5 and ships with the features it reads, D-052)
 
 ```rust
 pub mod cpu {
     pub fn has(feature: Feature) -> bool;          // about 1 ns
     pub fn features() -> &'static Features;
-    pub fn x86_level() -> Option<X86Level>;        // x86-64-v1 ..= v4; None off x86
+    pub fn x86_level() -> Option<X86Level>;        // x86-64-v1 ..= v4; None off x86-64
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -1520,7 +1527,7 @@ pub struct Swap { pub total: Bytes, pub used: Bytes, pub free: Bytes }
 
 | Id | Item | Since | Cost per call [est.] |
 |---|---|---|---|
-| MEM-01 | `total()` | 0.4 | Linux 2 to 4 µs bare, 6 to 15 µs in a cgroup; macOS 0.5 µs; Windows 0.5 to 1 µs |
+| MEM-01 | `total()` | 0.4 | Linux 2 to 4 µs bare, 6 to 15 µs in a cgroup; macOS 0.5 µs; Windows about 5 µs (measured, with the job-object query) |
 | MEM-02 | `used()`, `free()` | 0.4 | same |
 | MEM-03 | `used_percent()`, `free_percent()` | 0.4 | same |
 | MEM-04 | `snapshot()` | 0.4 | the same reads, every value |
@@ -1585,7 +1592,7 @@ pub struct MemoryEvents {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[non_exhaustive]
-pub enum EventScope { Cgroup, Host }
+pub enum EventScope { Cgroup, #[default] Host }   // derives Default
 ```
 
 Whether this container (or machine) has been running out of memory: a watchdog compares two readings and sheds load or restarts before the next OOM kill. Linux: cgroup v2 `memory.events`, cgroup v1 `memory.oom_control` (`oom_kill`), and outside a cgroup `/proc/vmstat` `oom_kill` (kernel 4.13 and later; `max` and `high` are then 0). macOS and Windows keep no such counters: `Ok(None)`. Cost: 3 µs [est.].
@@ -1613,7 +1620,7 @@ pub struct Activity {
 }
 ```
 
-Whether the machine is thrashing: steady swap-out with major faults means memory is too small for the work, which no memory total can show. Linux: `/proc/vmstat` (`pswpin`, `pswpout`, `pgmajfault`, in pages). macOS: `vm_statistics64` (`swapins`, `swapouts`, `pageins`). Windows: no documented system-wide paging counters outside performance counters [verify `NtQuerySystemInformation(SystemPerformanceInformation)` against the headers before 0.4; `Unsupported` if it does not hold]. Cost: 2 to 5 µs per sample [est.].
+Whether the machine is thrashing: steady swap-out with major faults means memory is too small for the work, which no memory total can show. Linux: `/proc/vmstat` (`pswpin`, `pswpout`, `pgmajfault`, in pages). macOS: `vm_statistics64` (`swapins`, `swapouts`, `pageins`). Windows: `Unsupported` (the `SYSTEM_PERFORMANCE_INFORMATION` layout cannot be checked against the headers, D-049). Cost: 2 to 5 µs per sample [est.].
 
 ### Huge pages
 
@@ -1695,10 +1702,10 @@ impl Space { pub fn used(&self) -> Bytes; pub fn used_percent(&self) -> Percent;
 pub struct Disk {
     pub mount_point: PathBuf,
     pub device: String,          // "/dev/nvme0n1p2", "C:", "\\?\Volume{...}\"
-    pub label: Option<String>,   // volume label (Windows, macOS)
+    pub label: Option<String>,   // volume label (Windows; macOS from 0.5)
     pub filesystem: String,      // "ext4", "btrfs", "apfs", "NTFS", "overlay"
     pub kind: DiskKind,
-    pub space: Option<Space>,    // None for network mounts unless included, or media not present
+    pub space: Option<Space>,    // None for media not present (Windows lists it with filesystem "unknown")
     pub read_only: bool,
     pub removable: bool,
 }
@@ -1776,7 +1783,7 @@ pub mod disk {
 pub struct DiskIo {
     pub read: Rate, pub write: Rate,
     pub reads_per_sec: f64, pub writes_per_sec: f64,     // operations (IOPS)
-    pub busy: Option<Percent>,                           // share of the interval with I/O in flight
+    pub busy: Option<Percent>,                           // share of the interval with I/O in flight (the mean over several disks)
     pub average_latency: Option<Duration>,               // time per completed operation
     pub interval: Duration,
 }
@@ -1803,9 +1810,9 @@ How hard the disks are working right now: read and write speed, operations per s
 
 | OS | Source |
 |---|---|
-| Linux | `/proc/diskstats`: sectors read and written (512-byte units whatever the device's block size), completed operations, time spent on I/O (`io_ticks`, for `busy`), weighted time (for latency); whole disks only, identified through `/sys/block` |
+| Linux | `/proc/diskstats`: sectors read and written (512-byte units whatever the device's block size), completed operations, time spent on I/O (`io_ticks`, for `busy`), read and write time (for latency); whole disks only, identified through `/sys/block` |
 | macOS | IOKit `IOBlockStorageDriver` `Statistics` (bytes, operations, total time read and written) |
-| Windows | `IOCTL_DISK_PERFORMANCE` on each `\\.\PhysicalDriveN` opened with no access rights (`BytesRead`, `BytesWritten`, `ReadCount`, `WriteCount`, `IdleTime`, `QueryTime`) [verify unprivileged access on CI] |
+| Windows | `IOCTL_DISK_PERFORMANCE` on each `\\.\PhysicalDriveN` opened with no access rights (`BytesRead`, `BytesWritten`, `ReadCount`, `WriteCount`, `IdleTime`, `QueryTime`); works unprivileged. `QueryTime` is the wall clock, so busy time is counted from a per-process origin |
 
 `disk::pressure()` is the kernel's I/O pressure (the cgroup's `io.pressure`, or `/proc/pressure/io`): the share of time tasks were stalled on I/O. macOS and Windows: `Ok(None)`. A counter that goes backwards (a disk removed and re-attached) re-bases that disk. Inside a container the disks are the host's (the kernel keeps one set); the cgroup's own I/O is `process::io()` for this process.
 
@@ -1872,7 +1879,7 @@ impl fmt::Display for IpNet;   // "192.168.1.20/24"
 
 | Id | Item | Since | Cost [est.] |
 |---|---|---|---|
-| NET-01 | `interfaces()` | 0.4 | Linux 30 to 150 µs, macOS 20 to 80 µs, Windows 1 to 5 ms |
+| NET-01 | `interfaces()` | 0.4 | Linux 30 to 150 µs, macOS 20 to 80 µs, Windows about 16 ms (measured, `GetAdaptersAddresses` and `GetIfTable2`) |
 | NET-02 | `Mac`, `MacKind` | 0.4 | 0 |
 | NET-03 | `addresses()` | 0.4 | Linux 10 to 30 µs |
 | NET-06 | `primary()` | 0.5 | 10 to 50 µs |
@@ -1901,7 +1908,7 @@ println!("addresses: {:?}", sys::net::addresses()?);
 pub mod net {
     pub const DEFAULT_WINDOW: Duration;                        // 1 s
     pub fn totals() -> Result<Totals>;                         // since boot, every interface but loopback
-    pub fn counters() -> Result<Vec<Counters>>;                // Tier 2: the same, per interface
+    pub fn counters() -> Result<Vec<Counters>>;                // Tier 2: per interface, loopback included
     pub fn traffic() -> Result<Traffic>;                       // BLOCKS for DEFAULT_WINDOW
     pub fn traffic_over(window: Duration) -> Result<Traffic>;  // BLOCKS for `window`, clamped to 100 ms ..= 60 s
 
@@ -1945,13 +1952,13 @@ pub struct Counters {
 
 | Id | Item | Tier | Cost [est.] |
 |---|---|---|---|
-| NET-04 | `totals()`, `counters()` | 1 / 2 | Linux 5 to 20 µs (`/proc/net/dev`, one read), macOS 10 µs, Windows 200 µs |
+| NET-04 | `totals()`, `counters()` | 1 / 2 | Linux 5 to 20 µs (`/proc/net/dev`, one read), macOS 10 µs, Windows 10 to 80 ms (`GetIfTable2`, measured) |
 | NET-05 | `Sampler` | 2 | as `totals()`; `sample()` allocates nothing |
 | NET-08 | `traffic()`, `traffic_over()` | 1 | 1 s of wall time (the window); two readings |
 
 How much this machine is downloading and uploading right now, as `Rate` values ("12.5 MiB/s", or `.bits()` for "104.9 Mbit/s"). Like CPU usage, a rate needs two readings: `traffic()` takes both itself and blocks for one second, which its name and documentation say; a monitor keeps a `Sampler`, which never blocks and measures the time since its previous sample. `totals()` gives the bytes and packets moved since boot, one cheap read, no waiting.
 
-Loopback is left out of the totals (it is the machine talking to itself). Counters are 64-bit on every platform; macOS's 32-bit counters wrap and are not used. A counter that goes backwards between two samples (an interface removed and re-created, a driver reset) re-bases that interface instead of reporting a negative or huge rate. Inside a container the counters are the container's network namespace, which is the traffic the process can see.
+Loopback is left out of the totals (it is the machine talking to itself); on Windows so are the rows that are neither a hardware interface nor connector-present (filter and sub-layer rows, which would count traffic twice). Counters are 64-bit on every platform; macOS's 32-bit counters wrap and are not used. A counter that goes backwards between two samples (an interface removed and re-created, a driver reset) re-bases that interface instead of reporting a negative or huge rate. Inside a container the counters are the container's network namespace, which is the traffic the process can see.
 
 ```rust
 use sys_lib as sys;
@@ -2005,7 +2012,7 @@ How many network connections the machine has open, as counts. Only counts: sys-l
 | OS | Source | Cost [est.] |
 |---|---|---|
 | Linux | `/proc/net/snmp` (`CurrEstab`), `/proc/net/sockstat` and `sockstat6` (`inuse`, `tw`) | 5 to 10 µs |
-| macOS | `net.inet.tcp.pcbcount`, `net.inet.udp.pcbcount` (total and UDP; established and time-wait are `None`) [verify] | 1 µs |
+| macOS | `net.inet.tcp.pcbcount`, `net.inet.udp.pcbcount` (the active PCB counts: total and UDP; established and time-wait are `None`) | 1 µs |
 | Windows | `GetTcpStatisticsEx` (`dwCurrEstab`, `dwNumConns`) for IPv4 and IPv6, `GetUdpStatisticsEx` (`dwNumAddrs`); time-wait is `None` | 5 µs |
 
 Inside a container the counts are the container's network namespace.
@@ -2054,7 +2061,7 @@ pub mod net {
 pub struct InterfaceOptions {
     pub include_down: bool,          // default true
     pub include_loopback: bool,      // default true
-    pub details: bool,               // default true; false skips the per-interface /sys reads (speed, MTU, kind)
+    pub details: bool,               // default true; false skips the per-interface reads (speed, MTU, kind; is_physical is then false)
     pub max_interfaces: usize,       // default 4_096
 }
 impl Default for InterfaceOptions;
@@ -2106,7 +2113,7 @@ pub struct Model { pub vendor: Option<&'static str>, pub name: &'static str, pub
 | HST-07 | `model()` | 0.5 | about 1 ns after the first call |
 
 - `name()` is live: DHCP and `hostnamectl` change it while processes run. A name that is not UTF-8 is converted lossily; longer than 255 bytes is truncated.
-- `uptime()` is monotonic; `boot_time()` is stable when the wall clock steps.
+- `uptime()` is monotonic and counts time suspended; `boot_time()` is the boot instant, the same on every call (it moves only when the wall clock is stepped).
 - `timezone()` returns the zone **name** and the current offset, not zone arithmetic (that is a calendar crate's job). `TZ` is used only when it is a valid name (at most 64 bytes, no `..`, no control characters, a leading `:` stripped); it is never opened as a path. When `/etc/localtime` is a copy rather than a link, the name comes from `/etc/timezone` or is `None`: zone files are not compared to guess. On Windows the IANA name comes from an embedded copy of the CLDR Windows-zone table.
 - `locale()` is `None` for `C`, `POSIX`, and `C.UTF-8` (no language preference expressed).
 - `model()` is the hardware model from DMI, SMBIOS, the device tree ("Raspberry Pi 5"), or `hw.model` on macOS ("Mac14,9"; no marketing-name table is shipped).
@@ -2146,7 +2153,7 @@ How many processes and threads the machine runs and how many files are open acro
 | OS | Processes | Threads, running | Open files |
 |---|---|---|---|
 | Linux | the numeric directory names in `/proc` (counted, not opened) | `/proc/loadavg` (running/total), `procs_running` in `/proc/stat` | `/proc/sys/fs/file-nr` (open, max) |
-| macOS | `proc_listallpids(NULL, 0)` | `kern.num_threads`; running `None` | `kern.num_files`, `kern.maxfiles` |
+| macOS | `proc_listallpids` with a buffer | `processor_set_statistics` thread count; running `None` | `kern.num_files`, `kern.maxfiles` |
 | Windows | `GetPerformanceInfo` `ProcessCount` | `ThreadCount`; running `None` | `HandleCount` (handles), max `None` |
 
 Cost: Linux 20 to 200 µs (scales with processes; bounded at 4 million entries), macOS and Windows 2 to 10 µs [est.].

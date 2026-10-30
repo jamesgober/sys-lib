@@ -44,6 +44,11 @@ pub(crate) const KERN_SUCCESS: KernReturn = 0;
 pub(crate) const O_NOFOLLOW: c_int = 0x0100;
 /// `ERANGE` (errno.h): a buffer was too small.
 pub(crate) const ERANGE: c_int = 34;
+// errno.h: the codes mapped to sys-lib's own error variants.
+pub(crate) const EPERM: c_int = 1;
+pub(crate) const ENOENT: c_int = 2;
+pub(crate) const ENOMEM: c_int = 12;
+pub(crate) const EACCES: c_int = 13;
 
 // ---------------------------------------------------------------------------
 // Structs
@@ -74,6 +79,9 @@ layout!(Statfs, size = 2168, align = 8);
 
 // Mount flags and getfsstat modes (sys/mount.h).
 pub(crate) const MNT_RDONLY: u32 = 0x0000_0001;
+/// Storage the user can remove from the system (macOS 11 SDK and later; the
+/// bit is never set by older kernels). `libc` does not define it.
+pub(crate) const MNT_REMOVABLE: u32 = 0x0000_0200;
 pub(crate) const MNT_LOCAL: u32 = 0x0000_1000;
 pub(crate) const MNT_DONTBROWSE: u32 = 0x0010_0000;
 pub(crate) const MNT_NOWAIT: c_int = 2;
@@ -97,6 +105,7 @@ pub(crate) struct Timespec {
 layout!(Timespec, size = 16, align = 8);
 
 /// `struct rusage` (sys/resource.h). `maxrss` is in bytes on Apple platforms.
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct Rusage {
     pub(crate) utime: Timeval,
@@ -305,8 +314,28 @@ pub(crate) const CTL_NET: c_int = 4;
 pub(crate) const PF_ROUTE: c_int = 17;
 pub(crate) const NET_RT_IFLIST2: c_int = 6;
 pub(crate) const RTM_IFINFO2: u8 = 0x12;
+/// `RTM_VERSION`: the routing message format these declarations describe.
+pub(crate) const RTM_VERSION: u8 = 5;
+/// `RTA_IFP`: the message carries the interface's `sockaddr_dl`.
+pub(crate) const RTA_IFP: c_int = 0x10;
+
+// Interface types (net/if_types.h), as `ifi_type` and `sdl_type` carry them.
+// Wi-Fi is `IFT_ETHER` on macOS; `IFT_IEEE80211` is mapped in case a driver
+// ever reports it. `libc` does not define these.
+pub(crate) const IFT_ETHER: u8 = 0x06;
+pub(crate) const IFT_PPP: u8 = 0x17;
+pub(crate) const IFT_LOOP: u8 = 0x18;
+pub(crate) const IFT_GIF: u8 = 0x37;
+pub(crate) const IFT_STF: u8 = 0x39;
+pub(crate) const IFT_IEEE80211: u8 = 0x47;
+pub(crate) const IFT_TUNNEL: u8 = 0x83;
+pub(crate) const IFT_L2VLAN: u8 = 0x87;
+pub(crate) const IFT_IEEE8023ADLAG: u8 = 0x88;
+pub(crate) const IFT_BRIDGE: u8 = 0xd1;
+pub(crate) const IFT_CELLULAR: u8 = 0xff;
 
 /// `struct xsw_usage` (sys/sysctl.h), from `vm.swapusage`.
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct XswUsage {
     pub(crate) total: u64,
@@ -320,6 +349,7 @@ layout!(XswUsage, size = 32, align = 8);
 /// `struct vm_statistics64` (mach/vm_statistics.h), the long-standing fields
 /// through `total_uncompressed_pages_in_compressor`. Newer SDKs append fields;
 /// the kernel fills at most the count passed, which is this struct's size.
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct VmStatistics64 {
     pub(crate) free_count: u32,
@@ -353,17 +383,17 @@ layout!(VmStatistics64, size = 152, align = 8);
 pub(crate) const VM_STATISTICS64_COUNT: u32 =
     (core::mem::size_of::<VmStatistics64>() / core::mem::size_of::<u32>()) as u32;
 
-/// `host_cpu_load_info` and `processor_cpu_load_info` (mach/host_info.h,
-/// mach/processor_info.h): ticks per CPU state.
+/// `processor_cpu_load_info` (mach/processor_info.h): ticks per CPU state.
+/// `host_processor_info` returns an array of these, read as a flat array of
+/// `CPU_STATE_MAX` integers per processor; the struct pins that layout.
+#[cfg(test)]
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub(crate) struct CpuLoadInfo {
     pub(crate) ticks: [u32; CPU_STATE_MAX],
 }
+#[cfg(test)]
 layout!(CpuLoadInfo, size = 16, align = 4);
-
-/// `HOST_CPU_LOAD_INFO_COUNT`.
-pub(crate) const CPU_LOAD_INFO_COUNT: u32 = CPU_STATE_MAX as u32;
 
 // CPU states (mach/machine.h).
 pub(crate) const CPU_STATE_USER: usize = 0;
@@ -373,10 +403,36 @@ pub(crate) const CPU_STATE_NICE: usize = 3;
 pub(crate) const CPU_STATE_MAX: usize = 4;
 
 // Flavors (mach/host_info.h, mach/processor_info.h, mach/task_info.h).
-pub(crate) const HOST_CPU_LOAD_INFO: c_int = 3;
 pub(crate) const HOST_VM_INFO64: c_int = 4;
 pub(crate) const PROCESSOR_CPU_LOAD_INFO: c_int = 2;
+pub(crate) const PROCESSOR_SET_LOAD_INFO: c_int = 4;
 pub(crate) const MACH_TASK_BASIC_INFO: u32 = 20;
+
+/// `struct processor_set_load_info` (mach/processor_info.h): the machine's
+/// task and thread counts, from the default processor set's name port.
+#[derive(Clone, Copy, Default)]
+#[repr(C)]
+pub(crate) struct ProcessorSetLoadInfo {
+    pub(crate) task_count: c_int,
+    pub(crate) thread_count: c_int,
+    pub(crate) load_average: c_int,
+    pub(crate) mach_factor: c_int,
+}
+layout!(ProcessorSetLoadInfo, size = 16, align = 4);
+
+/// `PROCESSOR_SET_LOAD_INFO_COUNT`, in `natural_t` units.
+pub(crate) const PROCESSOR_SET_LOAD_INFO_COUNT: u32 =
+    (core::mem::size_of::<ProcessorSetLoadInfo>() / core::mem::size_of::<u32>()) as u32;
+
+/// `struct mach_timebase_info` (mach/mach_time.h): Mach time units to
+/// nanoseconds is `numer / denom` (1/1 on Intel, 125/3 on Apple silicon).
+#[derive(Clone, Copy, Default)]
+#[repr(C)]
+pub(crate) struct MachTimebaseInfo {
+    pub(crate) numer: u32,
+    pub(crate) denom: u32,
+}
+layout!(MachTimebaseInfo, size = 8, align = 4);
 
 /// `time_value_t` (mach/time_value.h).
 #[derive(Clone, Copy, Default)]
@@ -388,6 +444,7 @@ pub(crate) struct TimeValue {
 layout!(TimeValue, size = 8, align = 4);
 
 /// `struct mach_task_basic_info` (mach/task_info.h), packed to 4 bytes.
+#[derive(Default)]
 #[repr(C, packed(4))]
 pub(crate) struct MachTaskBasicInfo {
     pub(crate) virtual_size: u64,
@@ -406,6 +463,7 @@ pub(crate) const MACH_TASK_BASIC_INFO_COUNT: u32 =
 
 /// `struct proc_taskinfo` (sys/proc_info.h).
 #[cfg(target_os = "macos")]
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct ProcTaskinfo {
     pub(crate) virtual_size: u64,
@@ -432,6 +490,7 @@ layout!(ProcTaskinfo, size = 96, align = 8);
 
 /// `struct proc_bsdinfo` (sys/proc_info.h).
 #[cfg(target_os = "macos")]
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct ProcBsdinfo {
     pub(crate) flags: u32,
@@ -473,6 +532,7 @@ layout!(ProcFdinfo, size = 8, align = 4);
 /// `struct rusage_info_v2` (sys/resource.h). `phys_footprint` is what Activity
 /// Monitor shows as a process's memory.
 #[cfg(target_os = "macos")]
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct RusageInfoV2 {
     pub(crate) uuid: [u8; 16],
@@ -543,12 +603,6 @@ unsafe extern "C" {
     pub(crate) safe static mach_task_self_: MachPort;
     pub(crate) safe fn mach_host_self() -> MachPort;
     pub(crate) fn mach_port_deallocate(task: MachPort, name: MachPort) -> KernReturn;
-    pub(crate) fn host_statistics(
-        host: MachPort,
-        flavor: c_int,
-        info: *mut c_int,
-        count: *mut u32,
-    ) -> KernReturn;
     pub(crate) fn host_statistics64(
         host: MachPort,
         flavor: c_int,
@@ -569,8 +623,22 @@ unsafe extern "C" {
         count: *mut u32,
     ) -> KernReturn;
     pub(crate) fn vm_deallocate(task: MachPort, address: usize, size: usize) -> KernReturn;
+    /// The kernel's page size, the unit of the `vm_statistics64` counts (libsyscall
+    /// answers it locally from `vm_kernel_page_size`).
+    pub(crate) fn host_page_size(host: MachPort, size: *mut usize) -> KernReturn;
+    pub(crate) fn processor_set_default(host: MachPort, set: *mut MachPort) -> KernReturn;
+    pub(crate) fn processor_set_statistics(
+        set: MachPort,
+        flavor: c_int,
+        info: *mut c_int,
+        count: *mut u32,
+    ) -> KernReturn;
+    // mach/mach_time.h (macOS 10.12, iOS 10)
+    pub(crate) safe fn mach_continuous_time() -> u64;
+    pub(crate) fn mach_timebase_info(info: *mut MachTimebaseInfo) -> KernReturn;
     // unistd.h, sys/stat.h, sys/resource.h, pwd.h, time.h, stdlib.h
     pub(crate) safe fn geteuid() -> Uid;
+    pub(crate) safe fn getppid() -> c_int;
     pub(crate) safe fn umask(mask: Mode) -> Mode;
     pub(crate) fn getrlimit(resource: c_int, rlim: *mut Rlimit) -> c_int;
     pub(crate) fn setrlimit(resource: c_int, rlim: *const Rlimit) -> c_int;
@@ -612,6 +680,7 @@ unsafe extern "C" {
         size: c_int,
     ) -> c_int;
     pub(crate) fn proc_pid_rusage(pid: c_int, flavor: c_int, buffer: *mut *mut c_void) -> c_int;
+    pub(crate) fn proc_listallpids(buffer: *mut c_void, buffersize: c_int) -> c_int;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -670,6 +739,11 @@ unsafe extern "C" {
         entry: IoObject,
         plane: *const c_char,
         parent: *mut IoObject,
+    ) -> KernReturn;
+    pub(crate) fn IORegistryEntryGetChildEntry(
+        entry: IoObject,
+        plane: *const c_char,
+        child: *mut IoObject,
     ) -> KernReturn;
     pub(crate) fn IOObjectRelease(object: IoObject) -> KernReturn;
     // IOKit/ps/IOPowerSources.h
@@ -736,13 +810,25 @@ mod tests {
         compressor_page_count => compressor_page_count, throttled_count => throttled_count,
         external_page_count => external_page_count, internal_page_count => internal_page_count,
         total_uncompressed_pages_in_compressor => total_uncompressed_pages_in_compressor);
-    same_layout!(CpuLoadInfo, libc::host_cpu_load_info, ticks => cpu_ticks);
     same_layout!(CpuLoadInfo, libc::processor_cpu_load_info, ticks => cpu_ticks);
     same_layout!(TimeValue, libc::time_value_t, seconds => seconds, microseconds => microseconds);
     same_layout!(MachTaskBasicInfo, libc::mach_task_basic_info,
         virtual_size => virtual_size, resident_size => resident_size,
         resident_size_max => resident_size_max, user_time => user_time,
         system_time => system_time, policy => policy, suspend_count => suspend_count);
+    same_layout!(ProcessorSetLoadInfo, libc::processor_set_load_info,
+        task_count => task_count, thread_count => thread_count,
+        load_average => load_average, mach_factor => mach_factor);
+
+    /// `libc` marks its Mach definitions deprecated (pointing at `mach2`); they
+    /// are still the oracle.
+    #[allow(deprecated)]
+    mod deprecated_in_libc {
+        use super::*;
+
+        same_layout!(MachTimebaseInfo, libc::mach_timebase_info,
+            numer => numer, denom => denom);
+    }
     #[cfg(target_os = "macos")]
     same_layout!(ProcTaskinfo, libc::proc_taskinfo,
         virtual_size => pti_virtual_size, resident_size => pti_resident_size,
@@ -769,6 +855,11 @@ mod tests {
         assert!(KERN_SUCCESS == libc::KERN_SUCCESS);
         assert!(O_NOFOLLOW == libc::O_NOFOLLOW);
         assert!(ERANGE == libc::ERANGE);
+        assert!(EPERM == libc::EPERM);
+        assert!(ENOENT == libc::ENOENT);
+        assert!(ENOMEM == libc::ENOMEM);
+        assert!(EACCES == libc::EACCES);
+        assert!(PROCESSOR_SET_LOAD_INFO == libc::PROCESSOR_SET_LOAD_INFO);
         assert!(MNT_RDONLY as i64 == libc::MNT_RDONLY as i64);
         assert!(MNT_LOCAL as i64 == libc::MNT_LOCAL as i64);
         assert!(MNT_NOWAIT == libc::MNT_NOWAIT);
@@ -788,7 +879,6 @@ mod tests {
         assert!(CTL_NET == libc::CTL_NET);
         assert!(PF_ROUTE == libc::PF_ROUTE);
         assert!(NET_RT_IFLIST2 == libc::NET_RT_IFLIST2);
-        assert!(HOST_CPU_LOAD_INFO == libc::HOST_CPU_LOAD_INFO);
         assert!(HOST_VM_INFO64 == libc::HOST_VM_INFO64);
         assert!(PROCESSOR_CPU_LOAD_INFO == libc::PROCESSOR_CPU_LOAD_INFO);
         assert!(MACH_TASK_BASIC_INFO == libc::MACH_TASK_BASIC_INFO);
@@ -807,6 +897,13 @@ mod tests {
         assert!(PROC_PIDTASKINFO == libc::PROC_PIDTASKINFO);
         assert!(RUSAGE_INFO_V2 == libc::RUSAGE_INFO_V2);
         assert!(RTM_IFINFO2 as c_int == libc::RTM_IFINFO2);
+        assert!(RTM_VERSION as c_int == libc::RTM_VERSION);
+        assert!(RTA_IFP == libc::RTA_IFP);
+        // The neighbours of MNT_REMOVABLE, which `libc` lacks: the bit sits
+        // between MNT_EXPORTED and MNT_QUARANTINE.
+        assert!(MNT_REMOVABLE as i64 == 2 * libc::MNT_EXPORTED as i64);
+        assert!(MNT_REMOVABLE as i64 * 2 == libc::MNT_QUARANTINE as i64);
+        assert!(MNT_DONTBROWSE as i64 == libc::MNT_DONTBROWSE as i64);
     };
 
     #[test]
