@@ -2,6 +2,7 @@
 //! applied to the real `/`, the environment it is told about, and the calls no
 //! file answers (`localtime_r`, `adjtimex`).
 
+#[cfg(not(target_os = "android"))]
 use core::time::Duration;
 use std::{
     ffi::{CStr, c_char},

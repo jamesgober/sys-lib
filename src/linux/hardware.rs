@@ -95,6 +95,7 @@ pub(crate) fn facts(root: &Root) -> HardwareFacts {
 }
 
 /// systemd's `CHASSIS=` values.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn form_from_name(name: &str) -> Option<FormFactor> {
     Some(match name {
         "desktop" => FormFactor::Desktop,
@@ -112,6 +113,7 @@ fn form_from_name(name: &str) -> Option<FormFactor> {
 
 /// The form factor: first answer wins. Inside a VM the firmware describes
 /// virtual hardware, so only the administrator's word counts (E-79).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub(crate) fn form_factor(root: &Root, in_vm: bool, has_battery: bool) -> Detection<FormFactor> {
     // E-80: the administrator overrides the firmware, as systemd honours it.
     let chassis = root.read(
