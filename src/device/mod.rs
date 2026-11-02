@@ -434,10 +434,11 @@ impl Builder {
         if let Some(id) = id_on(&key, self.basis) {
             return Ok(id);
         }
-        if self.fallback && self.basis != Basis::Install {
-            if let Some(id) = id_on(&key, Basis::Install) {
-                return Ok(id);
-            }
+        if self.fallback
+            && self.basis != Basis::Install
+            && let Some(id) = id_on(&key, Basis::Install)
+        {
+            return Ok(id);
         }
         Err(Error::NoIdentifierSource { basis: self.basis })
     }

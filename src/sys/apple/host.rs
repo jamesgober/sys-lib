@@ -1,13 +1,21 @@
-//! Host: uptime from the Mach continuous clock, the boot time, and the
-//! machine's process, thread, and open-file counts.
+//! Host: uptime from the Mach continuous clock, the boot time, the machine's
+//! process, thread, and open-file counts, the time zone, the clock's state, and
+//! the login sessions.
 
-use core::{ffi::c_int, time::Duration};
-use std::{sync::OnceLock, time::SystemTime};
+use core::{
+    ffi::{CStr, c_int},
+    mem::MaybeUninit,
+    time::Duration,
+};
+#[cfg(target_os = "macos")]
+use std::sync::{Mutex, PoisonError};
+use std::{path::Path, sync::OnceLock, time::SystemTime};
 
 use super::{SendRight, ffi, kern_error};
 use crate::{
     Error, Result,
-    host::{OpenFiles, Processes},
+    host::{ClockSync, OpenFiles, Processes, Session, TimeZone},
+    parse::tz,
 };
 
 /// The Mach timebase (never changes), or `None` when it cannot be read.
@@ -170,9 +178,244 @@ pub(crate) fn host_open_files() -> Result<OpenFiles> {
     })
 }
 
+/// The zone name: `TZ` when it is a valid name, else the zone the
+/// `/etc/localtime` link points at. Neither is opened.
+fn zone_name(env: Option<&str>, link: Option<&str>) -> Option<String> {
+    env.and_then(tz::from_env)
+        .or_else(|| link.and_then(tz::from_link))
+        .map(str::to_owned)
+}
+
+/// The offset east of UTC now and the zone's abbreviation, from `localtime_r`.
+fn local_offset(what: &'static str) -> Result<(i32, Option<String>)> {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| ffi::Time::try_from(d.as_secs()).unwrap_or(0));
+    let mut tm = MaybeUninit::<ffi::Tm>::zeroed();
+    // SAFETY: `now` is a readable `time_t` and `tm` a writable `struct tm`.
+    let result = unsafe { ffi::localtime_r(&raw const now, tm.as_mut_ptr()) };
+    if result.is_null() {
+        return Err(Error::Os {
+            what,
+            call: "localtime_r",
+            code: super::last_errno(),
+        });
+    }
+    // SAFETY: zeroed is a valid `struct tm` (integers and a null pointer), and
+    // the call succeeded.
+    let tm = unsafe { tm.assume_init() };
+    let offset = i32::try_from(tm.gmtoff).unwrap_or(0);
+    if tm.zone.is_null() {
+        return Ok((offset, None));
+    }
+    // SAFETY: a non-null `tm_zone` is a NUL-terminated string the library keeps
+    // alive; it is copied here, before anything can change the zone.
+    let zone = unsafe { CStr::from_ptr(tm.zone) };
+    let zone = crate::parse::lossy(zone.to_bytes(), 32);
+    Ok((offset, (!zone.is_empty()).then_some(zone)))
+}
+
+/// `TZ` and the `/etc/localtime` link for the name; the offset always.
+pub(crate) fn timezone() -> Result<TimeZone> {
+    let env = std::env::var("TZ").ok();
+    let link = std::fs::read_link("/etc/localtime").ok();
+    let (utc_offset_seconds, abbreviation) = local_offset("time zone")?;
+    Ok(TimeZone {
+        iana: zone_name(env.as_deref(), link.as_deref().and_then(Path::to_str)),
+        windows: None,
+        utc_offset_seconds,
+        abbreviation,
+    })
+}
+
+/// The environment's locale.
+pub(crate) fn locale() -> Option<(String, String)> {
+    crate::host::posix_locale()
+}
+
+/// What `ntp_adjtime` says: `state` is its return value. The kernel keeps the
+/// error figures in microseconds; negative ones are not figures.
+#[cfg(any(target_os = "macos", test))]
+fn clock_from(state: c_int, status: c_int, maxerror: i64, esterror: i64) -> ClockSync {
+    let micros = |n: i64| u64::try_from(n).ok().map(Duration::from_micros);
+    ClockSync {
+        synchronized: state != ffi::TIME_ERROR && status & ffi::STA_UNSYNC == 0,
+        max_error: micros(maxerror),
+        estimated_error: micros(esterror),
+    }
+}
+
+/// `ntp_adjtime` with no mode bits set, which reads and needs no privilege.
+#[cfg(target_os = "macos")]
+pub(crate) fn clock_sync() -> Result<Option<ClockSync>> {
+    let mut timex = ffi::Timex::default();
+    // SAFETY: `timex` is a writable `struct timex` with `modes` zero.
+    let state = unsafe { ffi::ntp_adjtime(&raw mut timex) };
+    if state < 0 {
+        let code = super::last_errno();
+        return Err(super::os_error(
+            "clock synchronization",
+            "ntp_adjtime",
+            code,
+        ));
+    }
+    Ok(Some(clock_from(
+        state,
+        timex.status,
+        timex.maxerror,
+        timex.esterror,
+    )))
+}
+
+/// iOS has no public call.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn clock_sync() -> Result<Option<ClockSync>> {
+    Ok(None)
+}
+
+/// The most utmpx records read; more is `TooLarge`.
+#[cfg(target_os = "macos")]
+const MAX_SESSIONS: usize = 4_096;
+
+/// A login session from a utmpx record. The remote host is looked at only to
+/// tell that there is one.
+#[cfg(target_os = "macos")]
+fn session_of(entry: &ffi::Utmpx) -> Option<Session> {
+    if entry.utype != ffi::USER_PROCESS {
+        return None;
+    }
+    let user = crate::parse::lossy(&super::c_array_bytes(&entry.user), 256);
+    if user.is_empty() {
+        return None;
+    }
+    let line = crate::parse::lossy(&super::c_array_bytes(&entry.line), 32);
+    Some(Session {
+        user,
+        terminal: (!line.is_empty()).then_some(line),
+        remote: entry.host[0] != 0,
+        since: (entry.tv.sec > 0)
+            .then(|| SystemTime::UNIX_EPOCH.checked_add(super::timeval_duration(entry.tv)))
+            .flatten(),
+    })
+}
+
+/// The utmpx database. Its iterator is one per process, so the walk holds a
+/// lock; a caller using `getutxent` itself at the same moment is not covered.
+#[cfg(target_os = "macos")]
+pub(crate) fn sessions() -> Result<Vec<Session>> {
+    static WALK: Mutex<()> = Mutex::new(());
+    let _walk = WALK.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut out = Vec::new();
+    // SAFETY: `WALK` is held, so nothing here moves the iterator meanwhile.
+    unsafe { ffi::setutxent() };
+    let mut within_budget = false;
+    for _ in 0..MAX_SESSIONS {
+        // SAFETY: as above.
+        let entry = unsafe { ffi::getutxent() };
+        // SAFETY: the result is null at the end, or a record the library keeps
+        // until the next call, which comes after this borrow ends.
+        let Some(entry) = (unsafe { entry.as_ref() }) else {
+            within_budget = true;
+            break;
+        };
+        out.extend(session_of(entry));
+    }
+    // SAFETY: as above.
+    unsafe { ffi::endutxent() };
+    if !within_budget {
+        return Err(Error::TooLarge {
+            what: "sessions",
+            limit: MAX_SESSIONS as u64,
+        });
+    }
+    Ok(out)
+}
+
+/// iOS has no session list.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn sessions() -> Result<Vec<Session>> {
+    Err(super::unsupported("sessions"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_host_apple_zone_name_order() {
+        let link = Some("/var/db/timezone/zoneinfo/America/New_York");
+        // E-93: a valid `TZ` wins; a hostile one is ignored.
+        assert_eq!(
+            zone_name(Some(":Europe/London"), link).as_deref(),
+            Some("Europe/London")
+        );
+        assert_eq!(
+            zone_name(Some("../../etc/shadow"), link).as_deref(),
+            Some("America/New_York")
+        );
+        assert_eq!(zone_name(None, link).as_deref(), Some("America/New_York"));
+        assert_eq!(
+            zone_name(
+                None,
+                Some("/var/db/timezone/tz/2024a.1.0/zoneinfo/Asia/Tokyo")
+            )
+            .as_deref(),
+            Some("Asia/Tokyo")
+        );
+        // E-92: a copy, not a link.
+        assert_eq!(zone_name(None, None), None);
+        assert_eq!(zone_name(None, Some("/etc/some-copy")), None);
+    }
+
+    #[test]
+    fn test_host_apple_clock_state() {
+        let good = clock_from(0, 0, 16_000, 250);
+        assert!(good.synchronized);
+        assert_eq!(good.max_error, Some(Duration::from_millis(16)));
+        assert_eq!(good.estimated_error, Some(Duration::from_micros(250)));
+        assert!(!clock_from(5, 0, 0, 0).synchronized, "TIME_ERROR");
+        assert!(!clock_from(0, 0x0040, 0, 0).synchronized, "STA_UNSYNC");
+        assert_eq!(clock_from(0, 0, -1, -1).max_error, None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_host_apple_session_records() {
+        // SAFETY: a zeroed `utmpx` is valid (integers and arrays only).
+        let blank: ffi::Utmpx = unsafe { MaybeUninit::zeroed().assume_init() };
+        let put = |to: &mut [core::ffi::c_char], from: &[u8]| {
+            for (dst, &src) in to.iter_mut().zip(from) {
+                *dst = src.cast_signed();
+            }
+        };
+        let mut e = blank;
+        assert_eq!(session_of(&e), None, "not a user process");
+        e.utype = ffi::USER_PROCESS;
+        assert_eq!(session_of(&e), None, "no user");
+        put(&mut e.user, b"maria");
+        put(&mut e.line, b"ttys003");
+        e.tv.sec = 1_700_000_000;
+        let s = session_of(&e).unwrap();
+        assert_eq!(s.user, "maria");
+        assert_eq!(s.terminal.as_deref(), Some("ttys003"));
+        assert!(!s.remote);
+        let since = s.since.unwrap().duration_since(SystemTime::UNIX_EPOCH);
+        assert_eq!(since.unwrap().as_secs(), 1_700_000_000);
+        put(&mut e.host, b"203.0.113.9");
+        let s = session_of(&e).unwrap();
+        assert!(s.remote);
+        assert!(!format!("{s:?}").contains("203.0.113.9"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_host_apple_live_detection_readings() {
+        let tz = timezone().unwrap();
+        assert!(tz.windows.is_none());
+        assert!(tz.utc_offset_seconds.abs() <= 14 * 3600);
+        assert!(clock_sync().unwrap().is_some());
+        sessions().unwrap();
+    }
 
     #[test]
     fn test_host_apple_mach_time_scaled_by_timebase() {

@@ -1,19 +1,26 @@
 //! Network: `getifaddrs` for interfaces and addresses, the `NET_RT_IFLIST2`
-//! routing sysctl for 64-bit counters and link details, and the PCB counts.
+//! routing sysctl for 64-bit counters and link details, `NET_RT_DUMP` for the
+//! default route, the PCB counts, and the resolver configuration.
 //!
 //! Every byte the OS hands back is copied out and parsed by safe code over
-//! slices: the routing-message walker and the `sockaddr` readers below.
+//! slices: the routing-message walkers and the `sockaddr` readers below.
 
 use core::{
-    ffi::{CStr, c_void},
+    ffi::{CStr, c_int, c_void},
     mem::{offset_of, size_of},
 };
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::{
+    io::Read,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+};
 
 use super::{bytes_at, ffi, i32_at, last_errno, os_error, u16_at, u32_at, u64_at};
 use crate::{
     Bytes, Error, Result,
-    net::{Connections, Counters, Interface, InterfaceKind, InterfaceOptions, IpNet, Mac, Totals},
+    net::{
+        Connections, Counters, Dns, Interface, InterfaceKind, InterfaceOptions, IpNet, Mac, Totals,
+    },
+    parse::resolv,
 };
 
 // ---------------------------------------------------------------------------
@@ -26,11 +33,16 @@ const STACK_LIST: usize = 32 << 10;
 /// The most routing-message bytes read; more is `TooLarge`.
 const MAX_LIST: usize = 16 << 20;
 const IFLIST2: &str = "sysctl NET_RT_IFLIST2";
+const RT_DUMP: &str = "sysctl NET_RT_DUMP";
 
-/// `sysctl(CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0)` into `buf`, or the size
+/// `sysctl(CTL_NET, PF_ROUTE, 0, family, operation, 0)` into `buf`, or the size
 /// it needs with no buffer: the bytes, or the `errno`.
-fn iflist2(buf: Option<&mut [u8]>) -> core::result::Result<usize, i32> {
-    let mut mib = [ffi::CTL_NET, ffi::PF_ROUTE, 0, 0, ffi::NET_RT_IFLIST2, 0];
+fn route_sysctl(
+    family: c_int,
+    operation: c_int,
+    buf: Option<&mut [u8]>,
+) -> core::result::Result<usize, i32> {
+    let mut mib = [ffi::CTL_NET, ffi::PF_ROUTE, 0, family, operation, 0];
     let (ptr, mut len) = match buf {
         Some(b) => (b.as_mut_ptr().cast::<c_void>(), b.len()),
         None => (core::ptr::null_mut(), 0),
@@ -54,14 +66,26 @@ fn iflist2(buf: Option<&mut [u8]>) -> core::result::Result<usize, i32> {
     Ok(len)
 }
 
-/// Calls `f` with the `NET_RT_IFLIST2` messages: in a stack buffer when they fit,
-/// else in a heap buffer bounded at 16 MiB. Interfaces appearing between the
-/// size query and the read (`ENOMEM`) mean asking again, at most three times.
+/// Calls `f` with the `NET_RT_IFLIST2` messages.
 fn with_iflist2<R>(what: &'static str, f: impl FnOnce(&[u8]) -> Result<R>) -> Result<R> {
+    with_route_table(what, IFLIST2, 0, ffi::NET_RT_IFLIST2, f)
+}
+
+/// Calls `f` with a routing table's messages: in a stack buffer when they fit,
+/// else in a heap buffer bounded at 16 MiB. Entries appearing between the size
+/// query and the read (`ENOMEM`) mean asking again, at most three times.
+fn with_route_table<R>(
+    what: &'static str,
+    call: &'static str,
+    family: c_int,
+    operation: c_int,
+    f: impl FnOnce(&[u8]) -> Result<R>,
+) -> Result<R> {
     let mut stack = [0u8; STACK_LIST];
     let mut heap: Vec<u8> = Vec::new();
     for _ in 0..3 {
-        let need = iflist2(None).map_err(|code| os_error(what, IFLIST2, code))?;
+        let need =
+            route_sysctl(family, operation, None).map_err(|code| os_error(what, call, code))?;
         let buf: &mut [u8] = if need <= STACK_LIST {
             &mut stack
         } else {
@@ -75,15 +99,15 @@ fn with_iflist2<R>(what: &'static str, f: impl FnOnce(&[u8]) -> Result<R>) -> Re
             heap.resize(size, 0);
             &mut heap
         };
-        match iflist2(Some(buf)) {
+        match route_sysctl(family, operation, Some(buf)) {
             Ok(len) => return f(&buf[..len.min(buf.len())]),
             Err(ffi::ENOMEM) => {}
-            Err(code) => return Err(os_error(what, IFLIST2, code)),
+            Err(code) => return Err(os_error(what, call, code)),
         }
     }
     Err(Error::Os {
         what,
-        call: IFLIST2,
+        call,
         code: ffi::ENOMEM,
     })
 }
@@ -204,6 +228,211 @@ fn link_name(sdl: &[u8]) -> Option<&[u8]> {
     let nlen = usize::from(*sdl.get(offset_of!(ffi::SockaddrDl, nlen))?);
     let name = sdl.get(start..start.checked_add(nlen)?)?;
     (!name.is_empty()).then_some(name)
+}
+
+/// One `sockaddr` of a routing message and what follows it. Each takes `sa_len`
+/// rounded up to 4 bytes, and an empty one still takes 4 (`ROUNDUP32` in xnu's
+/// `rtsock.c`).
+fn next_sockaddr(data: &[u8]) -> Option<(&[u8], &[u8])> {
+    let len = usize::from(*data.first()?);
+    let step = len.next_multiple_of(4).max(4);
+    Some((data.get(..len)?, data.get(step..)?))
+}
+
+/// The interface of a route that is the machine's default: up, not a host
+/// route, not bound to one interface (`RTF_IFSCOPE`: each interface keeps its
+/// own such copy), to the unspecified address with an empty netmask. The
+/// netmask check keeps out the `0.0.0.0/1` a VPN adds.
+fn default_route(msg: &[u8]) -> Option<u32> {
+    if *msg.get(offset_of!(ffi::RtMsghdr, version))? != ffi::RTM_VERSION
+        || *msg.get(offset_of!(ffi::RtMsghdr, mtype))? != ffi::RTM_GET
+    {
+        return None;
+    }
+    let flags = i32_at(msg, offset_of!(ffi::RtMsghdr, flags))?;
+    let addrs = i32_at(msg, offset_of!(ffi::RtMsghdr, addrs))?;
+    if flags & ffi::RTF_UP == 0
+        || flags & (ffi::RTF_HOST | ffi::RTF_IFSCOPE) != 0
+        || addrs & ffi::RTA_DST == 0
+    {
+        return None;
+    }
+    let (dst, mut rest) = next_sockaddr(msg.get(size_of::<ffi::RtMsghdr>()..)?)?;
+    let Some(Sock::Ip(ip)) = parse_sockaddr(dst) else {
+        return None;
+    };
+    if !ip.is_unspecified() {
+        return None;
+    }
+    if addrs & ffi::RTA_GATEWAY != 0 {
+        rest = next_sockaddr(rest)?.1;
+    }
+    if addrs & ffi::RTA_NETMASK != 0 {
+        let (mask, _) = next_sockaddr(rest)?;
+        if prefix_len(mask, dst[offset_of!(ffi::Sockaddr, family)]) != 0 {
+            return None;
+        }
+    }
+    let index = u16_at(msg, offset_of!(ffi::RtMsghdr, index))?;
+    (index != 0).then_some(u32::from(index))
+}
+
+/// Walks a `NET_RT_DUMP` answer for the default route. Each message is at least
+/// 4 bytes, so the walk is bounded by the buffer.
+fn walk_routes(what: &'static str, buf: &[u8]) -> Result<Option<u32>> {
+    let malformed = || Error::Malformed {
+        what,
+        source: RT_DUMP,
+        line: None,
+    };
+    let mut at = 0;
+    while at < buf.len() {
+        let rest = &buf[at..];
+        let len =
+            usize::from(u16_at(rest, offset_of!(ffi::RtMsghdr, msglen)).ok_or_else(malformed)?);
+        if len < 4 || len > rest.len() {
+            return Err(malformed());
+        }
+        if let Some(index) = default_route(&rest[..len]) {
+            return Ok(Some(index));
+        }
+        at += len;
+    }
+    Ok(None)
+}
+
+/// The interface of the IPv4 default route, else the IPv6 one (an IPv6-only
+/// network has no other); `None` with no default route.
+pub(crate) fn primary_interface() -> Result<Option<u32>> {
+    const WHAT: &str = "default route";
+    for family in [ffi::AF_INET, ffi::AF_INET6] {
+        let index = with_route_table(
+            WHAT,
+            RT_DUMP,
+            c_int::from(family),
+            ffi::NET_RT_DUMP,
+            |buf| walk_routes(WHAT, buf),
+        )?;
+        if index.is_some() {
+            return Ok(index);
+        }
+    }
+    Ok(None)
+}
+
+/// The most of a resolver configuration read.
+const MAX_RESOLV: u64 = 1 << 20;
+
+/// `/etc/resolv.conf`, bounded.
+fn read_resolv(what: &'static str) -> Result<Vec<u8>> {
+    const PATH: &str = "/etc/resolv.conf";
+    let io_error = |e: std::io::Error| os_error(what, PATH, e.raw_os_error().unwrap_or(0));
+    let file = std::fs::File::open(PATH).map_err(io_error)?;
+    let mut data = Vec::new();
+    file.take(MAX_RESOLV + 1)
+        .read_to_end(&mut data)
+        .map_err(io_error)?;
+    if data.len() as u64 > MAX_RESOLV {
+        return Err(Error::TooLarge {
+            what,
+            limit: MAX_RESOLV,
+        });
+    }
+    Ok(data)
+}
+
+fn dns_from(what: &'static str, parsed: resolv::Resolv) -> Result<Dns> {
+    if parsed.too_large {
+        return Err(Error::TooLarge {
+            what,
+            limit: resolv::MAX_ENTRIES as u64,
+        });
+    }
+    Ok(Dns {
+        servers: parsed.servers,
+        upstream: Vec::new(),
+        search: parsed.search,
+    })
+}
+
+/// Calls `f` with each string of a list that can stand as one word of a
+/// `resolv.conf` line; one past the budget are read, so a longer list is still
+/// `TooLarge`. White space could not have come from the system and would change
+/// the line's meaning.
+#[cfg(target_os = "macos")]
+fn each_word(list: Option<super::iokit::Ref<'_>>, mut f: impl FnMut(&[u8])) {
+    let Some(list) = list else {
+        return;
+    };
+    for item in list.items(resolv::MAX_ENTRIES + 1) {
+        let mut buf = [0u8; 256];
+        if let Some(word) = item.text(&mut buf)
+            && !word.is_empty()
+            && !word.iter().any(u8::is_ascii_whitespace)
+        {
+            f(word);
+        }
+    }
+}
+
+/// The global resolver from SystemConfiguration's dynamic store, written out as
+/// `resolv.conf` lines so that one parser and one budget apply. `None` when the
+/// store gives no server.
+#[cfg(target_os = "macos")]
+fn dynamic_store() -> Option<Vec<u8>> {
+    use super::iokit::Cf;
+
+    const WHAT: &str = "DNS configuration";
+    let name = Cf::string(WHAT, "sys-lib").ok()?;
+    let key = Cf::string(WHAT, "State:/Network/Global/DNS").ok()?;
+    let servers = Cf::string(WHAT, "ServerAddresses").ok()?;
+    let domains = Cf::string(WHAT, "SearchDomains").ok()?;
+    // SAFETY: `name` is a live `CFString`; a null allocator is the default one,
+    // and the callback and context are optional. The result, if any, carries
+    // one reference.
+    let store = Cf::new(unsafe {
+        ffi::SCDynamicStoreCreate(
+            core::ptr::null(),
+            name.raw(),
+            core::ptr::null(),
+            core::ptr::null_mut(),
+        )
+    })?;
+    // SAFETY: both are live objects. The result, if any, carries one reference.
+    let value = Cf::new(unsafe { ffi::SCDynamicStoreCopyValue(store.raw(), key.raw()) })?;
+    let value = value.get();
+    let mut text = Vec::new();
+    each_word(value.value(&servers), |server| {
+        text.extend_from_slice(b"nameserver ");
+        text.extend_from_slice(server);
+        text.push(b'\n');
+    });
+    if text.is_empty() {
+        return None;
+    }
+    text.extend_from_slice(b"search");
+    each_word(value.value(&domains), |domain| {
+        text.push(b' ');
+        text.extend_from_slice(domain);
+    });
+    Some(text)
+}
+
+/// iOS has no dynamic store.
+#[cfg(not(target_os = "macos"))]
+fn dynamic_store() -> Option<Vec<u8>> {
+    None
+}
+
+/// The dynamic store on macOS, which `/etc/resolv.conf` is written from; that
+/// file where the store gives nothing, and on iOS.
+pub(crate) fn dns() -> Result<Dns> {
+    const WHAT: &str = "DNS configuration";
+    let text = match dynamic_store() {
+        Some(text) => text,
+        None => read_resolv(WHAT)?,
+    };
+    dns_from(WHAT, resolv::parse(&text))
 }
 
 pub(crate) fn net_totals() -> Result<Totals> {
@@ -589,6 +818,176 @@ mod tests {
         m
     }
 
+    /// A `NET_RT_DUMP` message: `sockaddr`s as the kernel lays them out, each
+    /// rounded up to 4 bytes; `&[0]` is an empty one, which takes 4.
+    fn route(index: u16, flags: c_int, addrs: c_int, sockaddrs: &[&[u8]]) -> Vec<u8> {
+        let mut m = vec![0u8; size_of::<ffi::RtMsghdr>()];
+        m[offset_of!(ffi::RtMsghdr, version)] = ffi::RTM_VERSION;
+        m[offset_of!(ffi::RtMsghdr, mtype)] = ffi::RTM_GET;
+        let at = offset_of!(ffi::RtMsghdr, index);
+        m[at..at + 2].copy_from_slice(&index.to_ne_bytes());
+        let at = offset_of!(ffi::RtMsghdr, flags);
+        m[at..at + 4].copy_from_slice(&flags.to_ne_bytes());
+        let at = offset_of!(ffi::RtMsghdr, addrs);
+        m[at..at + 4].copy_from_slice(&addrs.to_ne_bytes());
+        for sa in sockaddrs {
+            m.extend_from_slice(sa);
+            m.resize(m.len().next_multiple_of(4), 0);
+        }
+        let len = m.len() as u16;
+        m[..2].copy_from_slice(&len.to_ne_bytes());
+        m
+    }
+
+    fn v4(a: [u8; 4]) -> Vec<u8> {
+        let mut sa = vec![16, ffi::AF_INET, 0, 0];
+        sa.extend(a);
+        sa.resize(16, 0);
+        sa
+    }
+
+    const ADDRS: c_int = ffi::RTA_DST | ffi::RTA_GATEWAY | ffi::RTA_NETMASK;
+
+    /// `default via 192.168.1.1`: the netmask's `sa_len` is 0.
+    fn default_v4(index: u16, flags: c_int) -> Vec<u8> {
+        route(
+            index,
+            flags,
+            ADDRS,
+            &[&v4([0; 4]), &v4([192, 168, 1, 1]), &[0]],
+        )
+    }
+
+    #[test]
+    fn test_net_apple_sockaddr_stepping() {
+        let (sa, rest) = next_sockaddr(&[6, 2, 0, 0, 9, 9, 0, 0, 7]).unwrap();
+        assert_eq!((sa, rest), (&[6, 2, 0, 0, 9, 9][..], &[7][..]));
+        // An empty one still takes four bytes.
+        let (sa, rest) = next_sockaddr(&[0, 0, 0, 0, 7]).unwrap();
+        assert_eq!((sa, rest), (&[][..], &[7][..]));
+        assert_eq!(next_sockaddr(&[]), None);
+        assert_eq!(next_sockaddr(&[16, 2]), None);
+        assert_eq!(next_sockaddr(&[6, 2, 0, 0, 9, 9]), None);
+    }
+
+    #[test]
+    fn test_net_apple_default_route_found() {
+        assert_eq!(default_route(&default_v4(4, ffi::RTF_UP)), Some(4));
+        // A directly attached default, as a point-to-point link has.
+        let direct = route(
+            9,
+            ffi::RTF_UP,
+            ffi::RTA_DST | ffi::RTA_NETMASK,
+            &[&v4([0; 4]), &[0]],
+        );
+        assert_eq!(default_route(&direct), Some(9));
+        // The netmask may also be present and all zero.
+        let zero = route(
+            5,
+            ffi::RTF_UP,
+            ADDRS,
+            &[&v4([0; 4]), &v4([10, 0, 0, 1]), &[8, 0, 0, 0, 0, 0, 0, 0]],
+        );
+        assert_eq!(default_route(&zero), Some(5));
+        let mut v6 = vec![28, ffi::AF_INET6];
+        v6.resize(28, 0);
+        let ipv6 = route(
+            6,
+            ffi::RTF_UP,
+            ffi::RTA_DST | ffi::RTA_NETMASK,
+            &[&v6, &[0]],
+        );
+        assert_eq!(default_route(&ipv6), Some(6));
+    }
+
+    #[test]
+    fn test_net_apple_other_routes_are_not_default() {
+        // Scoped copy, a host route, a route that is down, interface 0.
+        let scoped = default_v4(4, ffi::RTF_UP | ffi::RTF_IFSCOPE);
+        assert_eq!(default_route(&scoped), None);
+        assert_eq!(
+            default_route(&default_v4(4, ffi::RTF_UP | ffi::RTF_HOST)),
+            None
+        );
+        assert_eq!(default_route(&default_v4(4, 0)), None);
+        assert_eq!(default_route(&default_v4(0, ffi::RTF_UP)), None);
+        // A network route, and a VPN's `0.0.0.0/1` with its trimmed netmask.
+        let net = route(
+            4,
+            ffi::RTF_UP,
+            ADDRS,
+            &[&v4([10, 0, 0, 0]), &v4([10, 0, 0, 1]), &[0]],
+        );
+        assert_eq!(default_route(&net), None);
+        let half = [5, 0, 0, 0, 0x80];
+        let vpn = route(
+            8,
+            ffi::RTF_UP,
+            ADDRS,
+            &[&v4([0; 4]), &v4([10, 8, 0, 1]), &half],
+        );
+        assert_eq!(default_route(&vpn), None);
+        // Another message type or version.
+        let mut other = default_v4(4, ffi::RTF_UP);
+        other[offset_of!(ffi::RtMsghdr, mtype)] = ffi::RTM_IFINFO2;
+        assert_eq!(default_route(&other), None);
+        other = default_v4(4, ffi::RTF_UP);
+        other[offset_of!(ffi::RtMsghdr, version)] = 4;
+        assert_eq!(default_route(&other), None);
+        // Cut short.
+        let full = default_v4(4, ffi::RTF_UP);
+        for cut in [0, 2, 40, size_of::<ffi::RtMsghdr>(), full.len() - 8] {
+            assert_eq!(default_route(&full[..cut]), None, "{cut}");
+        }
+    }
+
+    #[test]
+    fn test_net_apple_walks_to_the_unscoped_default() {
+        let mut buf = route(
+            1,
+            ffi::RTF_UP,
+            ADDRS,
+            &[&v4([127, 0, 0, 0]), &v4([127, 0, 0, 1]), &[0]],
+        );
+        buf.extend(default_v4(7, ffi::RTF_UP | ffi::RTF_IFSCOPE));
+        buf.extend(default_v4(4, ffi::RTF_UP));
+        buf.extend(default_v4(9, ffi::RTF_UP));
+        assert_eq!(walk_routes("test", &buf).unwrap(), Some(4));
+        assert_eq!(walk_routes("test", &[]).unwrap(), None);
+        let none = default_v4(7, ffi::RTF_UP | ffi::RTF_IFSCOPE);
+        assert_eq!(walk_routes("test", &none).unwrap(), None);
+        // A length that goes nowhere or past the end.
+        let mut bad = default_v4(4, 0);
+        bad[..2].copy_from_slice(&0u16.to_ne_bytes());
+        assert!(matches!(
+            walk_routes("test", &bad),
+            Err(Error::Malformed { .. })
+        ));
+        bad[..2].copy_from_slice(&4000u16.to_ne_bytes());
+        assert!(walk_routes("test", &bad).is_err());
+        assert!(walk_routes("test", &[1]).is_err());
+    }
+
+    #[test]
+    fn test_net_apple_dns_budget() {
+        let dns = dns_from(
+            "test",
+            resolv::parse(b"nameserver 1.1.1.1\nsearch a.example\n"),
+        );
+        let dns = dns.unwrap();
+        assert_eq!(dns.servers.len(), 1);
+        assert_eq!(dns.search, ["a.example"]);
+        assert!(dns.upstream.is_empty());
+        let mut text = String::new();
+        for i in 0..=resolv::MAX_ENTRIES {
+            text.push_str(&format!("nameserver 10.0.0.{i}\n"));
+        }
+        assert!(matches!(
+            dns_from("test", resolv::parse(text.as_bytes())),
+            Err(Error::TooLarge { .. })
+        ));
+    }
+
     #[test]
     fn test_net_apple_walker_reads_ifinfo2_and_skips_addresses() {
         let loopback = ffi::IFF_LOOPBACK.cast_signed();
@@ -748,5 +1147,9 @@ mod tests {
         let c = connections().unwrap();
         assert!(c.tcp_total.is_some() && c.udp.is_some());
         assert_eq!((c.tcp_established, c.tcp_time_wait), (None, None));
+        // The default route, when there is one, names a listed interface.
+        if let Some(index) = primary_interface().unwrap() {
+            assert!(list.iter().any(|i| i.index == index), "{index}");
+        }
     }
 }

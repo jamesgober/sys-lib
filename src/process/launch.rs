@@ -109,7 +109,7 @@ pub(crate) fn decide(facts: LaunchFacts, in_container: bool, terminal: bool) -> 
     let mut note = |check, strength| evidence.push(Evidence { check, strength });
     let mut unit = None;
     let by = if let Some((by, name, strength)) = facts.service {
-        unit = name.map(|n| crate::os::keep(n));
+        unit = name.map(crate::os::keep);
         note("service manager", strength);
         by
     } else if facts.is_pid1 && in_container {

@@ -2,8 +2,9 @@
 //! and IOKit item sys-lib uses, written by hand from the Apple SDK headers.
 //!
 //! Declared for 64-bit targets (x86_64 and arm64 macOS, arm64 iOS). Items iOS
-//! does not offer publicly (libproc, IOKit, `getfsstat`, `gethostuuid`) are
-//! gated to macOS. Each struct has a size and alignment assertion, and the
+//! does not offer publicly (libproc, IOKit, SystemConfiguration's dynamic store,
+//! `getfsstat`, `gethostuuid`, `getattrlist`, utmpx, `ntp_adjtime`) are gated to
+//! macOS. Each struct has a size and alignment assertion, and the
 //! tests at the bottom compare it with `libc` field by field.
 //!
 //! On x86_64 macOS the `statfs` family has two ABIs; the 64-bit-inode one
@@ -16,6 +17,8 @@
               arrives in 0.3 to 0.5 (docs/API.md), and this expectation goes when the last one is"
 )]
 
+#[cfg(target_os = "macos")]
+use core::ffi::c_short;
 use core::ffi::{c_char, c_int, c_long, c_uint, c_void};
 
 /// `mach_port_t`.
@@ -309,15 +312,66 @@ pub(crate) struct IfMsghdr2 {
 }
 layout!(IfMsghdr2, size = 160, align = 4);
 
+/// `struct rt_metrics` (net/route.h).
+#[repr(C)]
+pub(crate) struct RtMetrics {
+    pub(crate) locks: u32,
+    pub(crate) mtu: u32,
+    pub(crate) hopcount: u32,
+    pub(crate) expire: i32,
+    pub(crate) recvpipe: u32,
+    pub(crate) sendpipe: u32,
+    pub(crate) ssthresh: u32,
+    pub(crate) rtt: u32,
+    pub(crate) rttvar: u32,
+    pub(crate) pksent: u32,
+    pub(crate) state: u32,
+    pub(crate) filler: [u32; 3],
+}
+layout!(RtMetrics, size = 56, align = 4);
+
+/// `struct rt_msghdr` (net/route.h): one per route from
+/// `sysctl(CTL_NET, PF_ROUTE, 0, family, NET_RT_DUMP, 0)`; the `sockaddr`s named
+/// by `addrs` follow, each rounded up to 4 bytes.
+#[repr(C)]
+pub(crate) struct RtMsghdr {
+    pub(crate) msglen: u16,
+    pub(crate) version: u8,
+    pub(crate) mtype: u8,
+    pub(crate) index: u16,
+    pub(crate) flags: c_int,
+    pub(crate) addrs: c_int,
+    pub(crate) pid: c_int,
+    pub(crate) seq: c_int,
+    pub(crate) errno: c_int,
+    pub(crate) used: c_int,
+    pub(crate) inits: u32,
+    pub(crate) rmx: RtMetrics,
+}
+layout!(RtMsghdr, size = 92, align = 4);
+
 // Routing sysctl (sys/sysctl.h, net/route.h).
 pub(crate) const CTL_NET: c_int = 4;
 pub(crate) const PF_ROUTE: c_int = 17;
+pub(crate) const NET_RT_DUMP: c_int = 1;
 pub(crate) const NET_RT_IFLIST2: c_int = 6;
+/// `RTM_GET`: the type of every message `NET_RT_DUMP` answers with.
+pub(crate) const RTM_GET: u8 = 0x4;
 pub(crate) const RTM_IFINFO2: u8 = 0x12;
 /// `RTM_VERSION`: the routing message format these declarations describe.
 pub(crate) const RTM_VERSION: u8 = 5;
+// Which `sockaddr`s a routing message carries, in the order they follow it.
+pub(crate) const RTA_DST: c_int = 0x1;
+pub(crate) const RTA_GATEWAY: c_int = 0x2;
+pub(crate) const RTA_NETMASK: c_int = 0x4;
 /// `RTA_IFP`: the message carries the interface's `sockaddr_dl`.
 pub(crate) const RTA_IFP: c_int = 0x10;
+// Route flags (net/route.h).
+pub(crate) const RTF_UP: c_int = 0x1;
+pub(crate) const RTF_HOST: c_int = 0x4;
+/// A route bound to one interface: every interface with a default route keeps
+/// such a copy; the machine's own default route is the one without the flag.
+pub(crate) const RTF_IFSCOPE: c_int = 0x0100_0000;
 
 // Interface types (net/if_types.h), as `ifi_type` and `sdl_type` carry them.
 // Wi-Fi is `IFT_ETHER` on macOS; `IFT_IEEE80211` is mapped in case a driver
@@ -333,6 +387,97 @@ pub(crate) const IFT_L2VLAN: u8 = 0x87;
 pub(crate) const IFT_IEEE8023ADLAG: u8 = 0x88;
 pub(crate) const IFT_BRIDGE: u8 = 0xd1;
 pub(crate) const IFT_CELLULAR: u8 = 0xff;
+
+/// `struct timex` (sys/timex.h): `maxerror` and `esterror` are in microseconds.
+/// With `modes` zero, `ntp_adjtime` only reads, and needs no privilege.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+#[repr(C)]
+pub(crate) struct Timex {
+    pub(crate) modes: c_uint,
+    pub(crate) offset: c_long,
+    pub(crate) freq: c_long,
+    pub(crate) maxerror: c_long,
+    pub(crate) esterror: c_long,
+    pub(crate) status: c_int,
+    pub(crate) constant: c_long,
+    pub(crate) precision: c_long,
+    pub(crate) tolerance: c_long,
+    pub(crate) ppsfreq: c_long,
+    pub(crate) jitter: c_long,
+    pub(crate) shift: c_int,
+    pub(crate) stabil: c_long,
+    pub(crate) jitcnt: c_long,
+    pub(crate) calcnt: c_long,
+    pub(crate) errcnt: c_long,
+    pub(crate) stbcnt: c_long,
+}
+#[cfg(target_os = "macos")]
+layout!(Timex, size = 136, align = 8);
+
+// sys/timex.h: the clock's state.
+pub(crate) const STA_UNSYNC: c_int = 0x0040;
+pub(crate) const TIME_ERROR: c_int = 5;
+
+/// `struct utmpx` (utmpx.h).
+#[cfg(target_os = "macos")]
+#[repr(C)]
+pub(crate) struct Utmpx {
+    pub(crate) user: [c_char; 256],
+    pub(crate) id: [c_char; 4],
+    pub(crate) line: [c_char; 32],
+    pub(crate) pid: c_int,
+    pub(crate) utype: c_short,
+    pub(crate) tv: Timeval,
+    pub(crate) host: [c_char; 256],
+    pub(crate) pad: [u32; 16],
+}
+#[cfg(target_os = "macos")]
+layout!(Utmpx, size = 640, align = 8);
+
+/// `USER_PROCESS` (utmpx.h): a login session.
+#[cfg(target_os = "macos")]
+pub(crate) const USER_PROCESS: c_short = 7;
+
+/// `struct attrlist` (sys/attr.h).
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+#[repr(C)]
+pub(crate) struct Attrlist {
+    pub(crate) bitmapcount: u16,
+    pub(crate) reserved: u16,
+    pub(crate) commonattr: u32,
+    pub(crate) volattr: u32,
+    pub(crate) dirattr: u32,
+    pub(crate) fileattr: u32,
+    pub(crate) forkattr: u32,
+}
+#[cfg(target_os = "macos")]
+layout!(Attrlist, size = 24, align = 4);
+
+// sys/attr.h, unistd.h.
+#[cfg(target_os = "macos")]
+pub(crate) const ATTR_BIT_MAP_COUNT: u16 = 5;
+#[cfg(target_os = "macos")]
+pub(crate) const ATTR_VOL_NAME: u32 = 0x0000_2000;
+/// `ATTR_VOL_INFO`: required in `volattr` whenever a volume attribute is asked for.
+#[cfg(target_os = "macos")]
+pub(crate) const ATTR_VOL_INFO: u32 = 0x8000_0000;
+#[cfg(target_os = "macos")]
+pub(crate) const FSOPT_NOFOLLOW: u32 = 0x1;
+
+/// `struct utsname` (sys/utsname.h).
+#[cfg(target_os = "ios")]
+#[repr(C)]
+pub(crate) struct Utsname {
+    pub(crate) sysname: [c_char; 256],
+    pub(crate) nodename: [c_char; 256],
+    pub(crate) release: [c_char; 256],
+    pub(crate) version: [c_char; 256],
+    pub(crate) machine: [c_char; 256],
+}
+#[cfg(target_os = "ios")]
+layout!(Utsname, size = 1280, align = 1);
 
 /// `struct xsw_usage` (sys/sysctl.h), from `vm.swapusage`.
 #[derive(Default)]
@@ -671,6 +816,20 @@ unsafe extern "C" {
     pub(crate) fn getfsstat(buf: *mut Statfs, bufsize: c_int, mode: c_int) -> c_int;
     // unistd.h
     pub(crate) fn gethostuuid(id: *mut u8, wait: *const Timespec) -> c_int;
+    // sys/attr.h (`list` is a `struct attrlist`)
+    pub(crate) fn getattrlist(
+        path: *const c_char,
+        list: *mut c_void,
+        buf: *mut c_void,
+        size: usize,
+        options: u32,
+    ) -> c_int;
+    // sys/timex.h (macOS 10.13)
+    pub(crate) fn ntp_adjtime(timex: *mut Timex) -> c_int;
+    // utmpx.h: one iterator per process, so the caller serialises these.
+    pub(crate) fn setutxent();
+    pub(crate) fn getutxent() -> *mut Utmpx;
+    pub(crate) fn endutxent();
     // libproc.h
     pub(crate) fn proc_pidinfo(
         pid: c_int,
@@ -683,6 +842,12 @@ unsafe extern "C" {
     pub(crate) fn proc_listallpids(buffer: *mut c_void, buffersize: c_int) -> c_int;
 }
 
+#[cfg(target_os = "ios")]
+unsafe extern "C" {
+    // sys/utsname.h
+    pub(crate) fn uname(name: *mut Utsname) -> c_int;
+}
+
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     pub(crate) fn CFRelease(cf: CfRef);
@@ -692,6 +857,7 @@ unsafe extern "C" {
     pub(crate) safe fn CFBooleanGetTypeID() -> CfTypeId;
     pub(crate) safe fn CFDictionaryGetTypeID() -> CfTypeId;
     pub(crate) safe fn CFArrayGetTypeID() -> CfTypeId;
+    pub(crate) safe fn CFDataGetTypeID() -> CfTypeId;
     pub(crate) fn CFStringCreateWithBytes(
         allocator: CfRef,
         bytes: *const u8,
@@ -713,6 +879,8 @@ unsafe extern "C" {
     pub(crate) fn CFArrayGetValueAtIndex(array: CfRef, index: CfIndex) -> *const c_void;
     pub(crate) fn CFNumberGetValue(number: CfRef, kind: CfIndex, value: *mut c_void) -> u8;
     pub(crate) fn CFBooleanGetValue(boolean: CfRef) -> u8;
+    pub(crate) fn CFDataGetLength(data: CfRef) -> CfIndex;
+    pub(crate) fn CFDataGetBytePtr(data: CfRef) -> *const u8;
     pub(crate) fn CFLocaleCopyCurrent() -> CfRef;
     pub(crate) fn CFLocaleGetIdentifier(locale: CfRef) -> CfRef;
 }
@@ -722,6 +890,11 @@ unsafe extern "C" {
 unsafe extern "C" {
     // IOKit/IOKitLib.h
     pub(crate) fn IOServiceMatching(name: *const c_char) -> CfRef;
+    pub(crate) fn IOBSDNameMatching(
+        main_port: MachPort,
+        options: u32,
+        bsd_name: *const c_char,
+    ) -> CfRef;
     pub(crate) fn IOServiceGetMatchingService(main_port: MachPort, matching: CfRef) -> IoObject;
     pub(crate) fn IOServiceGetMatchingServices(
         main_port: MachPort,
@@ -729,6 +902,7 @@ unsafe extern "C" {
         iterator: *mut IoObject,
     ) -> KernReturn;
     pub(crate) fn IOIteratorNext(iterator: IoObject) -> IoObject;
+    pub(crate) fn IORegistryEntryFromPath(main_port: MachPort, path: *const c_char) -> IoObject;
     pub(crate) fn IORegistryEntryCreateCFProperty(
         entry: IoObject,
         key: CfRef,
@@ -751,6 +925,20 @@ unsafe extern "C" {
     pub(crate) fn IOPSCopyPowerSourcesList(blob: CfRef) -> CfRef;
     pub(crate) fn IOPSGetPowerSourceDescription(blob: CfRef, source: CfRef) -> CfRef;
     pub(crate) fn IOPSGetProvidingPowerSourceType(snapshot: CfRef) -> CfRef;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "SystemConfiguration", kind = "framework")]
+unsafe extern "C" {
+    // SystemConfiguration/SCDynamicStore.h. The callback and context parameters
+    // are optional and always null here.
+    pub(crate) fn SCDynamicStoreCreate(
+        allocator: CfRef,
+        name: CfRef,
+        callout: *const c_void,
+        context: *mut c_void,
+    ) -> CfRef;
+    pub(crate) fn SCDynamicStoreCopyValue(store: CfRef, key: CfRef) -> CfRef;
 }
 
 #[cfg(test)]
@@ -798,6 +986,34 @@ mod tests {
     same_layout!(IfMsghdr2, libc::if_msghdr2,
         msglen => ifm_msglen, mtype => ifm_type, addrs => ifm_addrs, flags => ifm_flags,
         index => ifm_index, snd_len => ifm_snd_len, timer => ifm_timer, data => ifm_data);
+    #[cfg(target_os = "macos")]
+    same_layout!(RtMetrics, libc::rt_metrics,
+        locks => rmx_locks, mtu => rmx_mtu, hopcount => rmx_hopcount, expire => rmx_expire,
+        recvpipe => rmx_recvpipe, sendpipe => rmx_sendpipe, ssthresh => rmx_ssthresh,
+        rtt => rmx_rtt, rttvar => rmx_rttvar, pksent => rmx_pksent, filler => rmx_filler);
+    #[cfg(target_os = "macos")]
+    same_layout!(RtMsghdr, libc::rt_msghdr,
+        msglen => rtm_msglen, version => rtm_version, mtype => rtm_type, index => rtm_index,
+        flags => rtm_flags, addrs => rtm_addrs, pid => rtm_pid, seq => rtm_seq,
+        errno => rtm_errno, used => rtm_use, inits => rtm_inits, rmx => rtm_rmx);
+    #[cfg(target_os = "macos")]
+    same_layout!(Timex, libc::timex,
+        modes => modes, offset => offset, freq => freq, maxerror => maxerror,
+        esterror => esterror, status => status, constant => constant, precision => precision,
+        tolerance => tolerance, ppsfreq => ppsfreq, jitter => jitter, shift => shift,
+        stabil => stabil, jitcnt => jitcnt, calcnt => calcnt, errcnt => errcnt, stbcnt => stbcnt);
+    #[cfg(target_os = "macos")]
+    same_layout!(Utmpx, libc::utmpx,
+        user => ut_user, id => ut_id, line => ut_line, pid => ut_pid, utype => ut_type,
+        tv => ut_tv, host => ut_host);
+    #[cfg(target_os = "macos")]
+    same_layout!(Attrlist, libc::attrlist,
+        bitmapcount => bitmapcount, reserved => reserved, commonattr => commonattr,
+        volattr => volattr, dirattr => dirattr, fileattr => fileattr, forkattr => forkattr);
+    #[cfg(target_os = "ios")]
+    same_layout!(Utsname, libc::utsname,
+        sysname => sysname, nodename => nodename, release => release, version => version,
+        machine => machine);
     same_layout!(XswUsage, libc::xsw_usage,
         total => xsu_total, avail => xsu_avail, used => xsu_used,
         pagesize => xsu_pagesize, encrypted => xsu_encrypted);
@@ -899,6 +1115,21 @@ mod tests {
         assert!(RTM_IFINFO2 as c_int == libc::RTM_IFINFO2);
         assert!(RTM_VERSION as c_int == libc::RTM_VERSION);
         assert!(RTA_IFP == libc::RTA_IFP);
+        assert!(RTA_DST == libc::RTA_DST);
+        assert!(RTA_GATEWAY == libc::RTA_GATEWAY);
+        assert!(RTA_NETMASK == libc::RTA_NETMASK);
+        assert!(RTF_UP == libc::RTF_UP);
+        assert!(RTF_HOST == libc::RTF_HOST);
+        assert!(RTF_IFSCOPE == libc::RTF_IFSCOPE);
+        assert!(RTM_GET as c_int == libc::RTM_GET);
+        assert!(NET_RT_DUMP == libc::NET_RT_DUMP);
+        assert!(STA_UNSYNC == libc::STA_UNSYNC);
+        assert!(TIME_ERROR == libc::TIME_ERROR);
+        assert!(USER_PROCESS == libc::USER_PROCESS);
+        assert!(ATTR_BIT_MAP_COUNT == libc::ATTR_BIT_MAP_COUNT);
+        assert!(ATTR_VOL_NAME == libc::ATTR_VOL_NAME);
+        assert!(ATTR_VOL_INFO == libc::ATTR_VOL_INFO);
+        assert!(FSOPT_NOFOLLOW == libc::FSOPT_NOFOLLOW);
         // The neighbours of MNT_REMOVABLE, which `libc` lacks: the bit sits
         // between MNT_EXPORTED and MNT_QUARANTINE.
         assert!(MNT_REMOVABLE as i64 == 2 * libc::MNT_EXPORTED as i64);

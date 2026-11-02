@@ -506,7 +506,7 @@ pub(crate) mod tests {
         assert_eq!(structures(&[1, 200, 0, 0]).count(), 0);
         assert_eq!(structures(&[1, 3, 0, 0, 0, 0]).count(), 0);
         assert_eq!(structures(&[1, 4, 0, 0, b'a']).count(), 0);
-        let endless = vec![9u8, 4, 0, 0, 0, 0].repeat(MAX_STRUCTURES + 10);
+        let endless = [9u8, 4, 0, 0, 0, 0].repeat(MAX_STRUCTURES + 10);
         assert_eq!(structures(&endless).count(), MAX_STRUCTURES);
         // Nothing past the end-of-table structure.
         let mut t = structure(127, &[], &[]);

@@ -202,6 +202,204 @@ fn test_live_windows_matches_cim_and_dotnet() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_identity_matches_sysctl_and_sw_vers() {
+    use sys_lib::{cpu::Arch, virt};
+    let sysctl = |name: &str| need("sysctl", &["-n", name]);
+    if let Some(v) = need("sw_vers", &["-productVersion"]) {
+        let major: u32 = v.split('.').next().unwrap().parse().unwrap();
+        if (11..=15).contains(&major) || major == 26 {
+            let codename = os::codename().expect("a released major has a codename");
+            assert!(os::name().ends_with(codename), "{}", os::name());
+        }
+    }
+    assert_eq!(os::edition(), None);
+    assert_eq!(os::is_server_edition(), None);
+    if let Some(n) = tool("sysctl", &["-n", "hw.optional.arm64"]) {
+        let arch = if n == "1" { Arch::Aarch64 } else { cpu::arch() };
+        assert_eq!(cpu::native_arch(), arch);
+    }
+    assert_eq!(
+        cpu::is_translated(),
+        tool("sysctl", &["-n", "sysctl.proc_translated"]).as_deref() == Some("1")
+    );
+    let model = sysctl("hw.model");
+    if let Some(m) = &model {
+        let found = host::model().expect("hw.model answers");
+        assert_eq!(found.name, m);
+        assert_eq!(found.vendor, Some("Apple Inc."));
+        if m.starts_with("MacBook") && !virt::is_vm() {
+            assert_eq!(os::form_factor(), os::FormFactor::Laptop);
+        }
+        if m.starts_with("VirtualMac") {
+            assert_eq!(
+                virt::hypervisor(),
+                Some(virt::Hypervisor::AppleVirtualization)
+            );
+        }
+    }
+    if tool("sysctl", &["-n", "kern.hv_vmm_present"]).as_deref() == Some("1") {
+        assert!(virt::is_vm());
+        assert_eq!(os::form_factor(), os::FormFactor::Unknown);
+    }
+    assert_eq!(virt::cloud(), None);
+    assert!(virt::detect().evidence.iter().all(|e| !e.check.is_empty()));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_topology_matches_sysctl() {
+    let sysctl = |name: &str| need("sysctl", &["-n", name]);
+    let cores = &cpu::topology().cores;
+    assert_eq!(cores.len(), cpu::physical());
+    let logical: usize = cores.iter().map(|c| c.logical.len()).sum();
+    assert_eq!(logical, cpu::logical());
+    assert_eq!(cpu::numa_nodes().len(), 1);
+    assert_eq!(cpu::numa_nodes()[0].cpus.len(), cpu::logical());
+    if let Some(n) = sysctl("hw.memsize") {
+        let memory = cpu::numa_nodes()[0].memory.map(|m| m.raw());
+        assert_eq!(memory, Some(n.parse().unwrap()));
+    }
+    if let Some(n) = sysctl("hw.cachelinesize") {
+        assert_eq!(cpu::cache_line(), number(&n));
+    }
+    if let Some(n) = sysctl("hw.nperflevels") {
+        assert_eq!(cpu::is_hybrid(), number(&n) > 1);
+    }
+    for level in 0..2 {
+        let Some(n) = tool(
+            "sysctl",
+            &["-n", &format!("hw.perflevel{level}.physicalcpu_max")],
+        ) else {
+            continue;
+        };
+        if cpu::is_hybrid() {
+            let kind = if level == 0 {
+                cpu::CoreKind::Performance
+            } else {
+                cpu::CoreKind::Efficiency
+            };
+            let found = cores.iter().filter(|c| c.kind == kind).count();
+            assert_eq!(found, number(&n), "perflevel {level}");
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_disk_of_matches_df_and_stat() {
+    use sys_lib::{disk, virt};
+    let found = disk::of("/").unwrap();
+    assert_eq!(found.mount_point, std::path::Path::new("/"));
+    if let Some(df) = need("df", &["/"]) {
+        let device = df
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap();
+        assert_eq!(found.device, device);
+    }
+    if let Some(volume) = tool("diskutil", &["info", "/"]) {
+        let field = |name: &str| {
+            volume
+                .lines()
+                .find_map(|l| l.trim().strip_prefix(name))
+                .map(|v| v.trim_start_matches(':').trim().to_owned())
+        };
+        if let Some(name) = field("Volume Name") {
+            assert_eq!(found.label.as_deref(), Some(name.as_str()));
+        }
+        // A virtual disk may report no medium to the registry.
+        match field("Solid State").as_deref() {
+            Some("Yes") if !virt::is_vm() => assert_eq!(found.kind, disk::DiskKind::Ssd),
+            Some("No") if !virt::is_vm() => assert_eq!(found.kind, disk::DiskKind::Hdd),
+            _ => {}
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_network_matches_route_and_scutil() {
+    use sys_lib::net;
+    // `route get` follows the longest match, so a VPN's `0.0.0.0/1` answers for
+    // it; the two are comparable when the default route itself matched.
+    let route = tool("route", &["-n", "get", "default"]);
+    if let Some(route) = route.filter(|r| r.contains("mask: default")) {
+        let interface = route
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("interface:"))
+            .map(str::trim);
+        let found = net::primary().unwrap();
+        assert_eq!(found.as_ref().map(|i| i.name.as_str()), interface);
+    }
+    if let Some(scutil) = need("scutil", &["--dns"]) {
+        // Every server the resolver is given is in scutil's report.
+        match net::dns() {
+            Ok(dns) => {
+                for server in &dns.servers {
+                    assert!(scutil.contains(&server.to_string()), "{server}");
+                }
+            }
+            Err(e) => assert!(matches!(e, sys_lib::Error::NotFound { .. }), "{e}"),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_power_matches_pmset() {
+    use sys_lib::power;
+    let Some(batt) = need("pmset", &["-g", "batt"]) else {
+        return;
+    };
+    assert_eq!(power::has_battery(), batt.contains("InternalBattery"));
+    if batt.contains("'AC Power'") {
+        assert_eq!(power::on_ac().unwrap(), Some(true));
+    } else if batt.contains("'Battery Power'") {
+        assert_eq!(power::on_ac().unwrap(), Some(false));
+    }
+    if let Some(b) = power::battery().unwrap() {
+        // "-InternalBattery-0 (id=...)  87%; discharging; 3:12 remaining"
+        let shown: f32 = batt
+            .split_whitespace()
+            .find_map(|w| w.strip_suffix("%;"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            (b.charge.value() - shown).abs() <= 2.0,
+            "{} vs {shown}",
+            b.charge
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_time_and_sessions_match_the_tools() {
+    let tz = host::timezone().unwrap();
+    if let Some(offset) = need("date", &["+%z"]) {
+        // "+0100"
+        let digits: i32 = offset[1..].parse().unwrap();
+        let seconds = (digits / 100) * 3600 + (digits % 100) * 60;
+        let sign = if offset.starts_with('-') { -1 } else { 1 };
+        assert_eq!(tz.utc_offset_seconds, sign * seconds);
+    }
+    if let Some(name) = need("date", &["+%Z"]) {
+        assert_eq!(tz.abbreviation.as_deref(), Some(name.as_str()));
+    }
+    assert!(host::clock_sync().unwrap().is_some());
+    if let Some(who) = need("who", &[]) {
+        for session in host::sessions().unwrap() {
+            assert!(who.contains(&session.user), "{}", session.user);
+        }
+    }
+}
+
 /// `a` and `b` agree to within 2% of the larger plus `slack` bytes: memory
 /// and free space move between the two readings (PLAN.md 19.1).
 #[allow(dead_code)]
