@@ -18,9 +18,14 @@ use std::sync::OnceLock;
 use crate::{Mhz, Pressure, Result, mem::LimitSource, os::keep, parse::cpu_name};
 
 mod features;
+mod topology;
 mod usage;
 
 pub use features::{Feature, Features, X86Level, features, has, x86_level};
+pub use topology::{
+    Cache, CacheKind, Core, CoreKind, NumaNode, Package, Topology, cache_line, caches,
+    is_hybrid, numa_nodes, topology,
+};
 pub(crate) use usage::States;
 pub use usage::{DEFAULT_WINDOW, Sampler, Times, Usage, free, times, usage, usage_over, used};
 
@@ -136,6 +141,25 @@ pub fn is_64bit() -> bool {
 #[must_use]
 pub fn is_32bit() -> bool {
     !is_64bit()
+}
+
+/// The hardware's architecture, which differs from [`arch`] under Rosetta 2,
+/// WOW64, and ARM64 emulation.
+///
+/// ```
+/// println!("{} on {}", sys_lib::cpu::arch().name(), sys_lib::cpu::native_arch().name());
+/// ```
+#[must_use]
+pub fn native_arch() -> Arch {
+    static ARCH: OnceLock<Arch> = OnceLock::new();
+    *ARCH.get_or_init(crate::sys::native_arch)
+}
+
+/// Whether this process runs under emulation: Rosetta 2, WOW64, or ARM64
+/// emulation (E-88, E-89).
+#[must_use]
+pub fn is_translated() -> bool {
+    native_arch() != arch()
 }
 
 /// A CPU designer or manufacturer.

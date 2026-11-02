@@ -1,5 +1,12 @@
 //! Windows: kernel32, advapi32, iphlpapi, powrprof, and ntdll, called directly.
 
+// Not yet written on this backend: removed name by name, then the line goes.
+pub(crate) use super::detection::{
+    virtualization, cloud, form_factor, hardware, is_server_edition, native_arch, cpu_signature, cpu_topology, memory_modules, disk_of, primary_interface, dns, timezone, locale, clock_sync, sessions, launch, has_battery, batteries, on_ac,
+};
+#[cfg(feature = "device-id")]
+pub(crate) use super::detection::device_anchor;
+
 mod cpu;
 mod disk;
 mod ffi;
@@ -271,6 +278,8 @@ pub(crate) fn os() -> OsFacts {
         distro: "Windows".to_owned(),
         distro_id: "windows".to_owned(),
         release: None,
+        edition: None,
+        codename: None,
         name_source: Source::Registry,
     }
 }

@@ -249,6 +249,12 @@ pub struct OsInfo {
     pub distro_id: &'static str,
     /// [`os_release`].
     pub os_release: Option<&'static OsRelease>,
+    /// [`edition`].
+    pub edition: Option<&'static str>,
+    /// [`codename`].
+    pub codename: Option<&'static str>,
+    /// [`is_64bit`].
+    pub is_64bit: bool,
     /// Where `name` came from.
     pub name_source: Source,
 }
@@ -321,11 +327,214 @@ pub fn os_release() -> Option<&'static OsRelease> {
     info().os_release
 }
 
+/// The edition: "Professional", "ServerDatacenter" on Windows, the os-release
+/// `VARIANT_ID` on Linux. `None` elsewhere.
+#[must_use]
+pub fn edition() -> Option<&'static str> {
+    info().edition
+}
+
+/// The release's codename: "Sequoia", "noble". `None` where it has none.
+#[must_use]
+pub fn codename() -> Option<&'static str> {
+    info().codename
+}
+
+/// Whether this is a server edition: Windows Server. `None` where the question
+/// has no meaning.
+#[must_use]
+pub fn is_server_edition() -> Option<bool> {
+    static SERVER: OnceLock<Option<bool>> = OnceLock::new();
+    *SERVER.get_or_init(crate::sys::is_server_edition)
+}
+
+/// Whether the OS is 64-bit, whatever this process is (WOW64, ARM64 emulation).
+#[must_use]
+pub fn is_64bit() -> bool {
+    info().is_64bit
+}
+
 /// Everything above in one value.
 #[must_use]
 pub fn info() -> &'static OsInfo {
     static INFO: OnceLock<OsInfo> = OnceLock::new();
     INFO.get_or_init(|| from_facts(crate::sys::os()))
+}
+
+/// What kind of machine this is.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum FormFactor {
+    /// A desktop.
+    Desktop,
+    /// A laptop.
+    Laptop,
+    /// A laptop that folds into a tablet.
+    Convertible,
+    /// A tablet.
+    Tablet,
+    /// A phone.
+    Phone,
+    /// A handheld.
+    Handheld,
+    /// A server.
+    Server,
+    /// An embedded board.
+    Embedded,
+    /// A wearable.
+    Wearable,
+    /// A television.
+    Tv,
+    /// Not known. Inside a VM the chassis describes virtual hardware, so this
+    /// is the answer there.
+    Unknown,
+}
+
+impl FormFactor {
+    /// The lowercase name: `"laptop"`.
+    ///
+    /// ```
+    /// assert_eq!(sys_lib::os::FormFactor::Laptop.name(), "laptop");
+    /// ```
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Laptop => "laptop",
+            Self::Convertible => "convertible",
+            Self::Tablet => "tablet",
+            Self::Phone => "phone",
+            Self::Handheld => "handheld",
+            Self::Server => "server",
+            Self::Embedded => "embedded",
+            Self::Wearable => "wearable",
+            Self::Tv => "tv",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// An answer, where it came from, and how sure it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Detection<T> {
+    /// The answer.
+    pub value: T,
+    /// Where it came from: a constant.
+    pub source: &'static str,
+    /// How sure it is.
+    pub confidence: Confidence,
+}
+
+impl<T> Detection<T> {
+    pub(crate) const fn new(value: T, source: &'static str, confidence: Confidence) -> Self {
+        Self {
+            value,
+            source,
+            confidence,
+        }
+    }
+}
+
+/// How sure an answer is.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[non_exhaustive]
+pub enum Confidence {
+    /// No basis.
+    None,
+    /// A hint.
+    Low,
+    /// Likely.
+    Medium,
+    /// As reported by the firmware or the OS.
+    High,
+}
+
+/// What kind of machine this is. Detection is advisory: do not make security
+/// decisions on it.
+///
+/// ```
+/// use sys_lib as sys;
+///
+/// let d = sys::os::detect_form_factor();
+/// println!("{} (from {}, confidence {:?})", d.value.name(), d.source, d.confidence);
+/// ```
+#[must_use]
+pub fn form_factor() -> FormFactor {
+    detect_form_factor().value
+}
+
+/// The form factor with where it came from. Cached.
+#[must_use]
+pub fn detect_form_factor() -> &'static Detection<FormFactor> {
+    static FACT: OnceLock<Detection<FormFactor>> = OnceLock::new();
+    FACT.get_or_init(crate::sys::form_factor)
+}
+
+/// A desktop.
+#[must_use]
+pub fn is_desktop() -> bool {
+    form_factor() == FormFactor::Desktop
+}
+
+/// A laptop or a convertible.
+#[must_use]
+pub fn is_laptop() -> bool {
+    matches!(form_factor(), FormFactor::Laptop | FormFactor::Convertible)
+}
+
+/// A phone, tablet, handheld, or wearable.
+#[must_use]
+pub fn is_mobile() -> bool {
+    matches!(
+        form_factor(),
+        FormFactor::Phone | FormFactor::Tablet | FormFactor::Handheld | FormFactor::Wearable
+    )
+}
+
+/// A phone.
+#[must_use]
+pub fn is_phone() -> bool {
+    form_factor() == FormFactor::Phone
+}
+
+/// A tablet.
+#[must_use]
+pub fn is_tablet() -> bool {
+    form_factor() == FormFactor::Tablet
+}
+
+/// The chassis or the platform role says server.
+#[must_use]
+pub fn is_server() -> bool {
+    form_factor() == FormFactor::Server
+}
+
+/// The form an SMBIOS chassis type names (SMBIOS 3.5.0 section 7.4.1, systemd's
+/// mapping, plus Server for rack mount and multi-system); `None` goes to the
+/// next source.
+pub(crate) const fn form_from_chassis(chassis: u8) -> Option<FormFactor> {
+    Some(match chassis {
+        0x03 | 0x04 | 0x06 | 0x07 | 0x0D | 0x23 | 0x24 => FormFactor::Desktop,
+        0x08 | 0x09 | 0x0A | 0x0E => FormFactor::Laptop,
+        0x0B => FormFactor::Handheld,
+        0x11 | 0x17 | 0x19 | 0x1C | 0x1D => FormFactor::Server,
+        0x1E => FormFactor::Tablet,
+        0x1F | 0x20 => FormFactor::Convertible,
+        0x21 | 0x22 => FormFactor::Embedded,
+        _ => return None,
+    })
+}
+
+/// The form an ACPI preferred power-management profile names.
+pub(crate) const fn form_from_pm_profile(profile: u8) -> Option<FormFactor> {
+    Some(match profile {
+        1 | 3 | 6 => FormFactor::Desktop,
+        2 => FormFactor::Laptop,
+        4 | 5 | 7 => FormFactor::Server,
+        8 => FormFactor::Tablet,
+        _ => return None,
+    })
 }
 
 /// A static fact's text, kept for the life of the process. Called only from
@@ -373,6 +582,9 @@ pub(crate) fn from_facts(f: crate::sys::OsFacts) -> OsInfo {
         distro: keep(f.distro),
         distro_id: keep(f.distro_id),
         os_release,
+        edition: keep_opt(f.edition),
+        codename: keep_opt(f.codename),
+        is_64bit: crate::cpu::is_64bit(),
         name_source: f.name_source,
     }
 }
@@ -421,6 +633,8 @@ mod tests {
             kernel: "k".into(),
             distro: "X".into(),
             distro_id: "x".into(),
+            edition: Some("server".into()),
+            codename: None,
             release: Some(crate::sys::ReleaseFacts {
                 id: None,
                 id_like: vec!["rhel".into(), "fedora".into()],

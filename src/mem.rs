@@ -590,6 +590,109 @@ pub fn huge_pages() -> Result<Option<HugePages>> {
     crate::sys::huge_pages()
 }
 
+/// An installed memory module. Never the serial number.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MemoryModule {
+    /// Its size.
+    pub size: Bytes,
+    /// Its technology.
+    pub kind: MemoryKind,
+    /// Its form.
+    pub form: MemoryForm,
+    /// Rated speed in mega-transfers per second.
+    pub speed_mts: Option<u32>,
+    /// The speed it is configured to run at.
+    pub configured_speed_mts: Option<u32>,
+    /// The slot: "DIMM_A1".
+    pub locator: Option<String>,
+    /// The maker.
+    pub manufacturer: Option<String>,
+    /// The part number.
+    pub part_number: Option<String>,
+}
+
+/// A memory technology.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum MemoryKind {
+    /// DDR3.
+    Ddr3,
+    /// DDR4.
+    Ddr4,
+    /// DDR5.
+    Ddr5,
+    /// LPDDR4.
+    Lpddr4,
+    /// LPDDR5.
+    Lpddr5,
+    /// LPDDR5X.
+    Lpddr5x,
+    /// High Bandwidth Memory.
+    Hbm,
+    /// Something else.
+    Other,
+    /// Not known.
+    Unknown,
+}
+
+/// A module's physical form.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum MemoryForm {
+    /// A DIMM.
+    Dimm,
+    /// A SO-DIMM.
+    SoDimm,
+    /// Soldered to the board.
+    Soldered,
+    /// Something else.
+    Other,
+    /// Not known.
+    Unknown,
+}
+
+/// The installed memory sticks, from the SMBIOS type 17 records; empty slots
+/// are left out.
+///
+/// # Errors
+///
+/// `PermissionDenied` on Linux unless the process runs as root (the raw table
+/// is mode 0400); `Unsupported` on Apple silicon (unified memory, one package).
+pub fn modules() -> Result<Vec<MemoryModule>> {
+    crate::sys::memory_modules()
+}
+
+/// A raw SMBIOS memory device as a public value.
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+pub(crate) fn module_from(d: crate::parse::smbios::MemoryDevice) -> MemoryModule {
+    MemoryModule {
+        size: Bytes::new(d.bytes),
+        kind: match d.kind {
+            0x18 => MemoryKind::Ddr3,
+            0x1A => MemoryKind::Ddr4,
+            0x22 => MemoryKind::Ddr5,
+            0x1E => MemoryKind::Lpddr4,
+            0x23 => MemoryKind::Lpddr5,
+            0x20 | 0x21 | 0x24 => MemoryKind::Hbm,
+            0 | 2 => MemoryKind::Unknown,
+            _ => MemoryKind::Other,
+        },
+        form: match d.form {
+            0x09 | 0x0F => MemoryForm::Dimm,
+            0x0D => MemoryForm::SoDimm,
+            0x0B => MemoryForm::Soldered,
+            0 | 2 => MemoryForm::Unknown,
+            _ => MemoryForm::Other,
+        },
+        speed_mts: d.speed_mts,
+        configured_speed_mts: d.configured_speed_mts,
+        locator: d.locator,
+        manufacturer: d.manufacturer,
+        part_number: d.part_number,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

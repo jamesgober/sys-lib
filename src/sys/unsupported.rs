@@ -15,7 +15,7 @@ use crate::{
 use crate::{process::Limit, sys::FsKind};
 
 // The live readings: unknown on these platforms.
-pub(crate) use super::pending::*;
+pub(crate) use super::{detection::*, pending::*};
 
 fn unsupported(what: &'static str) -> Error {
     Error::Unsupported {
@@ -44,6 +44,8 @@ pub(crate) fn os() -> OsFacts {
         distro: family().to_owned(),
         distro_id: kind().name().to_owned(),
         release: None,
+        edition: None,
+        codename: None,
         name_source: Source::Fallback,
     }
 }

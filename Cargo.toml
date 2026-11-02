@@ -75,10 +75,9 @@ instance = ["dep:clock-lib", "dep:id-forge"]
 # Process guard: `process::guard`, `Guard` (brings path-lib).
 guard = ["dep:path-lib"]
 
-# Device identity: the `device` module (from 0.5, bringing crypt-io; until
-# then the feature enables nothing, D-043). Off by default: device identifiers
-# carry privacy obligations; the caller opts in knowingly.
-device-id = []
+# Device identity: the `device` module (brings crypt-io). Off by default: device
+# identifiers carry privacy obligations; the caller opts in knowingly.
+device-id = ["dep:crypt-io"]
 
 
 # DEPENDENCIES
@@ -87,6 +86,7 @@ device-id = []
 # First-party only, by published version (dev/PLAN.md section 16). No
 # third-party runtime dependencies; `default-features = false` has none at all.
 clock-lib = { version = "1.1", optional = true, default-features = false, features = ["std"] }
+crypt-io = { version = "1.2.2", optional = true, default-features = false, features = ["std", "mac-blake3", "zeroize"] }
 id-forge = { version = "1.0", optional = true, default-features = false, features = ["ulid"] }
 path-lib = { version = "1.0", optional = true }
 
