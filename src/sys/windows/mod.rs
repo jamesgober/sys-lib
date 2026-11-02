@@ -1,35 +1,39 @@
-//! Windows: kernel32, advapi32, iphlpapi, powrprof, and ntdll, called directly.
-
-// Not yet written on this backend: removed name by name, then the line goes.
-pub(crate) use super::detection::{
-    virtualization, cloud, form_factor, hardware, is_server_edition, native_arch, cpu_signature, cpu_topology, memory_modules, disk_of, primary_interface, dns, timezone, locale, clock_sync, sessions, launch, has_battery, batteries, on_ac,
-};
-#[cfg(feature = "device-id")]
-pub(crate) use super::detection::device_anchor;
+//! Windows: kernel32, advapi32, iphlpapi, powrprof, wtsapi32, and ntdll, called
+//! directly.
 
 mod cpu;
+mod detect;
 mod disk;
 mod ffi;
+mod firmware;
 mod host;
 mod mem;
 mod net;
+mod power;
 mod process;
+mod session;
+mod topology;
 
 pub(crate) use cpu::*;
+pub(crate) use detect::*;
 pub(crate) use disk::*;
 #[cfg(feature = "guard")]
 pub(crate) use ffi::FILE_ATTRIBUTE_REPARSE_POINT;
+pub(crate) use firmware::*;
 pub(crate) use host::*;
 pub(crate) use mem::*;
 pub(crate) use net::*;
+pub(crate) use power::*;
 pub(crate) use process::*;
+pub(crate) use session::*;
 use std::{
     ffi::c_void,
-    mem::{MaybeUninit, size_of},
+    mem::{MaybeUninit, size_of, size_of_val},
     time::{Duration, SystemTime},
 };
 #[cfg(feature = "guard")]
 use std::{fs::OpenOptions, path::Path};
+pub(crate) use topology::*;
 
 use crate::{Error, Result, os::Source, process::User, sys::OsFacts};
 #[cfg(feature = "guard")]
@@ -114,10 +118,18 @@ impl Key {
 
     /// A `REG_SZ` value, at most 1 KiB of UTF-16.
     fn string(&self, name: &str) -> Option<String> {
-        let name = wide(name);
         let mut buf = [0u16; 512];
+        let units = self.wide(name, &mut buf)?;
+        let text = String::from_utf16_lossy(&buf[..units]).trim().to_owned();
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// A `REG_SZ` value into `buf`, up to its first NUL: the units written.
+    /// `None` when it is missing, another type, or longer than `buf`.
+    fn wide(&self, name: &str, buf: &mut [u16]) -> Option<usize> {
+        let name = wide(name);
         let mut kind = 0u32;
-        let mut len = (buf.len() * 2) as u32;
+        let mut len = u32::try_from(size_of_val(buf)).ok()?;
         // SAFETY: `name` is NUL-terminated; `buf` is `len` writable bytes.
         let rc = unsafe {
             ffi::RegQueryValueExW(
@@ -133,8 +145,7 @@ impl Key {
             return None;
         }
         let units = (len as usize / 2).min(buf.len());
-        let text = from_wide(&buf[..units]).trim().to_owned();
-        (!text.is_empty()).then_some(text)
+        Some(buf[..units].iter().position(|&c| c == 0).unwrap_or(units))
     }
 
     /// A `REG_DWORD` value.
@@ -247,26 +258,30 @@ fn job_limits() -> Option<ffi::JobObjectExtendedLimitInformation> {
     (ok != 0).then_some(info)
 }
 
-pub(crate) fn os() -> OsFacts {
+/// `RtlGetVersion`: the real version, whatever the executable's manifest says.
+fn rtl_version() -> Option<ffi::OsVersionInfoExW> {
     let info = MaybeUninit::<ffi::OsVersionInfoExW>::zeroed();
     // SAFETY: `info` is zeroed, so every field is valid before the call.
     let mut info = unsafe { info.assume_init() };
     info.os_version_info_size = size_of::<ffi::OsVersionInfoExW>() as u32;
     // SAFETY: `info` is a valid OSVERSIONINFOEXW with its size set.
     let status = unsafe { ffi::RtlGetVersion(&raw mut info) };
-    let (major, minor, build, product) = if status >= 0 {
+    (status >= 0).then_some(info)
+}
+
+pub(crate) fn os() -> OsFacts {
+    let (major, minor, build, product) = rtl_version().map_or((0, 0, 0, 0), |info| {
         (
             info.major_version,
             info.minor_version,
             info.build_number,
             info.product_type,
         )
-    } else {
-        (0, 0, 0, 0)
-    };
+    });
     let key = Key::local_machine(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
     let ubr = key.as_ref().and_then(|k| k.dword("UBR"));
     let product_name = key.as_ref().and_then(|k| k.string("ProductName"));
+    let edition = key.as_ref().and_then(|k| k.string("EditionID"));
     let version = (major > 0).then(|| match ubr {
         Some(u) => format!("{major}.{minor}.{build}.{u}"),
         None => format!("{major}.{minor}.{build}"),
@@ -278,7 +293,8 @@ pub(crate) fn os() -> OsFacts {
         distro: "Windows".to_owned(),
         distro_id: "windows".to_owned(),
         release: None,
-        edition: None,
+        edition,
+        // Windows publishes no codename: `DisplayVersion` ("24H2") is a version.
         codename: None,
         name_source: Source::Registry,
     }

@@ -434,10 +434,11 @@ impl Builder {
         if let Some(id) = id_on(&key, self.basis) {
             return Ok(id);
         }
-        if self.fallback && self.basis != Basis::Install {
-            if let Some(id) = id_on(&key, Basis::Install) {
-                return Ok(id);
-            }
+        if self.fallback
+            && self.basis != Basis::Install
+            && let Some(id) = id_on(&key, Basis::Install)
+        {
+            return Ok(id);
         }
         Err(Error::NoIdentifierSource { basis: self.basis })
     }
@@ -503,7 +504,7 @@ mod tests {
         let id = id_of("com.example.app", &[0x42; 16]);
         assert_eq!(id.to_string(), FROZEN_ID);
     }
-    const FROZEN_ID: &str = "FROZEN";
+    const FROZEN_ID: &str = "3d60c97f-d1b1-88ed-8a4c-fceff1480bb5";
 
     #[test]
     fn test_device_id_shape() {

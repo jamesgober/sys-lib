@@ -369,6 +369,254 @@ fn test_live_windows_memory_disk_and_uptime_match_cim_and_dotnet() {
     }
 }
 
+/// A PowerShell script's output lines, each a value in order, ending at a fixed
+/// last line so an empty value in the middle survives the trim.
+#[cfg(windows)]
+fn cim_lines(script: &str, want: usize) -> Option<Vec<String>> {
+    let out = need(
+        "powershell",
+        &["-NoProfile", "-NonInteractive", "-Command", script],
+    )?;
+    let lines: Vec<String> = out.lines().map(|l| l.trim().to_owned()).collect();
+    assert_eq!(lines.len(), want, "{out}");
+    Some(lines)
+}
+
+#[cfg(windows)]
+#[test]
+fn test_live_windows_identity_and_firmware_match_cim() {
+    use sys_lib::{cpu::Arch, virt};
+    let script = r#"$cs = Get-CimInstance Win32_ComputerSystem; $b = Get-CimInstance Win32_BIOS;
+        $bb = Get-CimInstance Win32_BaseBoard; $o = Get-CimInstance Win32_OperatingSystem;
+        $p = @(Get-CimInstance Win32_Processor)[0];
+        $e = @(Get-CimInstance Win32_SystemEnclosure)[0];
+        "$($cs.Manufacturer)"; "$($cs.Model)"; "$($b.Manufacturer)"; "$($b.SMBIOSBIOSVersion)";
+        "$($bb.Manufacturer)"; "$($bb.Product)"; "$($o.ProductType)";
+        (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID;
+        "$($p.Architecture)"; "$($e.ChassisTypes[0])"; "$($cs.HypervisorPresent)"; "end""#;
+    let Some(v) = cim_lines(script, 12) else {
+        return;
+    };
+    // CIM reads the same SMBIOS strings, placeholders included: only a string
+    // sys-lib kept is compared.
+    if let Some(m) = host::model() {
+        assert_eq!(m.name, v[1]);
+        if let Some(vendor) = m.vendor {
+            assert_eq!(vendor, v[0]);
+        }
+    }
+    let firmware = host::firmware().expect("the firmware type is always known");
+    if let Some(vendor) = firmware.vendor {
+        assert_eq!(vendor, v[2]);
+    }
+    if let Some(version) = firmware.version {
+        assert_eq!(version, v[3]);
+    }
+    if let Some(b) = host::board() {
+        if let Some(vendor) = b.vendor {
+            assert_eq!(vendor, v[4]);
+        }
+        if let Some(name) = b.name {
+            assert_eq!(name, v[5]);
+        }
+    }
+    assert_eq!(os::is_server_edition(), Some(v[6] != "1"));
+    assert_eq!(os::edition(), Some(v[7].as_str()));
+    let native = match v[8].as_str() {
+        "9" => Arch::X86_64,
+        "12" => Arch::Aarch64,
+        "0" => Arch::X86,
+        other => panic!("Win32_Processor.Architecture {other}"),
+    };
+    assert_eq!(cpu::native_arch(), native);
+
+    // A host with Hyper-V, WSL 2, or VBS has a hypervisor underneath and is not
+    // a VM (E-84); a machine without one cannot be a VM at all.
+    let names_a_vm = ["Virtual Machine", "VMware", "VirtualBox", "QEMU", "KVM"]
+        .iter()
+        .any(|n| v[0].contains(n) || v[1].contains(n));
+    if names_a_vm {
+        assert!(virt::is_vm(), "{} {}", v[0], v[1]);
+    }
+    if v[10].eq_ignore_ascii_case("false") {
+        assert!(!virt::is_vm());
+    }
+    if virt::is_vm() {
+        assert_eq!(os::form_factor(), os::FormFactor::Unknown);
+        assert!(!virt::detect().evidence.is_empty());
+    } else if v[9] == "3" {
+        assert!(os::is_desktop(), "{:?}", os::detect_form_factor());
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn test_live_windows_topology_and_modules_match_cim() {
+    use sys_lib::{cpu::CacheKind, mem};
+    let script = r#"$p = @(Get-CimInstance Win32_Processor);
+        $m = @(Get-CimInstance Win32_PhysicalMemory);
+        $p.Count; ($p | Measure-Object NumberOfCores -Sum).Sum;
+        ($p | Measure-Object L3CacheSize -Sum).Sum;
+        $m.Count; [long]($m | Measure-Object Capacity -Sum).Sum; "end""#;
+    let Some(v) = cim_lines(script, 6) else {
+        return;
+    };
+    let t = cpu::topology();
+    assert_eq!(t.packages.len(), number(&v[0]));
+    assert_eq!(t.cores.len(), number(&v[1]));
+    let logical: usize = t.cores.iter().map(|c| c.logical.len()).sum();
+    assert_eq!(logical, cpu::logical());
+    assert!(t.packages.iter().all(|p| !p.cores.is_empty()));
+    let first = cpu::caches().first().expect("every CPU reports a cache");
+    assert_eq!(first.level, 1);
+    assert_ne!(cpu::cache_line(), 0);
+    // Hypervisors under CI report what they like for this class.
+    if std::env::var_os("CI").is_none() {
+        let l3: u64 = cpu::caches()
+            .iter()
+            .filter(|c| c.level == 3 && c.kind == CacheKind::Unified)
+            .map(|c| c.size.raw())
+            .sum();
+        let cim = v[2].parse::<u64>().unwrap() * 1024;
+        if cim != 0 {
+            assert_eq!(l3, cim, "level 3 cache");
+        }
+    }
+    let modules = mem::modules().unwrap();
+    assert_eq!(modules.len(), number(&v[3]));
+    let total: u64 = modules.iter().map(|m| m.size.raw()).sum();
+    assert_eq!(total, v[4].parse::<u64>().unwrap(), "installed memory");
+}
+
+#[cfg(windows)]
+#[test]
+fn test_live_windows_disks_match_cim() {
+    use sys_lib::disk::{self, DiskKind};
+    let script = r#"$d = $env:SystemDrive.TrimEnd(':');
+        "$((Get-Partition -DriveLetter $d | Get-Disk | Get-PhysicalDisk).MediaType)"; "end""#;
+    let Some(v) = cim_lines(script, 2) else {
+        return;
+    };
+    let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+    let root = format!("{drive}\\");
+    let windows = disk::of(format!("{root}Windows")).unwrap();
+    assert_eq!(windows.mount_point.to_str(), Some(root.as_str()));
+    assert!(windows.device.eq_ignore_ascii_case(&drive));
+    assert!(disk::list().unwrap().contains(&windows));
+    match v[0].as_str() {
+        "SSD" => assert_eq!(windows.kind, DiskKind::Ssd),
+        "HDD" => assert_eq!(windows.kind, DiskKind::Hdd),
+        _ => {}
+    }
+    // A junction: the disk of what it leads to, here the same volume.
+    let link = std::env::temp_dir().join(format!("sys-lib-live-link-{}", std::process::id()));
+    let target = std::env::temp_dir();
+    let (link_text, target_text) = (link.display().to_string(), target.display().to_string());
+    let made = tool("cmd", &["/c", "mklink", "/J", &link_text, &target_text]).is_some();
+    if made {
+        let through = disk::of(&link);
+        let _ = std::fs::remove_dir(&link);
+        assert_eq!(through.unwrap().device, disk::of(&target).unwrap().device);
+    }
+    assert!(disk::of(format!("{root}definitely-not-here")).is_err_and(|e| e.is_unavailable()));
+}
+
+#[cfg(windows)]
+#[test]
+fn test_live_windows_network_matches_cim() {
+    use std::net::IpAddr;
+
+    use sys_lib::net;
+    let script = r#"$up = @(Get-NetIPInterface -ConnectionState Connected | ForEach-Object InterfaceIndex | Sort-Object -Unique);
+        $s = @(Get-DnsClientServerAddress | Where-Object { $up -contains $_.InterfaceIndex } | ForEach-Object ServerAddresses | Sort-Object -Unique);
+        $r = @(Get-NetRoute -DestinationPrefix 0.0.0.0/0 -ErrorAction SilentlyContinue | ForEach-Object ifIndex);
+        "$($s -join ' ')"; "$($r -join ' ')"; "end""#;
+    let Some(v) = cim_lines(script, 3) else {
+        return;
+    };
+    let site_local = "fec0:0:0:ffff::";
+    let mut cim: Vec<IpAddr> = v[0]
+        .split_whitespace()
+        .filter(|s| !s.starts_with(site_local))
+        .map(|s| s.split('%').next().unwrap().parse().unwrap())
+        .collect();
+    cim.sort_unstable();
+    cim.dedup();
+    let mut ours = net::dns().unwrap().servers;
+    ours.sort_unstable();
+    assert_eq!(ours, cim, "DNS servers");
+
+    let routes: Vec<u32> = v[1]
+        .split_whitespace()
+        .map(|s| s.parse().unwrap())
+        .collect();
+    match net::primary().unwrap() {
+        Some(i) => assert!(routes.contains(&i.index), "{} not in {routes:?}", i.index),
+        None => assert!(routes.is_empty(), "{routes:?}"),
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn test_live_windows_zone_locale_power_and_sessions_match_dotnet_and_cim() {
+    use sys_lib::power;
+    let script = r#"$z = [TimeZoneInfo]::Local;
+        $z.Id; [long]$z.GetUtcOffset([DateTime]::UtcNow).TotalSeconds; (Get-Culture).Name;
+        @(Get-CimInstance Win32_Battery).Count; "end""#;
+    let Some(v) = cim_lines(script, 5) else {
+        return;
+    };
+    let tz = host::timezone().unwrap();
+    assert_eq!(tz.windows.as_deref(), Some(v[0].as_str()));
+    assert_eq!(
+        i64::from(tz.utc_offset_seconds),
+        v[1].parse::<i64>().unwrap()
+    );
+    assert!(tz.iana.is_some(), "{} is in the zone table", v[0]);
+    if !v[2].is_empty() {
+        assert_eq!(host::locale().map(|l| l.tag), Some(v[2].as_str()));
+    }
+    assert_eq!(power::has_battery(), number(&v[3]) > 0);
+    assert_eq!(host::clock_sync().unwrap(), None);
+    // `quser` exits non-zero with nobody logged in, and Home editions lack it.
+    if let Some(out) = tool("quser", &[]) {
+        let ours = host::sessions().unwrap();
+        for line in out.lines().skip(1) {
+            let user = line
+                .trim_start_matches(['>', ' '])
+                .split_whitespace()
+                .next();
+            let user = user.unwrap();
+            assert!(
+                ours.iter().any(|s| s.user.eq_ignore_ascii_case(user)),
+                "{user} missing from {} sessions",
+                ours.len()
+            );
+        }
+    }
+}
+
+#[cfg(all(windows, feature = "device-id"))]
+#[test]
+fn test_live_windows_device_sources_are_read() {
+    use sys_lib::device::{self, Anchor, SourceState};
+    let r = device::report();
+    let state = |anchor| {
+        r.sources
+            .iter()
+            .find(|s| s.anchor == anchor)
+            .map(|s| s.state)
+    };
+    // Windows always has a MachineGuid, and SMBIOS needs no privilege.
+    assert_eq!(state(Anchor::InstallId), Some(SourceState::Present));
+    assert!(r.default_basis_available);
+    assert!(matches!(
+        state(Anchor::PlatformUuid),
+        Some(SourceState::Present | SourceState::Placeholder)
+    ));
+    assert!(device::id("com.hivedb.sys-lib.live").is_ok());
+}
+
 #[test]
 fn test_live_samplers_measure_real_activity() {
     use std::time::Duration;
