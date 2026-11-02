@@ -61,6 +61,7 @@ pub(crate) fn is_hyperv_root() -> bool {
 }
 
 /// The processor's family, model, and stepping: CPUID leaf 1 EAX.
+#[cfg_attr(not(feature = "device-id"), allow(dead_code))]
 pub(crate) fn signature() -> u32 {
     if cpuid(0).eax < 1 { 0 } else { cpuid(1).eax }
 }

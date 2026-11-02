@@ -89,17 +89,19 @@ fn is_ro(options: &[u8]) -> bool {
 /// Whether the block device behind `source` (`/dev/sdb1`, `/dev/nvme0n1p2`)
 /// is removable, from its disk's `removable` file.
 fn removable(root: &Root, source: &[u8]) -> bool {
-    let Some(name) = source.strip_prefix(b"/dev/") else {
-        return false;
-    };
+    block_file(root, source, "/removable").is_some_and(|t| t == "1")
+}
+
+/// `file` under the source's `/sys/block/<disk>`, the source itself or, for a
+/// partition, the disk it is on.
+fn block_file(root: &Root, source: &[u8], file: &str) -> Option<String> {
+    let name = source.strip_prefix(b"/dev/")?;
     let read = |n: &[u8]| {
         let mut buf = [0u8; 128];
-        join_name(&mut buf, "/sys/block/", n, "/removable")
-            .and_then(|p| root.text(p))
-            .is_some_and(|t| t == "1")
+        join_name(&mut buf, "/sys/block/", n, file).and_then(|p| root.text(p))
     };
-    if read(name) {
-        return true;
+    if let Some(text) = read(name) {
+        return Some(text);
     }
     // A partition: strip the partition number (and the `p` of nvme0n1p2).
     let disk = name.trim_ascii_end();
@@ -111,7 +113,28 @@ fn removable(root: &Root, source: &[u8]) -> bool {
     if parent.ends_with(b"p") && parent.len() > 1 && parent[parent.len() - 2].is_ascii_digit() {
         parent = &parent[..parent.len() - 1];
     }
-    !parent.is_empty() && parent != name && read(parent)
+    if parent.is_empty() || parent == name {
+        return None;
+    }
+    read(parent)
+}
+
+/// SSD or HDD from the disk's `rotational` flag (DSK-04).
+fn medium(root: &Root, source: &[u8]) -> DiskKind {
+    match block_file(root, source, "/queue/rotational").as_deref() {
+        Some("0") => DiskKind::Ssd,
+        Some("1") => DiskKind::Hdd,
+        _ => DiskKind::Unknown,
+    }
+}
+
+/// The entry holding `path`: the longest mount point that is a prefix of it,
+/// the last such mount when several stack. `path` is absolute and resolved.
+pub(crate) fn holding(path: &std::path::Path, entries: Vec<MountEntry>) -> Option<MountEntry> {
+    entries
+        .into_iter()
+        .filter(|m| path.starts_with(&m.mount_point))
+        .max_by_key(|m| m.mount_point.as_os_str().len())
 }
 
 /// The filesystems `options` selects, each once (by device number) unless
@@ -158,7 +181,7 @@ pub(crate) fn mounts(root: &Root, options: &ListOptions) -> Result<Vec<MountEntr
             } else if removable {
                 DiskKind::Removable
             } else {
-                DiskKind::Unknown
+                medium(root, &m.source)
             };
             let entry = MountEntry {
                 mount_point: PathBuf::from(lossy(&m.mount_point, 4096)),

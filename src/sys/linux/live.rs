@@ -200,26 +200,44 @@ pub(crate) fn disk_space(path: &Path) -> Result<Space> {
     statvfs(path).map(|st| space_of(&st))
 }
 
+/// A mount with what `statvfs` says about it.
+fn disk_from(m: tree::disk::MountEntry) -> Disk {
+    let st = statvfs(&m.mount_point).ok();
+    let read_only = m.read_only || st.as_ref().is_some_and(|s| s.flag & ffi::ST_RDONLY != 0);
+    Disk {
+        space: st.as_ref().map(space_of),
+        mount_point: m.mount_point,
+        device: m.device,
+        label: None,
+        filesystem: m.filesystem,
+        kind: m.kind,
+        read_only,
+        removable: m.removable,
+    }
+}
+
 pub(crate) fn disks(options: &ListOptions) -> Result<Vec<Disk>> {
     let mounts = tree::disk::mounts(&ROOT, options)?;
-    Ok(mounts
-        .into_iter()
-        .map(|m| {
-            let st = statvfs(&m.mount_point).ok();
-            let read_only =
-                m.read_only || st.as_ref().is_some_and(|s| s.flag & ffi::ST_RDONLY != 0);
-            Disk {
-                space: st.as_ref().map(space_of),
-                mount_point: m.mount_point,
-                device: m.device,
-                label: None,
-                filesystem: m.filesystem,
-                kind: m.kind,
-                read_only,
-                removable: m.removable,
-            }
+    Ok(mounts.into_iter().map(disk_from).collect())
+}
+
+pub(crate) fn disk_of(path: &Path) -> Result<Disk> {
+    let path = std::fs::canonicalize(path)
+        .map_err(|e| Error::io("disk of a path", "the path", e))?;
+    let options = ListOptions {
+        include_network: true,
+        include_pseudo: true,
+        include_duplicates: true,
+        ..ListOptions::default()
+    };
+    // Only the mount found is asked for its space, so a dead one elsewhere
+    // cannot block this call.
+    tree::disk::holding(&path, tree::disk::mounts(&ROOT, &options)?)
+        .map(disk_from)
+        .ok_or(Error::NotFound {
+            what: "disk of a path",
+            source: "/proc/self/mountinfo",
         })
-        .collect())
 }
 
 pub(crate) fn disk_io_totals() -> Result<DiskRaw> {

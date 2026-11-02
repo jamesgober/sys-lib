@@ -29,6 +29,7 @@ pub(crate) mod resolv;
 pub(crate) mod smbios;
 pub(crate) mod tz;
 pub(crate) mod uevent;
+pub(crate) mod utmp;
 pub(crate) mod version;
 
 /// Splits `data` into lines, at most `max` of them, without allocating.

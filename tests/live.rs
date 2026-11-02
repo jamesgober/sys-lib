@@ -413,3 +413,39 @@ fn test_live_counts_are_consistent_everywhere() {
     assert!(!os::name().is_empty() && !os::distro().is_empty() && !os::distro_id().is_empty());
     assert_eq!(process::id(), std::process::id());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_live_linux_detection_matches_the_tools() {
+    use sys_lib::{cpu, disk, host, net, virt};
+    if let Some(offset) = need("date", &["+%z"]) {
+        // "+0100" is 3600 seconds east.
+        let t = offset.trim();
+        let sign = if t.starts_with('-') { -1 } else { 1 };
+        let (hours, minutes): (i32, i32) = (t[1..3].parse().unwrap(), t[3..5].parse().unwrap());
+        assert_eq!(
+            host::timezone().unwrap().utc_offset_seconds,
+            sign * (hours * 3600 + minutes * 60)
+        );
+    }
+    if let Some(line) = need("getconf", &["LEVEL1_DCACHE_LINESIZE"])
+        && let Ok(line) = line.trim().parse::<usize>()
+        && line != 0
+    {
+        assert_eq!(cpu::cache_line(), line);
+    }
+    let root = disk::of("/").unwrap();
+    assert_eq!(root.mount_point, std::path::Path::new("/"));
+    assert!(root.space.is_some());
+    assert_eq!(cpu::native_arch(), cpu::arch());
+    assert!(!cpu::is_translated());
+    if let Some(route) = need("ip", &["route", "show", "default"])
+        && let Some(dev) = route.split_whitespace().skip_while(|w| *w != "dev").nth(1)
+    {
+        assert_eq!(net::primary().unwrap().map(|i| i.name).as_deref(), Some(dev));
+    }
+    if let Ok(release) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
+        assert_eq!(virt::is_wsl(), release.to_lowercase().contains("microsoft"));
+    }
+    assert_eq!(cpu::topology().cores.iter().map(|c| c.logical.len()).sum::<usize>(), cpu::logical());
+}

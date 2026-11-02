@@ -217,9 +217,8 @@ mod tests {
     #[test]
     fn test_power_live_never_fails_oddly() {
         let _ = has_battery();
-        match battery() {
-            Ok(Some(b)) => assert!(b.charge <= Percent::FULL),
-            Ok(None) | Err(_) => {}
+        if let Ok(Some(b)) = battery() {
+            assert!(b.charge <= Percent::FULL);
         }
         let _ = on_ac();
     }

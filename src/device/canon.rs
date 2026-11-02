@@ -59,6 +59,7 @@ pub(crate) fn uuid_text(text: &[u8], out: &mut [u8; ANCHOR_BUF]) -> Reading {
 }
 
 /// A UUID as a raw SMBIOS table stores it (E-75).
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
 pub(crate) fn uuid_smbios(raw: [u8; 16], out: &mut [u8; ANCHOR_BUF]) -> Reading {
     if smbios::uuid_is_placeholder(&raw) {
         return Reading::Placeholder;
