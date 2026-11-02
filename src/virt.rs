@@ -209,6 +209,7 @@ pub fn cloud() -> Option<Cloud> {
 }
 
 /// The firmware strings the detection reads, from sysfs or SMBIOS.
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Dmi<'a> {
     pub(crate) sys_vendor: &'a str,
@@ -220,6 +221,7 @@ pub(crate) struct Dmi<'a> {
 }
 
 impl Dmi<'_> {
+    #[cfg_attr(target_vendor = "apple", allow(dead_code))]
     fn any(&self, needle: &str) -> bool {
         [
             self.sys_vendor,
@@ -233,6 +235,7 @@ impl Dmi<'_> {
     }
 }
 
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
 fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
     haystack
         .as_bytes()
@@ -260,6 +263,7 @@ pub(crate) fn hypervisor_from_signature(signature: &[u8; 12]) -> Hypervisor {
 
 /// The hypervisor firmware strings name. The clouds' own hypervisors are named
 /// first: a Nitro or GCE guest also says KVM.
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
 pub(crate) fn hypervisor_from_dmi(dmi: &Dmi<'_>) -> Option<Hypervisor> {
     let table: &[(&str, Hypervisor)] = &[
         ("Amazon EC2", Hypervisor::AmazonNitro),
@@ -289,6 +293,7 @@ pub(crate) fn hypervisor_from_dmi(dmi: &Dmi<'_>) -> Option<Hypervisor> {
 }
 
 /// The cloud firmware strings or the hypervisor name.
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
 pub(crate) fn cloud_from_dmi(dmi: &Dmi<'_>, hypervisor: Option<Hypervisor>) -> Option<Cloud> {
     let table: &[(&str, Cloud)] = &[
         ("Amazon EC2", Cloud::Aws),

@@ -513,6 +513,7 @@ pub fn is_server() -> bool {
 /// The form an SMBIOS chassis type names (SMBIOS 3.5.0 section 7.4.1, systemd's
 /// mapping, plus Server for rack mount and multi-system); `None` goes to the
 /// next source.
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
 pub(crate) const fn form_from_chassis(chassis: u8) -> Option<FormFactor> {
     Some(match chassis {
         0x03 | 0x04 | 0x06 | 0x07 | 0x0D | 0x23 | 0x24 => FormFactor::Desktop,
@@ -527,6 +528,7 @@ pub(crate) const fn form_from_chassis(chassis: u8) -> Option<FormFactor> {
 }
 
 /// The form an ACPI preferred power-management profile names.
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
 pub(crate) const fn form_from_pm_profile(profile: u8) -> Option<FormFactor> {
     Some(match profile {
         1 | 3 | 6 => FormFactor::Desktop,

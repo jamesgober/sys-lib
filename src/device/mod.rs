@@ -57,6 +57,7 @@ pub(crate) const ANCHOR_BUF: usize = 256;
 
 /// What a platform found for an anchor; with `Value(n)`, the first `n` bytes
 /// of its buffer are the identifier in canonical form.
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Reading {
     Value(usize),

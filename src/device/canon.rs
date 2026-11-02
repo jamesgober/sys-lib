@@ -14,6 +14,7 @@ fn put(value: &[u8], out: &mut [u8; ANCHOR_BUF]) -> Reading {
     Reading::Value(n)
 }
 
+#[cfg_attr(target_os = "ios", allow(dead_code))]
 fn nibble(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -24,6 +25,7 @@ fn nibble(b: u8) -> Option<u8> {
 }
 
 /// 32 hex digits, with or without UUID dashes, as 16 bytes.
+#[cfg_attr(target_os = "ios", allow(dead_code))]
 fn hex16(text: &[u8]) -> Option<[u8; 16]> {
     let mut out = [0u8; 16];
     let mut digits = text.iter().copied().filter(|&b| b != b'-');
@@ -37,6 +39,7 @@ fn hex16(text: &[u8]) -> Option<[u8; 16]> {
 
 /// An installation id as text: `/etc/machine-id`, the Windows `MachineGuid`.
 /// Empty, `uninitialized`, and all zeros are placeholders (E-69).
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
 pub(crate) fn install_id(text: &[u8], out: &mut [u8; ANCHOR_BUF]) -> Reading {
     let t = text.trim_ascii();
     if t.is_empty() || t == b"uninitialized" {
@@ -51,6 +54,7 @@ pub(crate) fn install_id(text: &[u8], out: &mut [u8; ANCHOR_BUF]) -> Reading {
 
 /// A UUID as text: Linux's `product_uuid`, macOS's `IOPlatformUUID`.
 #[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(target_os = "ios", allow(dead_code))]
 pub(crate) fn uuid_text(text: &[u8], out: &mut [u8; ANCHOR_BUF]) -> Reading {
     match hex16(text.trim_ascii()) {
         Some(id) if smbios::uuid_is_placeholder(&id) => Reading::Placeholder,
@@ -60,7 +64,7 @@ pub(crate) fn uuid_text(text: &[u8], out: &mut [u8; ANCHOR_BUF]) -> Reading {
 }
 
 /// A UUID as a raw SMBIOS table stores it (E-75).
-#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux", test)), allow(dead_code))]
 pub(crate) fn uuid_smbios(raw: [u8; 16], out: &mut [u8; ANCHOR_BUF]) -> Reading {
     if smbios::uuid_is_placeholder(&raw) {
         return Reading::Placeholder;
@@ -69,6 +73,7 @@ pub(crate) fn uuid_smbios(raw: [u8; 16], out: &mut [u8; ANCHOR_BUF]) -> Reading 
 }
 
 /// A serial number: trimmed and upper-cased (E-70).
+#[cfg_attr(target_os = "ios", allow(dead_code))]
 pub(crate) fn serial(text: &[u8], out: &mut [u8; ANCHOR_BUF]) -> Reading {
     if smbios::is_placeholder(text) {
         return Reading::Placeholder;
