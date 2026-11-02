@@ -59,6 +59,15 @@ harness = false
 name = "boot"
 required-features = ["instance", "guard"]
 
+[[example]]
+name = "device_id"
+required-features = ["device-id"]
+
+# Threats T1 to T3 need the feature.
+[[test]]
+name = "attack_t1_device"
+required-features = ["device-id"]
+
 # `cfg(fuzzing)` is set by cargo-fuzz for the parser entry points in `__fuzz`.
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
