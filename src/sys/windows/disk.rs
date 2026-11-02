@@ -787,7 +787,11 @@ mod tests {
         let here = std::env::current_dir().unwrap();
         let d = disk_of(&here).unwrap();
         let again = disk_of(Path::new("Cargo.toml")).unwrap();
-        assert_eq!(d, again);
+        // Free space moves between the two calls.
+        assert_eq!(
+            (&d.mount_point, &d.device, d.kind),
+            (&again.mount_point, &again.device, again.kind)
+        );
         let listed = disks(&ListOptions::default()).unwrap();
         let same = listed.iter().find(|l| l.device == d.device).unwrap();
         assert_eq!(same.mount_point, d.mount_point);
