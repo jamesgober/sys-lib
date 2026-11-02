@@ -50,6 +50,7 @@ pub(crate) fn install_id(text: &[u8], out: &mut [u8; ANCHOR_BUF]) -> Reading {
 }
 
 /// A UUID as text: Linux's `product_uuid`, macOS's `IOPlatformUUID`.
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) fn uuid_text(text: &[u8], out: &mut [u8; ANCHOR_BUF]) -> Reading {
     match hex16(text.trim_ascii()) {
         Some(id) if smbios::uuid_is_placeholder(&id) => Reading::Placeholder,

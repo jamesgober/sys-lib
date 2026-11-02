@@ -40,6 +40,9 @@ pub(crate) const ERROR_MORE_DATA: u32 = 234;
 pub(crate) const ERROR_BUFFER_OVERFLOW: u32 = 111;
 pub(crate) const ERROR_NO_MORE_FILES: u32 = 18;
 pub(crate) const ERROR_NOT_READY: u32 = 21;
+pub(crate) const ERROR_NOT_FOUND: u32 = 1168;
+pub(crate) const ERROR_NETWORK_UNREACHABLE: u32 = 1231;
+pub(crate) const ERROR_HOST_UNREACHABLE: u32 = 1232;
 
 /// `STATUS_INFO_LENGTH_MISMATCH` (ntstatus.h).
 pub(crate) const STATUS_INFO_LENGTH_MISMATCH: NtStatus = 0xC000_0004_u32 as i32;
@@ -321,6 +324,7 @@ layout!(DynamicTimeZoneInformation, size = 432, align = 4);
 
 /// `GetDynamicTimeZoneInformation` results (timezoneapi.h).
 pub(crate) const TIME_ZONE_ID_INVALID: u32 = 0xFFFF_FFFF;
+pub(crate) const TIME_ZONE_ID_STANDARD: u32 = 1;
 pub(crate) const TIME_ZONE_ID_DAYLIGHT: u32 = 2;
 
 /// `PROCESSENTRY32W` (tlhelp32.h).
@@ -486,6 +490,16 @@ pub(crate) mod lpi {
     pub(crate) const NUMA_GROUP_COUNT: usize = 22;
     pub(crate) const NUMA_GROUP_MASK: usize = 24;
 
+    // GROUP_RELATIONSHIP, relative to BODY.
+    pub(crate) const GROUP_ACTIVE_COUNT: usize = 2;
+    pub(crate) const GROUP_INFO: usize = 24;
+    // PROCESSOR_GROUP_INFO, relative to an entry.
+    pub(crate) const GROUP_INFO_MASK: usize = 40;
+    #[cfg(target_pointer_width = "64")]
+    pub(crate) const GROUP_INFO_ENTRY: usize = 48;
+    #[cfg(target_pointer_width = "32")]
+    pub(crate) const GROUP_INFO_ENTRY: usize = 44;
+
     // GROUP_AFFINITY, relative to a mask entry.
     pub(crate) const AFFINITY_MASK: usize = 0;
     #[cfg(target_pointer_width = "64")]
@@ -510,6 +524,12 @@ pub(crate) mod lpi {
 
     /// `PROCESSOR_RELATIONSHIP.Flags`: the core has more than one logical processor.
     pub(crate) const LTP_PC_SMT: u8 = 0x1;
+
+    // PROCESSOR_CACHE_TYPE values.
+    pub(crate) const CACHE_UNIFIED: i32 = 0;
+    pub(crate) const CACHE_INSTRUCTION: i32 = 1;
+    pub(crate) const CACHE_DATA: i32 = 2;
+    pub(crate) const CACHE_TRACE: i32 = 3;
 }
 
 /// `GUID` (guiddef.h).
@@ -586,6 +606,33 @@ layout!(IpAdapterUnicastAddress, size = 64, align = 8);
 #[cfg(target_pointer_width = "32")]
 layout!(IpAdapterUnicastAddress, size = 48, align = 8);
 
+/// `IP_ADAPTER_DNS_SERVER_ADDRESS_XP` (iptypes.h). The leading union is
+/// `{ULONGLONG Alignment; struct {ULONG Length; DWORD Reserved;}}`.
+#[repr(C)]
+pub(crate) struct IpAdapterDnsServerAddress {
+    pub(crate) length: u32,
+    pub(crate) reserved: u32,
+    pub(crate) next: *mut IpAdapterDnsServerAddress,
+    pub(crate) address: SocketAddress,
+    /// Gives the leading union its `ULONGLONG` alignment.
+    pub(crate) _align: [u64; 0],
+}
+#[cfg(target_pointer_width = "64")]
+layout!(IpAdapterDnsServerAddress, size = 32, align = 8);
+#[cfg(target_pointer_width = "32")]
+layout!(IpAdapterDnsServerAddress, size = 24, align = 8);
+
+/// `IP_ADAPTER_DNS_SUFFIX` (iptypes.h).
+#[repr(C)]
+pub(crate) struct IpAdapterDnsSuffix {
+    pub(crate) next: *mut IpAdapterDnsSuffix,
+    pub(crate) string: [u16; 256],
+}
+#[cfg(target_pointer_width = "64")]
+layout!(IpAdapterDnsSuffix, size = 520, align = 8);
+#[cfg(target_pointer_width = "32")]
+layout!(IpAdapterDnsSuffix, size = 516, align = 4);
+
 /// `IP_ADAPTER_ADDRESSES_LH` (iptypes.h). The leading union is
 /// `{ULONGLONG Alignment; struct {ULONG Length; IF_INDEX IfIndex;}}`; the
 /// `Flags` union is one `ULONG` of bit flags.
@@ -598,7 +645,7 @@ pub(crate) struct IpAdapterAddresses {
     pub(crate) first_unicast_address: *mut IpAdapterUnicastAddress,
     pub(crate) first_anycast_address: *mut c_void,
     pub(crate) first_multicast_address: *mut c_void,
-    pub(crate) first_dns_server_address: *mut c_void,
+    pub(crate) first_dns_server_address: *mut IpAdapterDnsServerAddress,
     pub(crate) dns_suffix: *mut u16,
     pub(crate) description: *mut u16,
     pub(crate) friendly_name: *mut u16,
@@ -627,7 +674,7 @@ pub(crate) struct IpAdapterAddresses {
     pub(crate) dhcpv6_client_duid: [u8; 130],
     pub(crate) dhcpv6_client_duid_length: u32,
     pub(crate) dhcpv6_iaid: u32,
-    pub(crate) first_dns_suffix: *mut c_void,
+    pub(crate) first_dns_suffix: *mut IpAdapterDnsSuffix,
 }
 #[cfg(target_pointer_width = "64")]
 layout!(IpAdapterAddresses, size = 448, align = 8);
@@ -638,6 +685,7 @@ layout!(IpAdapterAddresses, size = 376, align = 8);
 pub(crate) const AF_UNSPEC: u32 = 0;
 pub(crate) const AF_INET: u16 = 2;
 pub(crate) const AF_INET6: u16 = 23;
+pub(crate) const GAA_FLAG_SKIP_UNICAST: u32 = 0x0001;
 pub(crate) const GAA_FLAG_SKIP_ANYCAST: u32 = 0x0002;
 pub(crate) const GAA_FLAG_SKIP_MULTICAST: u32 = 0x0004;
 pub(crate) const GAA_FLAG_SKIP_DNS_SERVER: u32 = 0x0008;
@@ -759,6 +807,47 @@ pub(crate) struct MibUdpStats {
 }
 layout!(MibUdpStats, size = 20, align = 4);
 
+/// `WTS_SESSION_INFOW` (wtsapi32.h).
+#[repr(C)]
+pub(crate) struct WtsSessionInfoW {
+    pub(crate) session_id: u32,
+    pub(crate) win_station_name: *mut u16,
+    pub(crate) state: i32,
+}
+#[cfg(target_pointer_width = "64")]
+layout!(WtsSessionInfoW, size = 24, align = 8);
+#[cfg(target_pointer_width = "32")]
+layout!(WtsSessionInfoW, size = 12, align = 4);
+
+/// `WTSINFOW` (wtsapi32.h). Times are `FILETIME` values in a `LARGE_INTEGER`.
+#[repr(C)]
+pub(crate) struct WtsInfoW {
+    pub(crate) state: i32,
+    pub(crate) session_id: u32,
+    pub(crate) incoming_bytes: u32,
+    pub(crate) outgoing_bytes: u32,
+    pub(crate) incoming_frames: u32,
+    pub(crate) outgoing_frames: u32,
+    pub(crate) incoming_compressed_bytes: u32,
+    pub(crate) outgoing_compressed_bytes: u32,
+    pub(crate) win_station_name: [u16; 32],
+    pub(crate) domain: [u16; 17],
+    pub(crate) user_name: [u16; 21],
+    pub(crate) connect_time: i64,
+    pub(crate) disconnect_time: i64,
+    pub(crate) last_input_time: i64,
+    pub(crate) logon_time: i64,
+    pub(crate) current_time: i64,
+}
+layout!(WtsInfoW, size = 216, align = 8);
+
+// WTS_INFO_CLASS values (wtsapi32.h).
+pub(crate) const WTS_USER_NAME: i32 = 5;
+pub(crate) const WTS_CLIENT_PROTOCOL_TYPE: i32 = 16;
+pub(crate) const WTS_SESSION_INFO: i32 = 24;
+/// `WTSClientProtocolType`: the session is at the console.
+pub(crate) const WTS_PROTOCOL_TYPE_CONSOLE: u16 = 0;
+
 // Registry (winreg.h, winnt.h).
 /// `(HKEY)(ULONG_PTR)((LONG)0x80000002)`: sign-extended on 64-bit targets.
 pub(crate) const HKEY_LOCAL_MACHINE: Hkey =
@@ -796,6 +885,9 @@ pub(crate) const ALL_PROCESSOR_GROUPS: u16 = 0xFFFF;
 pub(crate) const RSMB: u32 = u32::from_be_bytes(*b"RSMB");
 /// `LowMemoryResourceNotification` (`MEMORY_RESOURCE_NOTIFICATION_TYPE`, memoryapi.h).
 pub(crate) const LOW_MEMORY_RESOURCE_NOTIFICATION: i32 = 0;
+// FIRMWARE_TYPE (winnt.h).
+pub(crate) const FIRMWARE_TYPE_BIOS: u32 = 1;
+pub(crate) const FIRMWARE_TYPE_UEFI: u32 = 2;
 // IMAGE_FILE_MACHINE_* (winnt.h), from IsWow64Process2.
 pub(crate) const IMAGE_FILE_MACHINE_UNKNOWN: u16 = 0;
 pub(crate) const IMAGE_FILE_MACHINE_I386: u16 = 0x014C;
@@ -826,6 +918,7 @@ dll!("kernel32.dll" {
         returned_length: *mut u32,
     ) -> Bool;
     pub(crate) fn GetSystemFirmwareTable(provider: u32, id: u32, buffer: *mut u8, size: u32) -> u32;
+    pub(crate) fn GetFirmwareType(firmware_type: *mut u32) -> Bool;
     pub(crate) fn GetComputerNameExW(format: i32, buffer: *mut u16, size: *mut u32) -> Bool;
     // winbase.h, processthreadsapi.h
     pub(crate) safe fn GetActiveProcessorCount(group: u16) -> u32;
@@ -841,6 +934,9 @@ dll!("kernel32.dll" {
     pub(crate) fn GetProcessAffinityMask(process: Handle, process_mask: *mut usize, system_mask: *mut usize) -> Bool;
     pub(crate) fn GetProcessGroupAffinity(process: Handle, group_count: *mut u16, groups: *mut u16) -> Bool;
     pub(crate) fn GetProcessHandleCount(process: Handle, count: *mut u32) -> Bool;
+    pub(crate) fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> Bool;
+    // wincon.h: the window of the attached console, null without one.
+    pub(crate) safe fn GetConsoleWindow() -> Handle;
     pub(crate) fn IsWow64Process2(process: Handle, process_machine: *mut u16, native_machine: *mut u16) -> Bool;
     pub(crate) fn GetSystemPowerStatus(status: *mut SystemPowerStatus) -> Bool;
     pub(crate) fn SetThreadErrorMode(new_mode: u32, old_mode: *mut u32) -> Bool;
@@ -880,6 +976,7 @@ dll!("kernel32.dll" {
         file_system_name_size: u32,
     ) -> Bool;
     pub(crate) fn GetVolumePathNameW(file_name: *const u16, volume_path: *mut u16, length: u32) -> Bool;
+    pub(crate) fn GetVolumeNameForVolumeMountPointW(mount_point: *const u16, volume_name: *mut u16, length: u32) -> Bool;
     pub(crate) fn FindFirstVolumeW(volume_name: *mut u16, length: u32) -> Handle;
     pub(crate) fn FindNextVolumeW(find: Handle, volume_name: *mut u16, length: u32) -> Bool;
     pub(crate) fn FindVolumeClose(find: Handle) -> Bool;
@@ -976,6 +1073,25 @@ dll!("powrprof.dll" {
     pub(crate) safe fn PowerDeterminePlatformRoleEx(version: u32) -> i32;
 });
 
+dll!("wtsapi32.dll" {
+    // wtsapi32.h
+    pub(crate) fn WTSEnumerateSessionsW(
+        server: Handle,
+        reserved: u32,
+        version: u32,
+        sessions: *mut *mut c_void,
+        count: *mut u32,
+    ) -> Bool;
+    pub(crate) fn WTSQuerySessionInformationW(
+        server: Handle,
+        session_id: u32,
+        class: i32,
+        buffer: *mut *mut c_void,
+        bytes_returned: *mut u32,
+    ) -> Bool;
+    pub(crate) fn WTSFreeMemory(memory: *mut c_void);
+});
+
 dll!("ntdll.dll" {
     // wdm.h: the real version, whatever the executable's manifest declares.
     pub(crate) fn RtlGetVersion(info: *mut OsVersionInfoExW) -> NtStatus;
@@ -999,9 +1115,9 @@ mod tests {
             Networking::WinSock as ws, Security as sec, Storage::FileSystem as fs,
             System::Diagnostics::Debug as dbg, System::Diagnostics::ToolHelp as th,
             System::Ioctl as io, System::JobObjects as job, System::Memory as mem,
-            System::Power as pw, System::ProcessStatus as ps, System::SystemInformation as si,
-            System::SystemServices as ss, System::Threading as thr, System::Time as tm,
-            System::WindowsProgramming as wp,
+            System::Power as pw, System::ProcessStatus as ps, System::RemoteDesktop as wts,
+            System::SystemInformation as si, System::SystemServices as ss,
+            System::Threading as thr, System::Time as tm, System::WindowsProgramming as wp,
         },
         core::GUID,
     };
@@ -1099,9 +1215,23 @@ mod tests {
         prefix_origin => PrefixOrigin, suffix_origin => SuffixOrigin, dad_state => DadState,
         valid_lifetime => ValidLifetime, preferred_lifetime => PreferredLifetime,
         lease_lifetime => LeaseLifetime, on_link_prefix_length => OnLinkPrefixLength);
+    same_layout!(IpAdapterDnsServerAddress, ip::IP_ADAPTER_DNS_SERVER_ADDRESS_XP,
+        length => Anonymous, next => Next, address => Address);
+    same_layout!(IpAdapterDnsSuffix, ip::IP_ADAPTER_DNS_SUFFIX, next => Next, string => String);
+    same_layout!(WtsSessionInfoW, wts::WTS_SESSION_INFOW,
+        session_id => SessionId, win_station_name => pWinStationName, state => State);
+    same_layout!(WtsInfoW, wts::WTSINFOW,
+        state => State, session_id => SessionId, incoming_bytes => IncomingBytes,
+        outgoing_bytes => OutgoingBytes, incoming_frames => IncomingFrames,
+        outgoing_frames => OutgoingFrames, incoming_compressed_bytes => IncomingCompressedBytes,
+        outgoing_compressed_bytes => OutgoingCompressedBytes,
+        win_station_name => WinStationName, domain => Domain, user_name => UserName,
+        connect_time => ConnectTime, disconnect_time => DisconnectTime,
+        last_input_time => LastInputTime, logon_time => LogonTime, current_time => CurrentTime);
     same_layout!(IpAdapterAddresses, ip::IP_ADAPTER_ADDRESSES_LH,
         length => Anonymous1, next => Next, adapter_name => AdapterName,
-        first_unicast_address => FirstUnicastAddress, dns_suffix => DnsSuffix,
+        first_unicast_address => FirstUnicastAddress,
+        first_dns_server_address => FirstDnsServerAddress, dns_suffix => DnsSuffix,
         description => Description, friendly_name => FriendlyName,
         physical_address => PhysicalAddress, physical_address_length => PhysicalAddressLength,
         flags => Anonymous2, mtu => Mtu, if_type => IfType, oper_status => OperStatus,
@@ -1173,6 +1303,12 @@ mod tests {
         assert!(offset_of!(N, NodeNumber) == lpi::NUMA_NODE_NUMBER);
         assert!(offset_of!(N, GroupCount) == lpi::NUMA_GROUP_COUNT);
         assert!(offset_of!(N, Anonymous) == lpi::NUMA_GROUP_MASK);
+        type R = si::GROUP_RELATIONSHIP;
+        assert!(offset_of!(R, ActiveGroupCount) == lpi::GROUP_ACTIVE_COUNT);
+        assert!(offset_of!(R, GroupInfo) == lpi::GROUP_INFO);
+        type I = si::PROCESSOR_GROUP_INFO;
+        assert!(offset_of!(I, ActiveProcessorMask) == lpi::GROUP_INFO_MASK);
+        assert!(size_of::<I>() == lpi::GROUP_INFO_ENTRY);
         type G = si::GROUP_AFFINITY;
         assert!(offset_of!(G, Mask) == lpi::AFFINITY_MASK);
         assert!(offset_of!(G, Group) == lpi::AFFINITY_GROUP);
@@ -1223,6 +1359,21 @@ mod tests {
         assert!(lpi::RELATION_GROUP == si::RelationGroup);
         assert!(lpi::RELATION_NUMA_NODE_EX == si::RelationNumaNodeEx);
         assert!(lpi::RELATION_ALL == si::RelationAll);
+        assert!(lpi::CACHE_UNIFIED == si::CacheUnified);
+        assert!(lpi::CACHE_INSTRUCTION == si::CacheInstruction);
+        assert!(lpi::CACHE_DATA == si::CacheData);
+        assert!(lpi::CACHE_TRACE == si::CacheTrace);
+        assert!(FIRMWARE_TYPE_BIOS == si::FirmwareTypeBios as u32);
+        assert!(FIRMWARE_TYPE_UEFI == si::FirmwareTypeUefi as u32);
+        assert!(TIME_ZONE_ID_STANDARD == ss::TIME_ZONE_ID_STANDARD);
+        assert!(WTS_PROTOCOL_TYPE_CONSOLE as u32 == wts::WTS_PROTOCOL_TYPE_CONSOLE);
+        assert!(WTS_USER_NAME == wts::WTSUserName);
+        assert!(WTS_CLIENT_PROTOCOL_TYPE == wts::WTSClientProtocolType);
+        assert!(WTS_SESSION_INFO == wts::WTSSessionInfo);
+        assert!(ERROR_NOT_FOUND == f::ERROR_NOT_FOUND);
+        assert!(ERROR_NETWORK_UNREACHABLE == f::ERROR_NETWORK_UNREACHABLE);
+        assert!(ERROR_HOST_UNREACHABLE == f::ERROR_HOST_UNREACHABLE);
+        assert!(GAA_FLAG_SKIP_UNICAST == ip::GAA_FLAG_SKIP_UNICAST);
         assert!(ALL_PROCESSOR_GROUPS == thr::ALL_PROCESSOR_GROUPS);
         assert!(COMPUTER_NAME_DNS_HOSTNAME == si::ComputerNameDnsHostname);
         assert!(IMAGE_FILE_MACHINE_AMD64 == si::IMAGE_FILE_MACHINE_AMD64);

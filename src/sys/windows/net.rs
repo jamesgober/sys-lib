@@ -1,15 +1,17 @@
-//! Network: interfaces and their addresses, traffic counters, and connection
-//! counts.
+//! Network: interfaces and their addresses, traffic counters, connection
+//! counts, the default route, and the DNS configuration.
 
 use std::{
     mem::{offset_of, size_of},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
 
-use super::ffi;
+use super::{ffi, from_wide};
 use crate::{
     Bytes, Error, Result,
-    net::{Connections, Counters, Interface, InterfaceKind, InterfaceOptions, IpNet, Mac, Totals},
+    net::{
+        Connections, Counters, Dns, Interface, InterfaceKind, InterfaceOptions, IpNet, Mac, Totals,
+    },
 };
 
 /// The first `GetAdaptersAddresses` buffer: 15 KB is Microsoft's advice.
@@ -27,13 +29,15 @@ const MAX_NAME: usize = 1_024;
 /// The most rows read from `GetIfTable2`.
 const MAX_ROWS: usize = 1 << 16;
 
+/// The most adapters read for the DNS configuration.
+const MAX_ADAPTERS: usize = 4_096;
+
+/// The most DNS servers, and the most search domains.
+const MAX_DNS: usize = 64;
+
 /// `GetAdaptersAddresses` into an 8-byte-aligned buffer, asking for the size
 /// and asking again at most 3 times. Empty when the machine has no adapters.
-fn adapters() -> Result<Vec<u64>> {
-    let flags = ffi::GAA_FLAG_INCLUDE_PREFIX
-        | ffi::GAA_FLAG_SKIP_ANYCAST
-        | ffi::GAA_FLAG_SKIP_MULTICAST
-        | ffi::GAA_FLAG_SKIP_DNS_SERVER;
+fn adapters(flags: u32, what: &'static str) -> Result<Vec<u64>> {
     let mut size = ADAPTERS_START;
     let mut code = 0;
     for _ in 0..3 {
@@ -60,7 +64,7 @@ fn adapters() -> Result<Vec<u64>> {
         }
     }
     Err(Error::Os {
-        what: "network interfaces",
+        what,
         call: "GetAdaptersAddresses",
         code: code as i32,
     })
@@ -73,7 +77,7 @@ fn adapters() -> Result<Vec<u64>> {
 ///
 /// `p` is null or points to a NUL-terminated UTF-16 string that stays valid
 /// for the call.
-unsafe fn string_at(p: *const u16) -> String {
+pub(super) unsafe fn string_at(p: *const u16) -> String {
     if p.is_null() {
         return String::new();
     }
@@ -157,7 +161,11 @@ fn mac_of(bytes: &[u8; 8], len: u32) -> Option<Mac> {
 /// Hyper-V and VPN adapters. Without `details`, `up` follows the operational
 /// state and `is_physical` is false.
 pub(crate) fn interfaces(options: &InterfaceOptions) -> Result<Vec<Interface>> {
-    let buf = adapters()?;
+    let flags = ffi::GAA_FLAG_INCLUDE_PREFIX
+        | ffi::GAA_FLAG_SKIP_ANYCAST
+        | ffi::GAA_FLAG_SKIP_MULTICAST
+        | ffi::GAA_FLAG_SKIP_DNS_SERVER;
+    let buf = adapters(flags, "network interfaces")?;
     let table = if options.details {
         IfTable::read().ok()
     } else {
@@ -185,6 +193,148 @@ pub(crate) fn interfaces(options: &InterfaceOptions) -> Result<Vec<Interface>> {
         p = a.next;
     }
     Ok(out)
+}
+
+/// The interface the route to anywhere leaves by: the default route, IPv4.
+/// No route is `None`; a machine with an IPv6 default route alone has none here.
+pub(crate) fn primary_interface() -> Result<Option<u32>> {
+    let anywhere = ffi::SockaddrIn {
+        family: ffi::AF_INET,
+        port: 0,
+        addr: 0,
+        zero: [0; 8],
+    };
+    let mut index = 0u32;
+    // SAFETY: `anywhere` is a whole SOCKADDR_IN, read by its family; `index` is
+    // a writable local.
+    let code = unsafe {
+        ffi::GetBestInterfaceEx(
+            (&raw const anywhere).cast::<ffi::Sockaddr>(),
+            &raw mut index,
+        )
+    };
+    match code {
+        ffi::ERROR_SUCCESS => Ok(Some(index)),
+        ffi::ERROR_NOT_FOUND
+        | ffi::ERROR_NETWORK_UNREACHABLE
+        | ffi::ERROR_HOST_UNREACHABLE
+        | ffi::ERROR_NO_DATA => Ok(None),
+        _ => Err(Error::Os {
+            what: "default route",
+            call: "GetBestInterfaceEx",
+            code: code as i32,
+        }),
+    }
+}
+
+/// An adapter's rank among the DNS sources: its lower interface metric. A
+/// family the adapter does not run has metric 0, which says nothing.
+fn metric_rank(ipv4: u32, ipv6: u32) -> u32 {
+    [ipv4, ipv6]
+        .into_iter()
+        .filter(|&m| m != 0)
+        .min()
+        .unwrap_or(u32::MAX)
+}
+
+/// The deprecated site-local addresses Windows lists on an adapter with no
+/// IPv6 DNS server configured, `fec0:0:0:ffff::1` to `::3`. Nothing answers on
+/// them.
+fn is_placeholder_server(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            s[..4] == [0xfec0, 0, 0, 0xffff] && s[4..7] == [0, 0, 0] && matches!(s[7], 1..=3)
+        }
+        IpAddr::V4(_) => false,
+    }
+}
+
+/// Adds `item` once; `TooLarge` past [`MAX_DNS`].
+fn add_once<T: PartialEq>(list: &mut Vec<T>, item: T) -> Result<()> {
+    if list.contains(&item) {
+        return Ok(());
+    }
+    if list.len() == MAX_DNS {
+        return Err(Error::TooLarge {
+            what: "DNS configuration",
+            limit: MAX_DNS as u64,
+        });
+    }
+    list.push(item);
+    Ok(())
+}
+
+/// Adds one adapter's servers and search domains.
+fn add_dns(a: &ffi::IpAdapterAddresses, dns: &mut Dns) -> Result<()> {
+    let mut server = a.first_dns_server_address.cast_const();
+    for _ in 0..MAX_ADDRESSES {
+        if server.is_null() {
+            break;
+        }
+        // SAFETY: an entry of the server list inside the same buffer as `a`.
+        let entry = unsafe { &*server };
+        // SAFETY: the address belongs to that live buffer.
+        let bytes = unsafe { sockaddr_bytes(&entry.address) };
+        if let Some(ip) = ip_from_sockaddr(bytes).filter(|&ip| !is_placeholder_server(ip)) {
+            add_once(&mut dns.servers, ip)?;
+        }
+        server = entry.next.cast_const();
+    }
+    // SAFETY: the adapter's strings live in the same buffer as `a`.
+    let suffix = unsafe { string_at(a.dns_suffix) };
+    if !suffix.is_empty() {
+        add_once(&mut dns.search, suffix)?;
+    }
+    if (a.length as usize) < size_of::<ffi::IpAdapterAddresses>() {
+        return Ok(());
+    }
+    let mut suffix = a.first_dns_suffix.cast_const();
+    for _ in 0..MAX_ADDRESSES {
+        if suffix.is_null() {
+            break;
+        }
+        // SAFETY: an entry of the suffix list inside the same buffer as `a`.
+        let entry = unsafe { &*suffix };
+        let text = from_wide(&entry.string);
+        if !text.is_empty() {
+            add_once(&mut dns.search, text)?;
+        }
+        suffix = entry.next.cast_const();
+    }
+    Ok(())
+}
+
+/// The DNS servers and suffixes of the adapters that are up, lowest metric
+/// first, each once. Loopback has none to give.
+pub(crate) fn dns() -> Result<Dns> {
+    let flags =
+        ffi::GAA_FLAG_SKIP_UNICAST | ffi::GAA_FLAG_SKIP_ANYCAST | ffi::GAA_FLAG_SKIP_MULTICAST;
+    let buf = adapters(flags, "DNS configuration")?;
+    let mut up = Vec::new();
+    let mut p = if buf.is_empty() {
+        std::ptr::null()
+    } else {
+        buf.as_ptr().cast::<ffi::IpAdapterAddresses>()
+    };
+    for _ in 0..MAX_ADAPTERS {
+        if p.is_null() {
+            break;
+        }
+        // SAFETY: as in `interfaces`: the head of the list in `buf`, or a `next`
+        // link of it, aligned, initialised, and as long-lived as `buf`.
+        let a = unsafe { &*p };
+        if a.oper_status == ffi::IF_OPER_STATUS_UP && a.if_type != ffi::IF_TYPE_SOFTWARE_LOOPBACK {
+            up.push(a);
+        }
+        p = a.next;
+    }
+    up.sort_by_key(|a| metric_rank(a.ipv4_metric, a.ipv6_metric));
+    let mut dns = Dns::default();
+    for a in up {
+        add_dns(a, &mut dns)?;
+    }
+    Ok(dns)
 }
 
 fn interface(a: &ffi::IpAdapterAddresses, rows: &[ffi::MibIfRow2], details: bool) -> Interface {
@@ -405,6 +555,46 @@ mod tests {
         assert_eq!(mac_of(&bytes, 6).unwrap().to_string(), "00:1b:21:aa:bb:0c");
         assert_eq!(mac_of(&bytes, 8), None);
         assert_eq!(mac_of(&[0; 8], 6), None);
+    }
+
+    #[test]
+    fn test_net_windows_dns_rules() {
+        assert_eq!(metric_rank(25, 35), 25);
+        assert_eq!(metric_rank(0, 35), 35);
+        assert_eq!(metric_rank(25, 0), 25);
+        assert_eq!(metric_rank(0, 0), u32::MAX);
+        let site = |last| IpAddr::V6(Ipv6Addr::new(0xfec0, 0, 0, 0xffff, 0, 0, 0, last));
+        assert!(is_placeholder_server(site(1)) && is_placeholder_server(site(3)));
+        assert!(!is_placeholder_server(site(4)));
+        assert!(!is_placeholder_server(IpAddr::V4(Ipv4Addr::new(
+            8, 8, 8, 8
+        ))));
+        assert!(!is_placeholder_server(IpAddr::V6(Ipv6Addr::new(
+            0x2001, 0xdb8, 0, 0xffff, 0, 0, 0, 1
+        ))));
+        let mut list = Vec::new();
+        for i in 0..MAX_DNS {
+            add_once(&mut list, i).unwrap();
+            add_once(&mut list, i).unwrap();
+        }
+        assert_eq!(list.len(), MAX_DNS);
+        add_once(&mut list, 0).unwrap();
+        assert!(matches!(
+            add_once(&mut list, MAX_DNS),
+            Err(Error::TooLarge { limit: 64, .. })
+        ));
+    }
+
+    #[test]
+    fn test_net_windows_live_default_route_and_dns() {
+        if let Some(index) = primary_interface().unwrap() {
+            let list = interfaces(&InterfaceOptions::default()).unwrap();
+            assert!(list.iter().any(|i| i.index == index), "{index}");
+        }
+        let d = dns().unwrap();
+        assert!(d.servers.len() <= MAX_DNS && d.search.len() <= MAX_DNS);
+        assert!(d.upstream.is_empty());
+        assert!(d.servers.iter().all(|&ip| !is_placeholder_server(ip)));
     }
 
     #[test]
