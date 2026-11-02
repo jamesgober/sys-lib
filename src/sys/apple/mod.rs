@@ -6,11 +6,13 @@
 //! mapping, byte readers, and the Mach send-right wrapper.
 
 // Not yet written on this backend: removed name by name, then the line goes.
-pub(crate) use super::detection::{
-    virtualization, cloud, form_factor, hardware, is_server_edition, native_arch, cpu_signature, cpu_topology, memory_modules, disk_of, primary_interface, dns, timezone, locale, clock_sync, sessions, launch, has_battery, batteries, on_ac,
-};
 #[cfg(feature = "device-id")]
 pub(crate) use super::detection::device_anchor;
+pub(crate) use super::detection::{
+    batteries, clock_sync, cloud, cpu_signature, cpu_topology, disk_of, dns, form_factor, hardware,
+    has_battery, is_server_edition, launch, locale, memory_modules, native_arch, on_ac,
+    primary_interface, sessions, timezone, virtualization,
+};
 
 mod cpu;
 mod disk;

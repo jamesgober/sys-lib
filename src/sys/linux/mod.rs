@@ -2,8 +2,8 @@
 //! `crate::linux`), and a short list of libc calls where no file carries the
 //! value.
 
-mod ffi;
 mod detect;
+mod ffi;
 mod live;
 
 pub(crate) use detect::*;

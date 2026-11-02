@@ -111,7 +111,14 @@ mod tests {
     fn test_utmp_both_layouts() {
         for layout in [COMPAT32, NATIVE64] {
             let mut data = record(layout, 2, "reboot", "~", "", 5);
-            data.extend(record(layout, USER_PROCESS, "alice", "pts/0", "10.0.0.9", 1000));
+            data.extend(record(
+                layout,
+                USER_PROCESS,
+                "alice",
+                "pts/0",
+                "10.0.0.9",
+                1000,
+            ));
             data.extend(record(layout, USER_PROCESS, "bob", "tty1", "", 0));
             data.extend(record(layout, 8, "gone", "pts/1", "", 7));
             data.extend([1, 2, 3]);
@@ -126,7 +133,10 @@ mod tests {
             );
             assert!(!e[1].remote);
             assert_eq!(e[1].since, None);
-            assert!(!format!("{e:?}").contains("10.0.0.9"), "the address stays out");
+            assert!(
+                !format!("{e:?}").contains("10.0.0.9"),
+                "the address stays out"
+            );
         }
     }
 
@@ -135,7 +145,10 @@ mod tests {
         assert!(parse(&[], COMPAT32).is_empty());
         assert!(parse(&[0xFF; 1000], NATIVE64).is_empty());
         let one = record(COMPAT32, USER_PROCESS, "u", "t", "", 1);
-        assert_eq!(parse(&one.repeat(MAX_RECORDS + 5), COMPAT32).len(), MAX_RECORDS);
+        assert_eq!(
+            parse(&one.repeat(MAX_RECORDS + 5), COMPAT32).len(),
+            MAX_RECORDS
+        );
         // A user with no terminal, and bytes that are not UTF-8.
         let mut r = record(COMPAT32, USER_PROCESS, "x", "", "", 1);
         r[USER_AT] = 0xFF;

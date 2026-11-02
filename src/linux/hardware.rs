@@ -80,7 +80,8 @@ pub(crate) fn facts(root: &Root) -> HardwareFacts {
         dmi_present.then_some(FirmwareKind::Bios)
     };
     HardwareFacts {
-        model_name: id(root, "product_name").or_else(|| device_tree(root, "/proc/device-tree/model")),
+        model_name: id(root, "product_name")
+            .or_else(|| device_tree(root, "/proc/device-tree/model")),
         model_vendor: vendor,
         model_family: id(root, "product_family"),
         firmware_kind: kind,
@@ -187,11 +188,17 @@ mod tests {
         let d = form_factor(&t.root(), false, false);
         assert_eq!((d.value, d.confidence), (FormFactor::Laptop, High));
         // E-79: a VM's chassis describes virtual hardware.
-        assert_eq!(form_factor(&t.root(), true, false).value, FormFactor::Unknown);
+        assert_eq!(
+            form_factor(&t.root(), true, false).value,
+            FormFactor::Unknown
+        );
         // E-80: the administrator wins, in a VM too.
         t.put("/etc/machine-info", b"CHASSIS=\"server\"\n");
         let d = form_factor(&t.root(), true, false);
-        assert_eq!((d.value, d.source), (FormFactor::Server, "/etc/machine-info"));
+        assert_eq!(
+            (d.value, d.source),
+            (FormFactor::Server, "/etc/machine-info")
+        );
     }
 
     #[test]
@@ -199,13 +206,22 @@ mod tests {
         let t = Tree::new("form2");
         t.put("/sys/class/dmi/id/chassis_type", b"1\n"); // "Other": next source
         t.put("/sys/firmware/acpi/pm_profile", b"4\n");
-        assert_eq!(form_factor(&t.root(), false, false).value, FormFactor::Server);
+        assert_eq!(
+            form_factor(&t.root(), false, false).value,
+            FormFactor::Server
+        );
         let t = Tree::new("form3");
-        assert_eq!(form_factor(&t.root(), false, false).value, FormFactor::Unknown);
+        assert_eq!(
+            form_factor(&t.root(), false, false).value,
+            FormFactor::Unknown
+        );
         let d = form_factor(&t.root(), false, true);
         assert_eq!((d.value, d.confidence), (FormFactor::Laptop, Low));
         t.put("/proc/device-tree/chassis-type", b"handset\0");
-        assert_eq!(form_factor(&t.root(), false, false).value, FormFactor::Phone);
+        assert_eq!(
+            form_factor(&t.root(), false, false).value,
+            FormFactor::Phone
+        );
     }
 
     #[test]
@@ -230,7 +246,10 @@ mod tests {
     #[test]
     fn test_hardware_raspberry_pi_model() {
         let t = Tree::new("pi");
-        t.put("/proc/device-tree/model", b"Raspberry Pi 5 Model B Rev 1.0\0");
+        t.put(
+            "/proc/device-tree/model",
+            b"Raspberry Pi 5 Model B Rev 1.0\0",
+        );
         assert_eq!(
             facts(&t.root()).model_name.as_deref(),
             Some("Raspberry Pi 5 Model B Rev 1.0")

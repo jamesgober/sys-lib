@@ -22,9 +22,8 @@ pub(crate) fn tag(raw: &str) -> Option<String> {
     };
     let language_ok =
         (2..=3).contains(&language.len()) && language.bytes().all(|b| b.is_ascii_lowercase());
-    let region_ok = region.is_none_or(|r| {
-        (2..=3).contains(&r.len()) && r.bytes().all(|b| b.is_ascii_alphanumeric())
-    });
+    let region_ok = region
+        .is_none_or(|r| (2..=3).contains(&r.len()) && r.bytes().all(|b| b.is_ascii_alphanumeric()));
     if !language_ok || !region_ok {
         return None;
     }

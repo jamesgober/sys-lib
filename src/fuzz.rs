@@ -178,7 +178,10 @@ pub fn procfs(data: &[u8]) {
 
 pub fn smbios(data: &[u8]) {
     let f = smbios::facts(data);
-    for s in [f.bios.and_then(|b| b.vendor), f.asset_tag].into_iter().flatten() {
+    for s in [f.bios.and_then(|b| b.vendor), f.asset_tag]
+        .into_iter()
+        .flatten()
+    {
         assert!(s.len() <= 256);
     }
     assert!(smbios::structures(data).count() <= smbios::MAX_STRUCTURES);
@@ -204,9 +207,13 @@ pub fn utmp(data: &[u8]) {
 pub fn windows_zones(data: &[u8]) {
     let text = String::from_utf8_lossy(data);
     let _ = tz::iana_for_windows(&text);
-    for name in [tz::from_env(&text), tz::from_link(&text), tz::from_file(data)]
-        .into_iter()
-        .flatten()
+    for name in [
+        tz::from_env(&text),
+        tz::from_link(&text),
+        tz::from_file(data),
+    ]
+    .into_iter()
+    .flatten()
     {
         // A name is never a path out of the zone directory.
         assert!(tz::valid_name(name) && !name.contains("..") && !name.starts_with('/'));
@@ -221,7 +228,14 @@ pub fn fingerprint(data: &[u8]) {
     use crate::device::Fingerprint;
 
     if let Ok(f) = Fingerprint::from_bytes(data) {
-        assert_eq!(f.to_bytes().as_slice(), data, "a parsed fingerprint round-trips");
-        assert_eq!(Fingerprint::from_bytes(&f.to_bytes()).ok().as_ref(), Some(&f));
+        assert_eq!(
+            f.to_bytes().as_slice(),
+            data,
+            "a parsed fingerprint round-trips"
+        );
+        assert_eq!(
+            Fingerprint::from_bytes(&f.to_bytes()).ok().as_ref(),
+            Some(&f)
+        );
     }
 }

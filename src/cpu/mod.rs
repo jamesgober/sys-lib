@@ -23,8 +23,8 @@ mod usage;
 
 pub use features::{Feature, Features, X86Level, features, has, x86_level};
 pub use topology::{
-    Cache, CacheKind, Core, CoreKind, NumaNode, Package, Topology, cache_line, caches,
-    is_hybrid, numa_nodes, topology,
+    Cache, CacheKind, Core, CoreKind, NumaNode, Package, Topology, cache_line, caches, is_hybrid,
+    numa_nodes, topology,
 };
 pub(crate) use usage::States;
 pub use usage::{DEFAULT_WINDOW, Sampler, Times, Usage, free, times, usage, usage_over, used};

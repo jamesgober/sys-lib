@@ -284,7 +284,8 @@ pub(crate) fn hypervisor_from_dmi(dmi: &Dmi<'_>) -> Option<Hypervisor> {
     // Hyper-V says only "Microsoft Corporation" and "Virtual Machine": physical
     // Surface machines say the first too.
     let microsoft = contains_ignore_case(dmi.sys_vendor, "Microsoft Corporation");
-    (microsoft && contains_ignore_case(dmi.product, "Virtual Machine")).then_some(Hypervisor::HyperV)
+    (microsoft && contains_ignore_case(dmi.product, "Virtual Machine"))
+        .then_some(Hypervisor::HyperV)
 }
 
 /// The cloud firmware strings or the hypervisor name.
@@ -326,11 +327,23 @@ mod tests {
 
     #[test]
     fn test_virt_signatures() {
-        assert_eq!(hypervisor_from_signature(b"KVMKVMKVM\0\0\0"), Hypervisor::Kvm);
+        assert_eq!(
+            hypervisor_from_signature(b"KVMKVMKVM\0\0\0"),
+            Hypervisor::Kvm
+        );
         assert_eq!(hypervisor_from_signature(b"Linux KVM Hv"), Hypervisor::Kvm);
-        assert_eq!(hypervisor_from_signature(b"Microsoft Hv"), Hypervisor::HyperV);
-        assert_eq!(hypervisor_from_signature(b"VMwareVMware"), Hypervisor::Vmware);
-        assert_eq!(hypervisor_from_signature(b"something new"[..12].try_into().unwrap()), Hypervisor::Other);
+        assert_eq!(
+            hypervisor_from_signature(b"Microsoft Hv"),
+            Hypervisor::HyperV
+        );
+        assert_eq!(
+            hypervisor_from_signature(b"VMwareVMware"),
+            Hypervisor::Vmware
+        );
+        assert_eq!(
+            hypervisor_from_signature(b"something new"[..12].try_into().unwrap()),
+            Hypervisor::Other
+        );
     }
 
     #[test]
@@ -377,7 +390,10 @@ mod tests {
             asset_tag: "7783-7084-3265-9085-8269-3286-77",
             ..Dmi::default()
         };
-        assert_eq!(cloud_from_dmi(&azure, Some(Hypervisor::HyperV)), Some(Cloud::Azure));
+        assert_eq!(
+            cloud_from_dmi(&azure, Some(Hypervisor::HyperV)),
+            Some(Cloud::Azure)
+        );
         let hyperv = Dmi {
             asset_tag: "",
             ..azure

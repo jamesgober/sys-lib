@@ -9,7 +9,6 @@
 
 #![cfg_attr(not(feature = "guard"), allow(dead_code))]
 
-
 use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 
 /// `uid_t`.

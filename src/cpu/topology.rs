@@ -145,11 +145,13 @@ pub fn cache_line() -> usize {
         .find(|c| c.level == 1 && c.kind != CacheKind::Instruction)
         .map(|c| c.line as usize)
         .filter(|l| l.is_power_of_two() && (16..=1024).contains(l));
-    line.unwrap_or(if cfg!(all(target_vendor = "apple", target_arch = "aarch64")) {
-        128
-    } else {
-        64
-    })
+    line.unwrap_or(
+        if cfg!(all(target_vendor = "apple", target_arch = "aarch64")) {
+            128
+        } else {
+            64
+        },
+    )
 }
 
 /// The NUMA nodes, sorted by id. macOS reports one node with every CPU.

@@ -54,7 +54,10 @@ fn test_attack_t1_no_output_contains_a_raw_identifier() {
     for raw in raw_identifiers() {
         assert!(!everything.contains(&raw), "a raw identifier leaked");
         // Nor its first half, in case of a truncated copy.
-        assert!(!everything.contains(&raw[..16]), "part of an identifier leaked");
+        assert!(
+            !everything.contains(&raw[..16]),
+            "part of an identifier leaked"
+        );
     }
 }
 

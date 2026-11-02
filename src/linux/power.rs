@@ -92,7 +92,10 @@ pub(crate) fn battery(s: &Supply) -> RawBattery {
                 .then(|| duration(to_full, rate))
                 .flatten(),
             health: share(full, design),
-            cycles: s.cycles.and_then(|c| u32::try_from(c).ok()).filter(|&c| c != 0),
+            cycles: s
+                .cycles
+                .and_then(|c| u32::try_from(c).ok())
+                .filter(|&c| c != 0),
         },
         energy: now.zip(full),
     }
@@ -213,7 +216,10 @@ mod tests {
             b"POWER_SUPPLY_STATUS=Charging\nPOWER_SUPPLY_CHARGE_NOW=1000000\n\
               POWER_SUPPLY_CHARGE_FULL=2000000\nPOWER_SUPPLY_CURRENT_NOW=500000\n",
         );
-        assert_eq!(battery(&s).battery.time_to_full, Some(Duration::from_secs(2 * 3600)));
+        assert_eq!(
+            battery(&s).battery.time_to_full,
+            Some(Duration::from_secs(2 * 3600))
+        );
         // Nothing at all, and a zero rate.
         let b = battery(&Supply::default()).battery;
         assert_eq!((b.charge, b.health, b.cycles), (Percent::ZERO, None, None));

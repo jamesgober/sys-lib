@@ -1,13 +1,16 @@
 //! Login sessions (wtsapi32) and how this process was started.
 
 use std::{
-    ffi::c_void,
-    mem::size_of,
+    ffi::{CStr, c_void},
+    mem::{size_of, transmute},
     ptr::{null_mut, read_unaligned},
+    sync::OnceLock,
     time::SystemTime,
 };
 
-use super::{ffi, filetime_to_system, from_wide, net::string_at, non_negative, os_error};
+use super::{
+    ffi, filetime_to_system, from_wide, net::string_at, non_negative, os_error, unsupported, wide,
+};
 use crate::{
     Error, Result,
     host::Session,
@@ -21,36 +24,74 @@ const THIS_SERVER: ffi::Handle = null_mut();
 /// The most sessions read (threat T7).
 const MAX_SESSIONS: usize = 4_096;
 
+/// The three calls this module makes, resolved at run time (see `ffi`).
+struct Wts {
+    enumerate: ffi::WtsEnumerateSessionsW,
+    query: ffi::WtsQuerySessionInformationW,
+    free: ffi::WtsFreeMemory,
+}
+
+/// A named export of `module`.
+fn export(module: ffi::Handle, name: &CStr) -> Option<*mut c_void> {
+    // SAFETY: `module` is a loaded module and `name` is NUL-terminated.
+    let address = unsafe { ffi::GetProcAddress(module, name.as_ptr()) };
+    (!address.is_null()).then_some(address)
+}
+
+/// wtsapi32, loaded from System32 once and kept; `None` where Windows has none.
+fn wts() -> Option<&'static Wts> {
+    static WTS: OnceLock<Option<Wts>> = OnceLock::new();
+    WTS.get_or_init(|| {
+        let name = wide("wtsapi32.dll");
+        // SAFETY: `name` is NUL-terminated and outlives the call; no file handle
+        // is passed, and the flag restricts the search to System32.
+        let module = unsafe {
+            ffi::LoadLibraryExW(name.as_ptr(), null_mut(), ffi::LOAD_LIBRARY_SEARCH_SYSTEM32)
+        };
+        if module.is_null() {
+            return None;
+        }
+        let enumerate = export(module, c"WTSEnumerateSessionsW")?;
+        let query = export(module, c"WTSQuerySessionInformationW")?;
+        let free = export(module, c"WTSFreeMemory")?;
+        // SAFETY: each address is the export of that name, whose signature is
+        // the type it becomes (wtsapi32.h), and the module is never unloaded.
+        let enumerate = unsafe { transmute::<*mut c_void, ffi::WtsEnumerateSessionsW>(enumerate) };
+        // SAFETY: as above.
+        let query = unsafe { transmute::<*mut c_void, ffi::WtsQuerySessionInformationW>(query) };
+        // SAFETY: as above.
+        let free = unsafe { transmute::<*mut c_void, ffi::WtsFreeMemory>(free) };
+        Some(Wts {
+            enumerate,
+            query,
+            free,
+        })
+    })
+    .as_ref()
+}
+
 /// Memory wtsapi32 allocated, freed on drop.
-struct WtsMemory(*mut c_void);
+struct WtsMemory(*mut c_void, &'static Wts);
 
 impl Drop for WtsMemory {
     fn drop(&mut self) {
         // SAFETY: the memory came from wtsapi32 and is freed once.
-        unsafe { ffi::WTSFreeMemory(self.0) };
+        unsafe { (self.1.free)(self.0) };
     }
 }
 
 /// One `WTSQuerySessionInformationW` answer, with its size in bytes.
-fn query(session: u32, class: i32) -> Option<(WtsMemory, usize)> {
+fn query(wts: &'static Wts, session: u32, class: i32) -> Option<(WtsMemory, usize)> {
     let mut memory = null_mut();
     let mut bytes = 0u32;
     // SAFETY: `memory` and `bytes` are writable locals the call fills.
-    let ok = unsafe {
-        ffi::WTSQuerySessionInformationW(
-            THIS_SERVER,
-            session,
-            class,
-            &raw mut memory,
-            &raw mut bytes,
-        )
-    };
-    (ok != 0 && !memory.is_null()).then_some((WtsMemory(memory), bytes as usize))
+    let ok = unsafe { (wts.query)(THIS_SERVER, session, class, &raw mut memory, &raw mut bytes) };
+    (ok != 0 && !memory.is_null()).then_some((WtsMemory(memory, wts), bytes as usize))
 }
 
 /// The session's user name; `None` when it cannot be read.
-fn user_name(session: u32) -> Option<String> {
-    let (memory, bytes) = query(session, ffi::WTS_USER_NAME)?;
+fn user_name(wts: &'static Wts, session: u32) -> Option<String> {
+    let (memory, bytes) = query(wts, session, ffi::WTS_USER_NAME)?;
     // SAFETY: the answer is `bytes` readable bytes of UTF-16 in a heap block,
     // aligned for it, and lives until `memory` drops.
     let units = unsafe { std::slice::from_raw_parts(memory.0.cast::<u16>(), bytes / 2) };
@@ -58,8 +99,8 @@ fn user_name(session: u32) -> Option<String> {
 }
 
 /// Whether the session came in over the network: any protocol but the console.
-fn is_remote(session: u32) -> Option<bool> {
-    let (memory, bytes) = query(session, ffi::WTS_CLIENT_PROTOCOL_TYPE)?;
+fn is_remote(wts: &'static Wts, session: u32) -> Option<bool> {
+    let (memory, bytes) = query(wts, session, ffi::WTS_CLIENT_PROTOCOL_TYPE)?;
     if bytes < size_of::<u16>() {
         return None;
     }
@@ -69,8 +110,8 @@ fn is_remote(session: u32) -> Option<bool> {
 }
 
 /// The session's logon time. Windows leaves it zero when there is none.
-fn logon_time(session: u32) -> Option<SystemTime> {
-    let (memory, bytes) = query(session, ffi::WTS_SESSION_INFO)?;
+fn logon_time(wts: &'static Wts, session: u32) -> Option<SystemTime> {
+    let (memory, bytes) = query(wts, session, ffi::WTS_SESSION_INFO)?;
     if bytes < size_of::<ffi::WtsInfoW>() {
         return None;
     }
@@ -86,19 +127,19 @@ fn logon_time(session: u32) -> Option<SystemTime> {
 /// none. A session this process may not ask about (another user's, without the
 /// right) is left out, as is one that ended since the list was read.
 pub(crate) fn sessions() -> Result<Vec<Session>> {
+    let wts = wts().ok_or_else(|| unsupported("sessions"))?;
     let mut list = null_mut();
     let mut count = 0u32;
     // SAFETY: reserved is 0 and version 1, as documented; `list` and `count`
     // are writable locals the call fills.
-    let ok =
-        unsafe { ffi::WTSEnumerateSessionsW(THIS_SERVER, 0, 1, &raw mut list, &raw mut count) };
+    let ok = unsafe { (wts.enumerate)(THIS_SERVER, 0, 1, &raw mut list, &raw mut count) };
     if ok == 0 {
         return Err(os_error("sessions", "WTSEnumerateSessionsW"));
     }
     if list.is_null() {
         return Ok(Vec::new());
     }
-    let list = WtsMemory(list);
+    let list = WtsMemory(list, wts);
     let count = count as usize;
     if count > MAX_SESSIONS {
         return Err(Error::TooLarge {
@@ -112,7 +153,7 @@ pub(crate) fn sessions() -> Result<Vec<Session>> {
     let mut out = Vec::with_capacity(count);
     for entry in entries {
         let id = entry.session_id;
-        let Some(user) = user_name(id).filter(|u| !u.is_empty()) else {
+        let Some(user) = user_name(wts, id).filter(|u| !u.is_empty()) else {
             continue;
         };
         // SAFETY: the station names live in the list, until `list` drops.
@@ -120,8 +161,8 @@ pub(crate) fn sessions() -> Result<Vec<Session>> {
         out.push(Session {
             user,
             terminal: Some(station).filter(|s| !s.is_empty()),
-            remote: is_remote(id).unwrap_or(false),
-            since: logon_time(id),
+            remote: is_remote(wts, id).unwrap_or(false),
+            since: logon_time(wts, id),
         });
     }
     Ok(out)

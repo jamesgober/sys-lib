@@ -204,7 +204,10 @@ mod tests {
     fn test_tz_env_values() {
         assert_eq!(from_env("Europe/London"), Some("Europe/London"));
         assert_eq!(from_env(":Europe/London"), Some("Europe/London"));
-        assert_eq!(from_env("America/Port-au-Prince"), Some("America/Port-au-Prince"));
+        assert_eq!(
+            from_env("America/Port-au-Prince"),
+            Some("America/Port-au-Prince")
+        );
         assert_eq!(from_env("Etc/GMT+5"), Some("Etc/GMT+5"));
         for v in [
             "",
@@ -231,7 +234,10 @@ mod tests {
             ("../usr/share/zoneinfo/Asia/Tokyo", Some("Asia/Tokyo")),
             ("/usr/share/zoneinfo/posix/UTC", Some("UTC")),
             ("/usr/share/zoneinfo/right/UTC", Some("UTC")),
-            ("/var/db/timezone/zoneinfo/America/New_York", Some("America/New_York")),
+            (
+                "/var/db/timezone/zoneinfo/America/New_York",
+                Some("America/New_York"),
+            ),
             ("/etc/some-copy", None),
             ("/usr/share/zoneinfo/", None),
             ("/usr/share/zoneinfo/../../../etc/shadow", None),
@@ -257,7 +263,10 @@ mod tests {
             assert!(valid_name(iana), "{iana}");
         }
         assert_eq!(iana_for_windows("GMT Standard Time"), Some("Europe/London"));
-        assert_eq!(iana_for_windows("Pacific Standard Time"), Some("America/Los_Angeles"));
+        assert_eq!(
+            iana_for_windows("Pacific Standard Time"),
+            Some("America/Los_Angeles")
+        );
         assert_eq!(iana_for_windows("UTC"), Some("Etc/UTC"));
         assert_eq!(iana_for_windows("Not A Zone"), None);
     }

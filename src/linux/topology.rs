@@ -39,7 +39,9 @@ pub(crate) fn cache_size(text: &str) -> Option<Bytes> {
         b'G' => (&t[..t.len() - 1], 30),
         _ => (t, 0),
     };
-    Some(Bytes::new(parse_u64(digits.as_bytes())?.checked_shl(shift)?))
+    Some(Bytes::new(
+        parse_u64(digits.as_bytes())?.checked_shl(shift)?,
+    ))
 }
 
 /// One CPU's identity.
@@ -223,7 +225,11 @@ mod tests {
         assert_eq!(logical, 32, "the fixture has 32 CPUs");
         assert_eq!(f.topology.packages.len(), 1);
         assert!(f.topology.cores.iter().all(|c| c.kind == CoreKind::Uniform));
-        assert!(f.caches.iter().any(|c| c.level == 3 && c.kind == CacheKind::Unified));
+        assert!(
+            f.caches
+                .iter()
+                .any(|c| c.level == 3 && c.kind == CacheKind::Unified)
+        );
         assert!(f.caches.iter().any(|c| c.level == 1 && c.line == 64));
     }
 
@@ -247,7 +253,10 @@ mod tests {
 
     fn cpu_files(t: &Tree, n: u32, siblings: &str, capacity: &str) {
         let dir = format!("/sys/devices/system/cpu/cpu{n}");
-        t.put(&format!("{dir}/topology/core_cpus_list"), siblings.as_bytes());
+        t.put(
+            &format!("{dir}/topology/core_cpus_list"),
+            siblings.as_bytes(),
+        );
         t.put(&format!("{dir}/topology/physical_package_id"), b"0\n");
         t.put(&format!("{dir}/cpu_capacity"), capacity.as_bytes());
     }

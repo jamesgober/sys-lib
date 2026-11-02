@@ -114,7 +114,8 @@ mod tests {
 
     #[test]
     fn test_resolv_junk_is_ignored() {
-        let r = parse(b"nameserver\nnameserver not-an-ip\nsearch ../etc\x00 ok.example\n\xff\xfe\n");
+        let r =
+            parse(b"nameserver\nnameserver not-an-ip\nsearch ../etc\x00 ok.example\n\xff\xfe\n");
         assert!(r.servers.is_empty());
         assert_eq!(r.search, vec!["ok.example"]);
     }

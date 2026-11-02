@@ -690,10 +690,20 @@ fn test_live_linux_detection_matches_the_tools() {
     if let Some(route) = need("ip", &["route", "show", "default"])
         && let Some(dev) = route.split_whitespace().skip_while(|w| *w != "dev").nth(1)
     {
-        assert_eq!(net::primary().unwrap().map(|i| i.name).as_deref(), Some(dev));
+        assert_eq!(
+            net::primary().unwrap().map(|i| i.name).as_deref(),
+            Some(dev)
+        );
     }
     if let Ok(release) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
         assert_eq!(virt::is_wsl(), release.to_lowercase().contains("microsoft"));
     }
-    assert_eq!(cpu::topology().cores.iter().map(|c| c.logical.len()).sum::<usize>(), cpu::logical());
+    assert_eq!(
+        cpu::topology()
+            .cores
+            .iter()
+            .map(|c| c.logical.len())
+            .sum::<usize>(),
+        cpu::logical()
+    );
 }

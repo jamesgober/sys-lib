@@ -148,7 +148,11 @@ mod tests {
     #[test]
     fn test_launch_order() {
         let service = LaunchFacts {
-            service: Some((Launcher::Systemd, Some("site.service".into()), Strength::Strong)),
+            service: Some((
+                Launcher::Systemd,
+                Some("site.service".into()),
+                Strength::Strong,
+            )),
             notify_socket: true,
             ..LaunchFacts::default()
         };
@@ -161,7 +165,10 @@ mod tests {
             is_pid1: true,
             ..LaunchFacts::default()
         };
-        assert_eq!(decide(pid1.clone(), true, false).by, Launcher::ContainerInit);
+        assert_eq!(
+            decide(pid1.clone(), true, false).by,
+            Launcher::ContainerInit
+        );
         assert_eq!(decide(pid1, false, false).by, Launcher::Init);
 
         let cron = LaunchFacts {
@@ -178,7 +185,10 @@ mod tests {
         assert_eq!(l.by, Launcher::Ssh);
         assert_eq!(l.evidence[0].strength, Strength::Weak);
 
-        assert_eq!(decide(LaunchFacts::default(), false, true).by, Launcher::Terminal);
+        assert_eq!(
+            decide(LaunchFacts::default(), false, true).by,
+            Launcher::Terminal
+        );
         let l = decide(LaunchFacts::default(), false, false);
         assert_eq!(l.by, Launcher::Unknown);
         assert!(l.evidence.is_empty());

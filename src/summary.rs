@@ -92,12 +92,21 @@ impl Summary {
     /// `key=value` pairs, one per fact, separated by `sep`.
     fn pairs(&self, out: &mut dyn fmt::Write, sep: &str) -> fmt::Result {
         let c = &self.cpu_counts;
-        write!(out, "os={}{sep}kernel={}", quoted(self.os), quoted(self.kernel))?;
+        write!(
+            out,
+            "os={}{sep}kernel={}",
+            quoted(self.os),
+            quoted(self.kernel)
+        )?;
         write!(out, "{sep}cpu={}", quoted(self.cpu))?;
         write!(out, "{sep}cores={}{sep}threads={}", c.physical, c.logical)?;
         write!(out, "{sep}available={}", c.available)?;
         if let Some(m) = &self.memory {
-            write!(out, "{sep}memory.total={}{sep}memory.used={}", m.total, m.used)?;
+            write!(
+                out,
+                "{sep}memory.total={}{sep}memory.used={}",
+                m.total, m.used
+            )?;
         }
         if let Some(limit) = self.limit_name() {
             write!(out, "{sep}limit={limit}")?;

@@ -133,7 +133,12 @@ pub(crate) struct Details {
 /// The interface holding the default route: the IPv4 route with the lowest
 /// metric, else the IPv6 one.
 pub(crate) fn default_route(root: &Root) -> Option<String> {
-    let v4 = root.read("/proc/net/route", 1 << 20, "default route", "/proc/net/route");
+    let v4 = root.read(
+        "/proc/net/route",
+        1 << 20,
+        "default route",
+        "/proc/net/route",
+    );
     if let Some(name) = v4.ok().and_then(|d| procfs::default_route_v4(&d)) {
         return Some(name);
     }

@@ -549,12 +549,11 @@ mod tests {
         for i in 0..pairs {
             let a = id_of("com.example.one", &i.to_be_bytes());
             let b = id_of("com.example.two", &i.to_be_bytes());
-            bits += a
-                .0
-                .iter()
-                .zip(&b.0)
-                .map(|(x, y)| u64::from((x ^ y).count_ones()))
-                .sum::<u64>();
+            bits +=
+                a.0.iter()
+                    .zip(&b.0)
+                    .map(|(x, y)| u64::from((x ^ y).count_ones()))
+                    .sum::<u64>();
         }
         let mean = bits as f64 / f64::from(pairs);
         assert!((59.0..=63.0).contains(&mean), "mean distance {mean}");
@@ -634,6 +633,9 @@ mod tests {
             other => panic!("{other:?}"),
         }
         let f = fingerprint("com.example.test").unwrap();
-        assert_eq!(f.compare(&f).verdict == Verdict::Different, f.anchors().next().is_none() || f.anchors().all(|a| a == Anchor::CpuSignature));
+        assert_eq!(
+            f.compare(&f).verdict == Verdict::Different,
+            f.anchors().next().is_none() || f.anchors().all(|a| a == Anchor::CpuSignature)
+        );
     }
 }

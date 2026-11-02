@@ -270,9 +270,16 @@ mod tests {
         assert_eq!(back, f);
         assert_eq!(
             back.anchors().collect::<Vec<_>>(),
-            vec![Anchor::PlatformUuid, Anchor::BoardSerial, Anchor::ProductSerial]
+            vec![
+                Anchor::PlatformUuid,
+                Anchor::BoardSerial,
+                Anchor::ProductSerial
+            ]
         );
-        assert_eq!(format!("{f:?}"), "[PlatformUuid, BoardSerial, ProductSerial]");
+        assert_eq!(
+            format!("{f:?}"),
+            "[PlatformUuid, BoardSerial, ProductSerial]"
+        );
     }
 
     #[test]

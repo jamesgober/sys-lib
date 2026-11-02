@@ -69,7 +69,11 @@ mod tests {
         // E-69.
         let t = Tree::new("mid");
         assert_eq!(read_it(&t.root(), Anchor::InstallId), Reading::Absent);
-        for placeholder in [&b""[..], b"uninitialized\n", b"00000000000000000000000000000000\n"] {
+        for placeholder in [
+            &b""[..],
+            b"uninitialized\n",
+            b"00000000000000000000000000000000\n",
+        ] {
             t.put("/etc/machine-id", placeholder);
             assert_eq!(read_it(&t.root(), Anchor::InstallId), Reading::Placeholder);
         }
@@ -80,7 +84,10 @@ mod tests {
     #[test]
     fn test_device_dbus_machine_id_is_the_fallback() {
         let t = Tree::new("dbus");
-        t.put("/var/lib/dbus/machine-id", b"5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e\n");
+        t.put(
+            "/var/lib/dbus/machine-id",
+            b"5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e\n",
+        );
         assert_eq!(read_it(&t.root(), Anchor::InstallId), Reading::Value(16));
     }
 
@@ -88,18 +95,33 @@ mod tests {
     fn test_device_no_dmi_is_unsupported() {
         // E-41.
         let t = Tree::new("nodmi");
-        assert_eq!(read_it(&t.root(), Anchor::PlatformUuid), Reading::Unsupported);
+        assert_eq!(
+            read_it(&t.root(), Anchor::PlatformUuid),
+            Reading::Unsupported
+        );
     }
 
     #[test]
     fn test_device_dmi_values_and_placeholders() {
         // E-70.
         let t = Tree::new("dmi");
-        t.put("/sys/class/dmi/id/product_uuid", b"00000000-0000-0000-0000-000000000000\n");
-        t.put("/sys/class/dmi/id/board_serial", b"To be filled by O.E.M.\n");
+        t.put(
+            "/sys/class/dmi/id/product_uuid",
+            b"00000000-0000-0000-0000-000000000000\n",
+        );
+        t.put(
+            "/sys/class/dmi/id/board_serial",
+            b"To be filled by O.E.M.\n",
+        );
         t.put("/sys/class/dmi/id/product_serial", b"PF3XYZ\n");
-        assert_eq!(read_it(&t.root(), Anchor::PlatformUuid), Reading::Placeholder);
-        assert_eq!(read_it(&t.root(), Anchor::BoardSerial), Reading::Placeholder);
+        assert_eq!(
+            read_it(&t.root(), Anchor::PlatformUuid),
+            Reading::Placeholder
+        );
+        assert_eq!(
+            read_it(&t.root(), Anchor::BoardSerial),
+            Reading::Placeholder
+        );
         assert_eq!(read_it(&t.root(), Anchor::ProductSerial), Reading::Value(6));
     }
 
@@ -108,7 +130,10 @@ mod tests {
         // The fixtures' machine id is the fixed fake value capture.sh writes.
         let root = crate::linux::fixtures::root("wsl2");
         let mut out = [0; ANCHOR_BUF];
-        assert_eq!(anchor(&root, Anchor::InstallId, &mut out), Reading::Value(16));
+        assert_eq!(
+            anchor(&root, Anchor::InstallId, &mut out),
+            Reading::Value(16)
+        );
         assert_eq!(out[..4], [0x5c, 0xa1, 0xab, 0x1e]);
     }
 }

@@ -119,7 +119,9 @@ const PLACEHOLDERS: &[&str] = &[
 pub(crate) fn is_placeholder(text: &[u8]) -> bool {
     let t = text.trim_ascii();
     t.is_empty()
-        || PLACEHOLDERS.iter().any(|p| t.eq_ignore_ascii_case(p.as_bytes()))
+        || PLACEHOLDERS
+            .iter()
+            .any(|p| t.eq_ignore_ascii_case(p.as_bytes()))
         || t.iter().all(|&b| b == t[0]) && matches!(t[0], b'0' | b'x' | b'X' | b'*' | b'-' | b'.')
 }
 
@@ -296,7 +298,10 @@ pub(crate) struct MemoryDevice {
 fn speed(s: &Structure<'_>, short: usize, extended: usize) -> Option<u32> {
     match s.word(short)? {
         0 => None,
-        0xFFFF => s.dword(extended).map(|v| v & 0x7FFF_FFFF).filter(|&v| v != 0),
+        0xFFFF => s
+            .dword(extended)
+            .map(|v| v & 0x7FFF_FFFF)
+            .filter(|&v| v != 0),
         v => Some(u32::from(v)),
     }
 }
@@ -354,11 +359,7 @@ pub(crate) mod tests {
         let mut body = vec![1, 2, 3, serial];
         body.extend_from_slice(&uuid);
         body.extend_from_slice(&[6, 0, 5]); // wake-up, SKU, family
-        structure(
-            1,
-            &body,
-            &["ACME", "Rocket", "1.2", "SERIAL-1", "Rockets"],
-        )
+        structure(1, &body, &["ACME", "Rocket", "1.2", "SERIAL-1", "Rockets"])
     }
 
     pub(crate) fn sample() -> Vec<u8> {

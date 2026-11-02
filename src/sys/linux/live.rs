@@ -222,8 +222,8 @@ pub(crate) fn disks(options: &ListOptions) -> Result<Vec<Disk>> {
 }
 
 pub(crate) fn disk_of(path: &Path) -> Result<Disk> {
-    let path = std::fs::canonicalize(path)
-        .map_err(|e| Error::io("disk of a path", "the path", e))?;
+    let path =
+        std::fs::canonicalize(path).map_err(|e| Error::io("disk of a path", "the path", e))?;
     let options = ListOptions {
         include_network: true,
         include_pseudo: true,

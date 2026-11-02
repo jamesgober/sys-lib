@@ -143,6 +143,24 @@ jobs:
           MIRIFLAGS: "-Zmiri-disable-isolation"
           PROPTEST_CASES: "16"
 
+  # A DLL in the import table that a stripped-down Windows lacks stops the whole
+  # program before `main`, so a real binary runs where the fewest DLLs exist.
+  nanoserver:
+    name: Nano Server
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build a static binary
+        env:
+          RUSTFLAGS: -Ctarget-feature=+crt-static
+        run: cargo build --example summary --features device-id
+      - name: Run it on Nano Server
+        shell: bash
+        run: |
+          mkdir nano && cp target/debug/examples/summary.exe nano/
+          docker run --rm -v "$(cygpath -w "$PWD/nano"):C:\\app" mcr.microsoft.com/windows/nanoserver:ltsc2022 'C:\app\summary.exe'
+
   fuzz-smoke:
     name: Fuzz (smoke, 20 s per target)
     runs-on: ubuntu-latest

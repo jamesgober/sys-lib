@@ -99,7 +99,10 @@ pub(crate) fn native_arch() -> Arch {
     }
 }
 
-#[cfg(all(feature = "device-id", any(target_arch = "x86", target_arch = "x86_64")))]
+#[cfg(all(
+    feature = "device-id",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
 pub(crate) fn cpu_signature() -> u32 {
     crate::sys::x86::signature()
 }
@@ -151,7 +154,9 @@ pub(crate) fn timezone() -> Result<TimeZone> {
     let abbreviation = (!zone.is_null()).then(|| {
         // SAFETY: libc's `tm_zone` is a NUL-terminated string that lives as
         // long as the zone data; it is copied before anything can change it.
-        unsafe { CStr::from_ptr(zone) }.to_string_lossy().into_owned()
+        unsafe { CStr::from_ptr(zone) }
+            .to_string_lossy()
+            .into_owned()
     });
     Ok(TimeZone {
         iana,
@@ -177,9 +182,7 @@ pub(crate) fn clock_sync() -> Result<Option<ClockSync>> {
     }
     // SAFETY: zeroed above, and the kernel wrote only valid integers.
     let t = unsafe { t.assume_init() };
-    let micros = |v: core::ffi::c_long| {
-        u64::try_from(v).ok().map(Duration::from_micros)
-    };
+    let micros = |v: core::ffi::c_long| u64::try_from(v).ok().map(Duration::from_micros);
     Ok(Some(ClockSync {
         synchronized: state != ffi::TIME_ERROR && t.status & ffi::STA_UNSYNC == 0,
         max_error: micros(t.maxerror),

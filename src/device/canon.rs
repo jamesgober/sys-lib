@@ -187,10 +187,16 @@ mod tests {
         let mut a = buf();
         assert_eq!(serial(b"  c02xg1\n", &mut a), Reading::Value(6));
         assert_eq!(&a[..6], b"C02XG1");
-        assert_eq!(serial(b"To be filled by O.E.M.", &mut buf()), Reading::Placeholder);
+        assert_eq!(
+            serial(b"To be filled by O.E.M.", &mut buf()),
+            Reading::Placeholder
+        );
         assert_eq!(serial(b"", &mut buf()), Reading::Placeholder);
         // Longer than the buffer: bounded.
-        assert_eq!(serial(&[b'a'; 1000], &mut buf()), Reading::Value(ANCHOR_BUF));
+        assert_eq!(
+            serial(&[b'a'; 1000], &mut buf()),
+            Reading::Value(ANCHOR_BUF)
+        );
     }
 
     #[test]
@@ -199,6 +205,9 @@ mod tests {
         assert!(!mac_is_usable(&[0; 6]));
         assert!(!mac_is_usable(&[0xFF; 6]));
         assert!(!mac_is_usable(&[0x01, 0, 0, 0, 0, 1]), "multicast");
-        assert!(!mac_is_usable(&[0x02, 0, 0, 0, 0, 1]), "locally administered");
+        assert!(
+            !mac_is_usable(&[0x02, 0, 0, 0, 0, 1]),
+            "locally administered"
+        );
     }
 }

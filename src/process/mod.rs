@@ -18,8 +18,8 @@ mod guard;
 mod launch;
 mod usage;
 
-pub use launch::{Launch, Launcher, is_interactive, is_service, launch};
 pub(crate) use launch::LaunchFacts;
+pub use launch::{Launch, Launcher, is_interactive, is_service, launch};
 pub use usage::{
     CpuSampler, CpuTime, InfoOptions, Limits, ProcessInfo, ProcessIo, ProcessMemory, ProcessUsage,
     cpu_time, info, info_with, io, limits, memory, memory_detail, open_files, parent_id,

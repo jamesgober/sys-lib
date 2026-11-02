@@ -95,8 +95,12 @@ mod tests {
 
     #[test]
     fn test_uevent_unknown_and_junk() {
-        let s = parse(b"POWER_SUPPLY_STATUS=Weird\nPOWER_SUPPLY_CAPACITY=abc\nnoise\n=x\n\xff=\xff\n");
+        let s =
+            parse(b"POWER_SUPPLY_STATUS=Weird\nPOWER_SUPPLY_CAPACITY=abc\nnoise\n=x\n\xff=\xff\n");
         assert_eq!(s, Supply::default());
-        assert_eq!(parse(b"POWER_SUPPLY_STATUS=Not charging").status, Status::NotCharging);
+        assert_eq!(
+            parse(b"POWER_SUPPLY_STATUS=Not charging").status,
+            Status::NotCharging
+        );
     }
 }

@@ -13,7 +13,7 @@
               arrives in 0.3 to 0.5 (docs/API.md), and this expectation goes when the last one is"
 )]
 
-use core::ffi::c_void;
+use core::ffi::{c_char, c_void};
 
 /// `BOOL`: nonzero is true.
 pub(crate) type Bool = i32;
@@ -908,6 +908,9 @@ pub(crate) const BATTERY_LIFE_UNKNOWN: u32 = 0xFFFF_FFFF;
 // ---------------------------------------------------------------------------
 
 dll!("kernel32.dll" {
+    // libloaderapi.h
+    pub(crate) fn LoadLibraryExW(name: *const u16, file: Handle, flags: u32) -> Handle;
+    pub(crate) fn GetProcAddress(module: Handle, name: *const c_char) -> *mut c_void;
     // sysinfoapi.h
     pub(crate) fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> Bool;
     pub(crate) safe fn GetTickCount64() -> u64;
@@ -1073,24 +1076,32 @@ dll!("powrprof.dll" {
     pub(crate) safe fn PowerDeterminePlatformRoleEx(version: u32) -> i32;
 });
 
-dll!("wtsapi32.dll" {
-    // wtsapi32.h
-    pub(crate) fn WTSEnumerateSessionsW(
-        server: Handle,
-        reserved: u32,
-        version: u32,
-        sessions: *mut *mut c_void,
-        count: *mut u32,
-    ) -> Bool;
-    pub(crate) fn WTSQuerySessionInformationW(
-        server: Handle,
-        session_id: u32,
-        class: i32,
-        buffer: *mut *mut c_void,
-        bytes_returned: *mut u32,
-    ) -> Bool;
-    pub(crate) fn WTSFreeMemory(memory: *mut c_void);
-});
+// wtsapi32.h. Loaded at run time, not imported: a DLL missing from the import
+// table stops the whole program before `main`, and session listing is not worth
+// that on a stripped-down Windows.
+
+/// `WTSEnumerateSessionsW`.
+pub(crate) type WtsEnumerateSessionsW = unsafe extern "system" fn(
+    server: Handle,
+    reserved: u32,
+    version: u32,
+    sessions: *mut *mut c_void,
+    count: *mut u32,
+) -> Bool;
+/// `WTSQuerySessionInformationW`.
+pub(crate) type WtsQuerySessionInformationW = unsafe extern "system" fn(
+    server: Handle,
+    session_id: u32,
+    class: i32,
+    buffer: *mut *mut c_void,
+    bytes_returned: *mut u32,
+) -> Bool;
+/// `WTSFreeMemory`.
+pub(crate) type WtsFreeMemory = unsafe extern "system" fn(memory: *mut c_void);
+
+/// `LOAD_LIBRARY_SEARCH_SYSTEM32` (libloaderapi.h): only System32, so nothing
+/// planted beside the program is picked up.
+pub(crate) const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
 
 dll!("ntdll.dll" {
     // wdm.h: the real version, whatever the executable's manifest declares.
@@ -1367,6 +1378,10 @@ mod tests {
         assert!(FIRMWARE_TYPE_UEFI == si::FirmwareTypeUefi as u32);
         assert!(TIME_ZONE_ID_STANDARD == ss::TIME_ZONE_ID_STANDARD);
         assert!(WTS_PROTOCOL_TYPE_CONSOLE as u32 == wts::WTS_PROTOCOL_TYPE_CONSOLE);
+        assert!(
+            LOAD_LIBRARY_SEARCH_SYSTEM32
+                == windows_sys::Win32::System::LibraryLoader::LOAD_LIBRARY_SEARCH_SYSTEM32
+        );
         assert!(WTS_USER_NAME == wts::WTSUserName);
         assert!(WTS_CLIENT_PROTOCOL_TYPE == wts::WTSClientProtocolType);
         assert!(WTS_SESSION_INFO == wts::WTSSessionInfo);

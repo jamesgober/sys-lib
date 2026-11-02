@@ -199,12 +199,20 @@ mod tests {
         assert_eq!(v.hypervisor, Some(Hypervisor::HyperV));
         assert_eq!(v.container, None);
         assert!(!v.kubernetes);
-        assert!(v.evidence.iter().any(|e| e.check == "kernel release names WSL 2"));
+        assert!(
+            v.evidence
+                .iter()
+                .any(|e| e.check == "kernel release names WSL 2")
+        );
     }
 
     #[test]
     fn test_virt_docker_fixtures() {
-        for name in ["docker-cgroup2-limited", "minimal-scratch", "docker-cgroup1-limited"] {
+        for name in [
+            "docker-cgroup2-limited",
+            "minimal-scratch",
+            "docker-cgroup1-limited",
+        ] {
             let v = run(name, None);
             assert!(v.container.is_some(), "{name}: {v:?}");
             assert_eq!(v.wsl, None, "{name}");
@@ -236,7 +244,10 @@ mod tests {
         assert_eq!(runtime("docker\n"), Container::Docker);
         assert_eq!(runtime("lxc-libvirt"), Container::Lxc);
         assert_eq!(runtime("something"), Container::Other);
-        assert_eq!(runtime_in_cgroup("1:name=systemd:/kubepods/x"), Some(Container::Containerd));
+        assert_eq!(
+            runtime_in_cgroup("1:name=systemd:/kubepods/x"),
+            Some(Container::Containerd)
+        );
         assert_eq!(runtime_in_cgroup("0::/init.scope"), None);
     }
 }
