@@ -52,7 +52,7 @@ First version, written at the `0.2.0` design lock; it grows with each version an
 
 - **Linux: files first.** Where `/proc` or `/sys` has the same data as a system call, the file wins: no struct layout to get wrong across glibc and musl. `uname` becomes `/proc/sys/kernel/{ostype,osrelease,version}`, `gethostname` becomes `/proc/sys/kernel/hostname`, `sched_getaffinity` becomes `Cpus_allowed_list` in `/proc/self/status`. A system call wins where it is clearly cheaper (`clock_gettime(CLOCK_BOOTTIME)` for uptime).
 - **Bounded reads.** Every file is read with one `open`, reads to EOF, and one `close`, into a stack buffer (4 KiB) or a heap buffer bounded at 1 MiB. Larger is `TooLarge`. Only `/proc/self/...`, `/proc/1/...` (the namespace's init), `/proc/sys`, `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/pressure`, `/sys`, and fixed files under `/etc` and `/run` are opened; never a path from the environment.
-- **Windows: `raw-dylib` imports and wide strings with explicit lengths.** Functions come from kernel32, advapi32, iphlpapi, powrprof, and ntdll (`RtlGetVersion`, `NtQuerySystemInformation`), imported without import libraries. "Ask for the size, allocate, ask again" calls retry at most 3 times. Volume calls run with critical-error dialogs disabled.
+- **Windows: `raw-dylib` imports and wide strings with explicit lengths.** Functions come from kernel32, advapi32, iphlpapi, powrprof, and ntdll (`RtlGetVersion`, `NtQuerySystemInformation`), imported without import libraries; wtsapi32 is loaded at run time from System32, so a Windows without it runs and answers `Unsupported` for sessions (D-055). "Ask for the size, allocate, ask again" calls retry at most 3 times. Volume calls run with critical-error dialogs disabled.
 - **macOS: every CoreFoundation and IOKit object is released** by an RAII wrapper; Mach memory is returned with `vm_deallocate`.
 - **Units.** Linux `/proc/meminfo` is in KiB (`kB` there means 1024), `/proc/stat` in `USER_HZ` ticks (from `sysconf(_SC_CLK_TCK)`, normally 100), cpufreq in kHz, hwmon in millidegrees; Windows `FILETIME` in 100 ns intervals; Mach CPU ticks in `CLK_TCK` units.
 
@@ -106,8 +106,8 @@ SMBIOS chassis types (SMBIOS 3.5.0, 7.4.1, as systemd maps them, plus servers): 
 | `cpu::load()` | `/proc/loadavg` | `getloadavg` | `Ok(None)`: Windows keeps no load average |
 | `cpu::is_64bit()` | a 64-bit build implies a 64-bit processor (32-bit Linux has no implementation yet) | every supported Mac is 64-bit | `IsWow64Process2` native machine for a 32-bit process |
 | `cpu::has()`, `features()` | `is_x86_feature_detected!` / `is_aarch64_feature_detected!` (std; checks OS support such as XCR0 for AVX state) | same | same |
-| `cpu::topology()` | `topology/{core_id,physical_package_id,core_cpus_list}`; Intel hybrid: `/sys/devices/cpu_core/cpus`, `/sys/devices/cpu_atom/cpus`; ARM: `cpu_capacity` | `hw.nperflevels`, `hw.perflevel0.physicalcpu` (performance), `hw.perflevel1.physicalcpu` (efficiency) | `RelationProcessorCore` with `EfficiencyClass` |
-| `cpu::caches()` | `cache/index*/{level,type,size,coherency_line_size,shared_cpu_list}` per CPU | `hw.l1dcachesize`, `hw.l1icachesize`, `hw.l2cachesize`, `hw.l3cachesize`, `hw.perflevelN.l2cachesize`, `hw.cachelinesize` | `RelationCache` |
+| `cpu::topology()` | `topology/{physical_package_id,core_cpus_list}`, a core's id being its lowest CPU; Intel hybrid: `/sys/devices/cpu_core/cpus`, `/sys/devices/cpu_atom/cpus`; ARM: `cpu_capacity` | `hw.nperflevels`, `hw.perflevel0.physicalcpu` (performance), `hw.perflevel1.physicalcpu` (efficiency) | `RelationProcessorCore` with `EfficiencyClass` |
+| `cpu::caches()` | `cache/index*/{level,type,size,coherency_line_size,shared_cpu_list}` per CPU | `hw.l1dcachesize`, `hw.l1icachesize`, `hw.l2cachesize`, `hw.l3cachesize`, `hw.perflevelN.l2cachesize` and `cpusperl2`, `hw.cachelinesize` (there is no per-level line size) | `RelationCache` |
 | `cpu::numa_nodes()` | `/sys/devices/system/node/node*/{cpulist,meminfo}` | one node with every CPU | `RelationNumaNodeEx`, `GetNumaAvailableMemoryNodeEx` |
 
 Quirks:
@@ -161,8 +161,9 @@ LXCFS: a `fuse.lxcfs` mount over `/proc/meminfo`, `/proc/stat`, or `/proc/cpuinf
 |---|---|---|---|
 | `disk::space(path)` | `statvfs`: `f_blocks`, `f_bfree`, `f_bavail` × `f_frsize` | `statfs` | `GetDiskFreeSpaceExW` |
 | `disk::list()` | `/proc/self/mountinfo` (octal escapes `\040`, `\011`, `\012`, `\134` decoded), then `statvfs` per mount | `getfsstat(MNT_NOWAIT)` | `GetLogicalDriveStringsW`, `GetDriveTypeW`, `GetVolumeInformationW`, `GetDiskFreeSpaceExW`; mounted folders via `FindFirstVolumeW` and `GetVolumePathNamesForVolumeNameW` |
-| `DiskKind` | `removable` in 0.4 (`/sys/block/<dev>/removable`, a partition resolved to its parent device); `queue/rotational` for SSD and HDD in 0.5 | `MNT_REMOVABLE` in 0.4; IOKit device characteristics `Medium Type` for SSD and HDD in 0.5 [verify] | `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceSeekPenaltyProperty` |
-| `disk::of(path)` | the longest matching mount point after canonicalising `path`, checked by device number | `statfs` `f_mntonname` | `GetVolumePathNameW` |
+| `DiskKind` | `removable` in 0.4 (`/sys/block/<dev>/removable`, a partition resolved to its parent device); `queue/rotational` for SSD and HDD in 0.5 | `MNT_REMOVABLE`; IOKit device characteristics `Medium Type` for SSD and HDD | `IOCTL_STORAGE_QUERY_PROPERTY` with `StorageDeviceSeekPenaltyProperty` |
+| `disk::of(path)` | the longest matching mount point after canonicalising `path`; only that mount gets a `statvfs` | `statfs` `f_mntonname` | `GetVolumePathNameW` after canonicalising `path` (it answers for paths that do not exist and stops at a junction's own volume) |
+| volume label | none | `getattrlist` `ATTR_VOL_NAME` | `GetVolumeInformationW` |
 
 Network filesystems (`nfs`, `nfs4`, `cifs`, `smb3`, `smbfs`, `fuse.sshfs`, `9p`, `afpfs`, `DRIVE_REMOTE` on Windows) are skipped by default because `statvfs` on a dead hard mount can hang. Pseudo filesystems (`proc`, `sysfs`, `cgroup`, `cgroup2`, `tmpfs`, `devtmpfs`, `squashfs`, `overlay` when not the root, `autofs`, `debugfs`, `tracefs`, `securityfs`, `pstore`, `bpf`, `mqueue`, `hugetlbfs`, `configfs`, `fusectl`, `binfmt_misc`) are skipped by default. Windows volume calls run under `SetThreadErrorMode(SEM_FAILCRITICALERRORS)`. APFS volumes sharing a container are reported once.
 
@@ -179,7 +180,7 @@ Network filesystems (`nfs`, `nfs4`, `cifs`, `smb3`, `smbfs`, `fuse.sshfs`, `9p`,
 | MTU, speed | `mtu`, `speed` (Mb/s; `-1` or an error means unknown) | `ifi_mtu` and the 64-bit `ifi_baudrate` from `NET_RT_IFLIST2` (the 32-bit value from `getifaddrs` truncates links above 4 Gb/s) | `Mtu`, `TransmitLinkSpeed` (maximum values mean unknown) |
 | `net::totals()`, `counters()`, `traffic()`, `Sampler` | `/proc/net/dev` (one read; loopback left out of totals) | `sysctl` `NET_RT_IFLIST2` (`if_data64`; the 32-bit counters wrap) | `GetIfTable2` (`MIB_IF_ROW2`, 64-bit; software loopback left out) |
 | `net::connections()` | `/proc/net/snmp` `Tcp:` `CurrEstab`; `/proc/net/sockstat` and `/proc/net/sockstat6` `TCP inuse`, `tw`, `UDP inuse` | `net.inet.tcp.pcbcount`, `net.inet.udp.pcbcount` (the active PCB counts, IPv4 and IPv6 together); established and time-wait `None` | `GetTcpStatisticsEx` (`dwCurrEstab`, `dwNumConns`) and `GetUdpStatisticsEx` (`dwNumAddrs`), IPv4 and IPv6 |
-| default route | `/proc/net/route` (destination 0) and `/proc/net/ipv6_route` | routing socket dump via `sysctl(NET_RT_DUMP)` [verify] | `GetBestInterfaceEx` towards 0.0.0.0 |
+| default route | `/proc/net/route` (destination and mask 0, up, lowest metric), then `/proc/net/ipv6_route`; the index from `/sys/class/net/<if>/ifindex` | routing table via `sysctl(NET_RT_DUMP)`, netmask checked so a VPN's `0.0.0.0/1` is not the default; IPv6 as a fallback | `GetBestInterfaceEx` towards 0.0.0.0 (IPv4 only) |
 
 Interface names from the OS are validated before they are used in a `/sys` path: no `/`, no `..`, at most 15 bytes on Linux (`IFNAMSIZ` 16 with the NUL).
 
@@ -191,7 +192,7 @@ Interface names from the OS are validated before they are used in a `/sys` path:
 | `host::uptime()` | `clock_gettime(CLOCK_BOOTTIME)` (includes suspend); fallback `/proc/uptime` | `mach_continuous_time` scaled by `mach_timebase_info` (counts through sleep); fallback now minus `kern.boottime` | `GetTickCount64` |
 | `host::boot_time()` | `btime` in `/proc/stat` | `kern.boottime` | now minus `GetTickCount64` |
 | `host::timezone()` | `TZ` when it is a valid name; else the `/etc/localtime` link target after `zoneinfo/`; else `/etc/timezone`; offset and abbreviation from `localtime_r` (`tm_gmtoff`, `tm_zone`) | same; link target under `/var/db/timezone/zoneinfo/` | `GetDynamicTimeZoneInformation` (`TimeZoneKeyName`, `Bias`, daylight bias); IANA name from an embedded copy of CLDR `windowsZones.xml` |
-| `host::locale()` | `LC_ALL`, then `LC_MESSAGES`, then `LANG`, normalised (`en_US.UTF-8` to `en-US`) | `CFLocaleCopyCurrent` identifier (GUI applications have no `LANG`) | `GetUserDefaultLocaleName` |
+| `host::locale()` | `LC_ALL`, then `LC_MESSAGES`, then `LANG`, normalised (`en_US.UTF-8` to `en-US`) | the same variables, then the `CFLocaleCopyCurrent` identifier (GUI applications have no `LANG`) | `GetUserDefaultLocaleName` |
 | `host::model()` | `/sys/class/dmi/id/{sys_vendor,product_name,product_family}` (0444); `/proc/device-tree/model` on ARM boards | `hw.model` | SMBIOS type 1 manufacturer, product, family |
 
 ## This process
@@ -230,12 +231,13 @@ Interface names from the OS are validated before they are used in a `/sys` path:
 | Check | Platform | Reads | Detects |
 |---|---|---|---|
 | CPUID leaf 1 ECX bit 31, leaf 0x40000000 vendor | x86 | `__cpuid` | `KVMKVMKVM`, `Linux KVM Hv`, `TCGTCGTCGTCG`, `VMwareVMware`, `Microsoft Hv`, `XenVMMXenVMM`, `bhyve bhyve `, `QNXQVMBSQG`, `ACRNACRNACRN`, `Apple VZ`, `VBoxVBoxVBox` |
-| Hyper-V root partition | Windows x86 | CPUID 0x40000003 EBX bit 0 (`CreatePartitions`) [verify against the Hyper-V TLFS] | a host with Hyper-V, WSL 2, or VBS is not a VM |
+| Hyper-V root partition | Windows x86 | CPUID 0x40000003 EBX bit 0 (`CreatePartitions`, Hypervisor TLFS), confirmed on a host with Hyper-V and WSL 2 | a host with Hyper-V, WSL 2, or VBS is not a VM |
 | DMI strings | Linux (0444 files), Windows (SMBIOS types 0, 1, 2) | `product_name`, `sys_vendor`, `board_vendor`, `bios_vendor`, `product_version` | KVM, OpenStack, KubeVirt, Amazon EC2, QEMU, VMware, innotek GmbH, VirtualBox, Oracle, Xen, Bochs, Parallels, BHYVE, Hyper-V ("Microsoft Corporation" + "Virtual Machine"), Apple Virtualization, Google Compute Engine, Alibaba Cloud ECS |
 | hypervisor files | Linux | `/sys/hypervisor/type`; `/proc/xen/capabilities` (`control_d` is Dom0, not a guest); `/proc/device-tree/hypervisor/compatible` | Xen, ARM hypervisors |
 | sysctl | macOS | `kern.hv_vmm_present`; `hw.model` `VirtualMac*` | Apple Virtualization, Parallels, VMware Fusion |
 | container files | Linux | `/run/systemd/container`, `/run/.containerenv` (Podman), `/.dockerenv`, `/proc/1/cgroup` v1 names (`docker`, `kubepods`, `lxc`), an overlay root in `/proc/self/mountinfo` | Docker, Podman, LXC, systemd-nspawn, containerd |
 | Kubernetes | Linux | `/var/run/secrets/kubernetes.io/serviceaccount` (strong); `KUBERNETES_SERVICE_HOST` (weak) | Kubernetes |
+| not containers | Linux | `/run/systemd/container` saying `wsl`, and an overlay root under WSL or a live image alone (weak evidence, no answer under WSL) | D-061 |
 | WSL | Linux | `/proc/sys/kernel/osrelease` containing `Microsoft` (WSL 1) or `microsoft-standard-WSL2` (WSL 2); `/proc/sys/fs/binfmt_misc/WSLInterop`; `WSL_DISTRO_NAME` (weak) | WSL 1 or 2 |
 
 ## Power
@@ -256,7 +258,7 @@ Interface names from the OS are validated before they are used in a `/sys` path:
 | `mem::events()` | cgroup v2 `memory.events` (`oom_kill`, `oom`, `max`, `high`); v1 `memory.oom_control` (`oom_kill`); else `/proc/vmstat` `oom_kill` | `Ok(None)` | `Ok(None)` |
 | `mem::activity()`, `mem::Sampler` | `/proc/vmstat` `pswpin`, `pswpout`, `pgmajfault` (pages) | `vm_statistics64` `swapins`, `swapouts`, `pageins` | `Unsupported` (the `SYSTEM_PERFORMANCE_INFORMATION` layout cannot be checked against the headers, D-049) |
 | `mem::huge_pages()` | `/proc/meminfo` `HugePages_Total`, `_Free`, `_Rsvd`, `Hugepagesize`; `/sys/kernel/mm/transparent_hugepage/enabled` | `Ok(None)` | `GetLargePageMinimum` |
-| `mem::modules()` | SMBIOS type 17 from `/sys/firmware/dmi/tables/DMI` (mode 0400: root only) | Intel: IORegistry memory node [verify]; Apple silicon: `Unsupported` | SMBIOS type 17 from `GetSystemFirmwareTable('RSMB')` |
+| `mem::modules()` | SMBIOS type 17 from `/sys/firmware/dmi/tables/DMI` (mode 0400: root only) | `Unsupported` (D-059) | SMBIOS type 17 from `GetSystemFirmwareTable('RSMB')` |
 
 PSI files need kernel 4.20 or later; without them the readings are `Ok(None)`. cgroup v1 has no per-cgroup pressure, so the host's is used.
 
@@ -273,13 +275,13 @@ PSI files need kernel 4.20 or later; without them the readings are `Ok(None)`. c
 |---|---|---|---|
 | `host::processes()` | numeric entries of `/proc` (counted with `readdir`, never opened); `/proc/loadavg` field 4; `procs_running` in `/proc/stat` | `proc_listallpids` with a buffer (a null buffer gives an estimate); threads from `processor_set_statistics(PROCESSOR_SET_LOAD_INFO)` (`kern.num_threads` is the limit, not the count) | `GetPerformanceInfo` `ProcessCount`, `ThreadCount` |
 | `host::open_files()` | `/proc/sys/fs/file-nr` | `kern.num_files`, `kern.maxfiles` | `GetPerformanceInfo` `HandleCount` |
-| `host::firmware()` | `/sys/class/dmi/id/bios_{vendor,version,date}` (0444); `/sys/firmware/efi` for UEFI | IORegistry firmware version [verify property names] | SMBIOS type 0; `GetFirmwareType` |
+| `host::firmware()` | `/sys/class/dmi/id/bios_{vendor,version,date}` (0444); `/sys/firmware/efi` for UEFI | Apple silicon: `system-firmware-version` in the IORegistry, without its `iBoot-` or `mBoot-` prefix; Intel: version `None`, no source confirmed (D-059) | SMBIOS type 0; `GetFirmwareType` |
 | `host::board()` | `/sys/class/dmi/id/board_{vendor,name,version}` (0444) | `IOPlatformExpertDevice` `board-id` (Intel) | SMBIOS type 2 |
-| `host::clock_sync()` | `ntp_adjtime` with no mode bits (read only): return value `TIME_ERROR`, `STA_UNSYNC` | `ntp_adjtime` (read only) | `GetSystemTimeAdjustmentPrecise`; the Windows Time service's state [verify an unprivileged source] |
-| `host::sessions()` | `getutxent` (utmp) | `getutxent` | `WTSEnumerateSessionsW`, `WTSQuerySessionInformationW` (wtsapi32) |
-| `net::dns()` | `/etc/resolv.conf`; `/run/systemd/resolve/resolv.conf` behind the `127.0.0.53` stub | SystemConfiguration `SCDynamicStoreCopyValue("State:/Network/Global/DNS")` [verify]; `/etc/resolv.conf` | `GetAdaptersAddresses` `FirstDnsServerAddress` of up adapters |
+| `host::clock_sync()` | `adjtimex` with no mode bits (read only): return value `TIME_ERROR`, `STA_UNSYNC` | `ntp_adjtime` (read only); a set `STA_UNSYNC` proves nothing here, so it is `Ok(None)` | `Ok(None)`: `GetSystemTimeAdjustmentPrecise` reports adjustment disabled on a healthy machine and `w32tm` needs the service (D-054) |
+| `host::sessions()` | `/run/utmp`, else `/var/run/utmp`, read as a file (D-056) | `getutxent` | `WTSEnumerateSessionsW`, `WTSQuerySessionInformationW` (wtsapi32, loaded at run time) |
+| `net::dns()` | `/etc/resolv.conf`; `/run/systemd/resolve/resolv.conf` behind the `127.0.0.53` stub | SystemConfiguration `SCDynamicStoreCopyValue("State:/Network/Global/DNS")` (`ServerAddresses`, `SearchDomains`); `/etc/resolv.conf` | `GetAdaptersAddresses` `FirstDnsServerAddress` of up adapters, without the `fec0:0:0:ffff::` placeholders |
 | `virt::cloud()` | DMI `sys_vendor`, `product_name`, `bios_vendor`, `chassis_asset_tag` (0444) | `Ok(None)` outside a VM | SMBIOS types 0, 1, 3 |
-| `power::batteries()` | each `/sys/class/power_supply/*` with `type` `Battery` and `scope` not `Device` | each internal battery in the IOKit power sources list | `IOCTL_BATTERY_QUERY_INFORMATION` per battery device [verify]; else the combined `GetSystemPowerStatus` as one entry |
+| `power::batteries()` | each `/sys/class/power_supply/*` with `type` `Battery` and `scope` not `Device` | each internal battery in the IOKit power sources list | the combined `GetSystemPowerStatus` as one entry; per-battery IOCTLs are not verified |
 
 ## Launch context
 
@@ -318,7 +320,7 @@ Feature `device-id`. Values are read into a fixed buffer, hashed, and wiped; non
 | `BoardSerial` | `/sys/class/dmi/id/board_serial` (0400) | `IOPlatformSerialNumber` | SMBIOS type 2 serial | Linux: root |
 | `ProductSerial` | `/sys/class/dmi/id/product_serial` (0400) | not used twice (the same as the board on Macs) | SMBIOS type 1 serial | Linux: root |
 | `CpuSignature` | CPUID vendor, family, model, stepping, brand; or MIDR | `machdep.cpu.*` | CPUID or registry | none |
-| `PermanentMac` | lowest MAC with `addr_assign_type == 0` on a physical, non-removable interface (not used under WSL, whose MAC changes per boot) | lowest built-in interface MAC (`IOPrimaryInterface`) | lowest `PhysicalAddress` of a physical Ethernet or Wi-Fi adapter | none |
+| `PermanentMac` | lowest MAC with `addr_assign_type == 0` on a physical, non-removable interface (not used under WSL, whose MAC changes per boot) | lowest MAC of a physical interface | lowest `PhysicalAddress` of a physical Ethernet or Wi-Fi adapter | none |
 
 The DMI file permissions are the kernel's (`drivers/firmware/dmi-id.c`): `product_uuid`, `product_serial`, `board_serial`, and `chassis_serial` are 0400; `chassis_type`, `sys_vendor`, `product_name`, and `board_name` are 0444.
 

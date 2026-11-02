@@ -43,7 +43,7 @@ Review a capture before committing it. `CAPTURED.txt` records the script version
 
 | Fixture | How |
 |---|---|
-| `ubuntu-24.04-desktop-amd` | a bare-metal Linux desktop (moved to 0.5, D-051) |
+| `ubuntu-24.04-desktop-amd` | a bare-metal Linux desktop (moved to 0.6, D-062) |
 
 The full planned set, with the reason for each machine, is in [`../../dev/PLAN.md`](../../dev/PLAN.md) section 19.2.
 

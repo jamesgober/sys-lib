@@ -76,6 +76,10 @@ jobs:
           - aarch64-linux-android
           - aarch64-apple-ios
         rust: [stable, "1.89"]
+    env:
+      # blake3 (feature device-id) would build C and assembly for the target,
+      # and these jobs have no compiler for it. Its Rust code checks the same.
+      CARGO_FEATURE_PURE: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
