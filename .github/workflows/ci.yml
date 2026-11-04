@@ -56,6 +56,12 @@ jobs:
       - name: Name the crashing test
         if: failure()
         run: cargo test --lib --all-features -- --test-threads=1 --nocapture
+      # A trap inside CoreFoundation or IOKit prints nothing: lldb prints where.
+      - name: Backtrace of the crash (macOS)
+        if: failure() && runner.os == 'macOS'
+        run: |
+          exe=$(cargo test --lib --all-features --no-run --message-format=json             | jq -r 'select(.profile.test == true and .target.kind[0] == "lib") | .executable' | head -1)
+          lldb --batch -o run -k "thread backtrace" -k quit -- "$exe" --test-threads=1 --nocapture
       - name: Build examples
         run: cargo build --examples
       # Both modes: a doc link to a feature-gated item breaks only when that
