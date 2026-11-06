@@ -194,6 +194,53 @@ pub fn interfaces_with(options: InterfaceOptions) -> Result<Vec<Interface>> {
     Ok(list)
 }
 
+/// The interface holding the default route; `None` without one.
+///
+/// ```
+/// if let Some(i) = sys_lib::net::primary()? {
+///     println!("{} {:?}", i.name, i.addresses);
+/// }
+/// # Ok::<(), sys_lib::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// As [`interfaces`].
+pub fn primary() -> Result<Option<Interface>> {
+    let Some(index) = crate::sys::primary_interface()? else {
+        return Ok(None);
+    };
+    Ok(interfaces()?.into_iter().find(|i| i.index == index))
+}
+
+/// The DNS configuration, read from configuration only: sys-lib never sends a
+/// DNS query.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Dns {
+    /// What the system resolver uses.
+    pub servers: Vec<IpAddr>,
+    /// Behind a local stub (systemd-resolved at 127.0.0.53), the servers it
+    /// forwards to.
+    pub upstream: Vec<IpAddr>,
+    /// The search domains.
+    pub search: Vec<String>,
+}
+
+/// The DNS servers this machine is configured to use.
+///
+/// ```
+/// println!("{:?}", sys_lib::net::dns().map(|d| d.servers));
+/// ```
+///
+/// # Errors
+///
+/// `TooLarge` past 64 servers or 64 search domains; `NotFound` without a
+/// resolver configuration; `Unsupported` where the OS has none to read.
+pub fn dns() -> Result<Dns> {
+    crate::sys::dns()
+}
+
 /// The addresses of the interfaces that are up, without loopback and
 /// link-local addresses (E-57).
 ///

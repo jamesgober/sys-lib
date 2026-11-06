@@ -7,11 +7,7 @@
 //! alignment assertion, and the tests at the bottom compare them with `libc`
 //! field by field on every target CI builds.
 
-#![expect(
-    dead_code,
-    reason = "the declaration list is locked in 0.2.0; each item is used by the reading that \
-              arrives in 0.3 to 0.5 (docs/API.md), and this expectation goes when the last one is"
-)]
+#![cfg_attr(not(feature = "guard"), allow(dead_code))]
 
 use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 
@@ -184,6 +180,29 @@ pub(crate) struct Sockaddr {
 }
 layout!(Sockaddr, size = 16, align = 2);
 
+/// `struct timex` (sys/timex.h): the whole kernel structure, 208 bytes on
+/// every 64-bit Linux, of which sys-lib reads four fields.
+#[cfg(not(target_os = "android"))]
+#[repr(C)]
+pub(crate) struct Timex {
+    pub(crate) modes: c_uint,
+    pub(crate) offset: c_long,
+    pub(crate) freq: c_long,
+    pub(crate) maxerror: c_long,
+    pub(crate) esterror: c_long,
+    pub(crate) status: c_int,
+    pub(crate) rest: [c_long; 20],
+}
+#[cfg(not(target_os = "android"))]
+layout!(Timex, size = 208, align = 8);
+
+/// `TIME_ERROR` from `adjtimex` (sys/timex.h).
+#[cfg(not(target_os = "android"))]
+pub(crate) const TIME_ERROR: c_int = 5;
+/// `STA_UNSYNC` (sys/timex.h).
+#[cfg(not(target_os = "android"))]
+pub(crate) const STA_UNSYNC: c_int = 0x0040;
+
 /// `struct sockaddr_in` (netinet/in.h). The address is in network byte order.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -274,7 +293,6 @@ pub(crate) const O_NOFOLLOW: c_int = 0o400_000;
 pub(crate) const ERANGE: c_int = 34;
 
 /// `CLOCK_MONOTONIC` (time.h).
-pub(crate) const CLOCK_MONOTONIC: ClockId = 1;
 /// `CLOCK_BOOTTIME` (time.h): monotonic, and counts time suspended.
 pub(crate) const CLOCK_BOOTTIME: ClockId = 7;
 
@@ -326,6 +344,9 @@ unsafe extern "C" {
     // time.h
     pub(crate) fn localtime_r(time: *const Time, result: *mut Tm) -> *mut Tm;
     pub(crate) fn clock_gettime(clock: ClockId, tp: *mut Timespec) -> c_int;
+    // sys/timex.h
+    #[cfg(not(target_os = "android"))]
+    pub(crate) fn adjtimex(buf: *mut Timex) -> c_int;
     // ifaddrs.h
     pub(crate) fn getifaddrs(ifap: *mut *mut Ifaddrs) -> c_int;
     pub(crate) fn freeifaddrs(ifa: *mut Ifaddrs);
@@ -347,6 +368,21 @@ mod tests {
     //! an oracle only): size, alignment, and the offset of every field.
 
     use super::*;
+
+    #[cfg(not(target_os = "android"))]
+    const _: () = {
+        assert!(size_of::<Timex>() == size_of::<libc::timex>());
+        assert!(core::mem::offset_of!(Timex, modes) == core::mem::offset_of!(libc::timex, modes));
+        assert!(
+            core::mem::offset_of!(Timex, maxerror) == core::mem::offset_of!(libc::timex, maxerror)
+        );
+        assert!(
+            core::mem::offset_of!(Timex, esterror) == core::mem::offset_of!(libc::timex, esterror)
+        );
+        assert!(core::mem::offset_of!(Timex, status) == core::mem::offset_of!(libc::timex, status));
+        assert!(TIME_ERROR == libc::TIME_ERROR);
+        assert!(STA_UNSYNC == libc::STA_UNSYNC);
+    };
 
     same_layout!(Statvfs, libc::statvfs,
         bsize => f_bsize, frsize => f_frsize, blocks => f_blocks, bfree => f_bfree,
@@ -404,7 +440,6 @@ mod tests {
         assert!(IFF_UP as c_int == libc::IFF_UP);
         assert!(IFF_LOOPBACK as c_int == libc::IFF_LOOPBACK);
         assert!(IFF_RUNNING as c_int == libc::IFF_RUNNING);
-        assert!(CLOCK_MONOTONIC == libc::CLOCK_MONOTONIC);
         assert!(O_NOFOLLOW == libc::O_NOFOLLOW);
         assert!(ERANGE == libc::ERANGE);
         assert!(CLOCK_BOOTTIME == libc::CLOCK_BOOTTIME);

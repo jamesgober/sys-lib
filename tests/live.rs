@@ -202,6 +202,204 @@ fn test_live_windows_matches_cim_and_dotnet() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_identity_matches_sysctl_and_sw_vers() {
+    use sys_lib::{cpu::Arch, virt};
+    let sysctl = |name: &str| need("sysctl", &["-n", name]);
+    if let Some(v) = need("sw_vers", &["-productVersion"]) {
+        let major: u32 = v.split('.').next().unwrap().parse().unwrap();
+        if (11..=15).contains(&major) || major == 26 {
+            let codename = os::codename().expect("a released major has a codename");
+            assert!(os::name().ends_with(codename), "{}", os::name());
+        }
+    }
+    assert_eq!(os::edition(), None);
+    assert_eq!(os::is_server_edition(), None);
+    if let Some(n) = tool("sysctl", &["-n", "hw.optional.arm64"]) {
+        let arch = if n == "1" { Arch::Aarch64 } else { cpu::arch() };
+        assert_eq!(cpu::native_arch(), arch);
+    }
+    assert_eq!(
+        cpu::is_translated(),
+        tool("sysctl", &["-n", "sysctl.proc_translated"]).as_deref() == Some("1")
+    );
+    let model = sysctl("hw.model");
+    if let Some(m) = &model {
+        let found = host::model().expect("hw.model answers");
+        assert_eq!(found.name, m);
+        assert_eq!(found.vendor, Some("Apple Inc."));
+        if m.starts_with("MacBook") && !virt::is_vm() {
+            assert_eq!(os::form_factor(), os::FormFactor::Laptop);
+        }
+        if m.starts_with("VirtualMac") {
+            assert_eq!(
+                virt::hypervisor(),
+                Some(virt::Hypervisor::AppleVirtualization)
+            );
+        }
+    }
+    if tool("sysctl", &["-n", "kern.hv_vmm_present"]).as_deref() == Some("1") {
+        assert!(virt::is_vm());
+        assert_eq!(os::form_factor(), os::FormFactor::Unknown);
+    }
+    assert_eq!(virt::cloud(), None);
+    assert!(virt::detect().evidence.iter().all(|e| !e.check.is_empty()));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_topology_matches_sysctl() {
+    let sysctl = |name: &str| need("sysctl", &["-n", name]);
+    let cores = &cpu::topology().cores;
+    assert_eq!(cores.len(), cpu::physical());
+    let logical: usize = cores.iter().map(|c| c.logical.len()).sum();
+    assert_eq!(logical, cpu::logical());
+    assert_eq!(cpu::numa_nodes().len(), 1);
+    assert_eq!(cpu::numa_nodes()[0].cpus.len(), cpu::logical());
+    if let Some(n) = sysctl("hw.memsize") {
+        let memory = cpu::numa_nodes()[0].memory.map(|m| m.raw());
+        assert_eq!(memory, Some(n.parse().unwrap()));
+    }
+    if let Some(n) = sysctl("hw.cachelinesize") {
+        assert_eq!(cpu::cache_line(), number(&n));
+    }
+    if let Some(n) = sysctl("hw.nperflevels") {
+        assert_eq!(cpu::is_hybrid(), number(&n) > 1);
+    }
+    for level in 0..2 {
+        let Some(n) = tool(
+            "sysctl",
+            &["-n", &format!("hw.perflevel{level}.physicalcpu_max")],
+        ) else {
+            continue;
+        };
+        if cpu::is_hybrid() {
+            let kind = if level == 0 {
+                cpu::CoreKind::Performance
+            } else {
+                cpu::CoreKind::Efficiency
+            };
+            let found = cores.iter().filter(|c| c.kind == kind).count();
+            assert_eq!(found, number(&n), "perflevel {level}");
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_disk_of_matches_df_and_stat() {
+    use sys_lib::{disk, virt};
+    let found = disk::of("/").unwrap();
+    assert_eq!(found.mount_point, std::path::Path::new("/"));
+    if let Some(df) = need("df", &["/"]) {
+        let device = df
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap();
+        assert_eq!(found.device, device);
+    }
+    if let Some(volume) = tool("diskutil", &["info", "/"]) {
+        let field = |name: &str| {
+            volume
+                .lines()
+                .find_map(|l| l.trim().strip_prefix(name))
+                .map(|v| v.trim_start_matches(':').trim().to_owned())
+        };
+        if let Some(name) = field("Volume Name") {
+            assert_eq!(found.label.as_deref(), Some(name.as_str()));
+        }
+        // A virtual disk may report no medium to the registry.
+        match field("Solid State").as_deref() {
+            Some("Yes") if !virt::is_vm() => assert_eq!(found.kind, disk::DiskKind::Ssd),
+            Some("No") if !virt::is_vm() => assert_eq!(found.kind, disk::DiskKind::Hdd),
+            _ => {}
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_network_matches_route_and_scutil() {
+    use sys_lib::net;
+    // `route get` follows the longest match, so a VPN's `0.0.0.0/1` answers for
+    // it; the two are comparable when the default route itself matched.
+    let route = tool("route", &["-n", "get", "default"]);
+    if let Some(route) = route.filter(|r| r.contains("mask: default")) {
+        let interface = route
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("interface:"))
+            .map(str::trim);
+        let found = net::primary().unwrap();
+        assert_eq!(found.as_ref().map(|i| i.name.as_str()), interface);
+    }
+    if let Some(scutil) = need("scutil", &["--dns"]) {
+        // Every server the resolver is given is in scutil's report.
+        match net::dns() {
+            Ok(dns) => {
+                for server in &dns.servers {
+                    assert!(scutil.contains(&server.to_string()), "{server}");
+                }
+            }
+            Err(e) => assert!(matches!(e, sys_lib::Error::NotFound { .. }), "{e}"),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_power_matches_pmset() {
+    use sys_lib::power;
+    let Some(batt) = need("pmset", &["-g", "batt"]) else {
+        return;
+    };
+    assert_eq!(power::has_battery(), batt.contains("InternalBattery"));
+    if batt.contains("'AC Power'") {
+        assert_eq!(power::on_ac().unwrap(), Some(true));
+    } else if batt.contains("'Battery Power'") {
+        assert_eq!(power::on_ac().unwrap(), Some(false));
+    }
+    if let Some(b) = power::battery().unwrap() {
+        // "-InternalBattery-0 (id=...)  87%; discharging; 3:12 remaining"
+        let shown: f32 = batt
+            .split_whitespace()
+            .find_map(|w| w.strip_suffix("%;"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            (b.charge.value() - shown).abs() <= 2.0,
+            "{} vs {shown}",
+            b.charge
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_macos_time_and_sessions_match_the_tools() {
+    let tz = host::timezone().unwrap();
+    if let Some(offset) = need("date", &["+%z"]) {
+        // "+0100"
+        let digits: i32 = offset[1..].parse().unwrap();
+        let seconds = (digits / 100) * 3600 + (digits % 100) * 60;
+        let sign = if offset.starts_with('-') { -1 } else { 1 };
+        assert_eq!(tz.utc_offset_seconds, sign * seconds);
+    }
+    if let Some(name) = need("date", &["+%Z"]) {
+        assert_eq!(tz.abbreviation.as_deref(), Some(name.as_str()));
+    }
+    let _ = host::clock_sync().unwrap();
+    if let Some(who) = need("who", &[]) {
+        for session in host::sessions().unwrap() {
+            assert!(who.contains(&session.user), "{}", session.user);
+        }
+    }
+}
+
 /// `a` and `b` agree to within 2% of the larger plus `slack` bytes: memory
 /// and free space move between the two readings (PLAN.md 19.1).
 #[allow(dead_code)]
@@ -369,6 +567,254 @@ fn test_live_windows_memory_disk_and_uptime_match_cim_and_dotnet() {
     }
 }
 
+/// A PowerShell script's output lines, each a value in order, ending at a fixed
+/// last line so an empty value in the middle survives the trim.
+#[cfg(windows)]
+fn cim_lines(script: &str, want: usize) -> Option<Vec<String>> {
+    let out = need(
+        "powershell",
+        &["-NoProfile", "-NonInteractive", "-Command", script],
+    )?;
+    let lines: Vec<String> = out.lines().map(|l| l.trim().to_owned()).collect();
+    assert_eq!(lines.len(), want, "{out}");
+    Some(lines)
+}
+
+#[cfg(windows)]
+#[test]
+fn test_live_windows_identity_and_firmware_match_cim() {
+    use sys_lib::{cpu::Arch, virt};
+    let script = r#"$cs = Get-CimInstance Win32_ComputerSystem; $b = Get-CimInstance Win32_BIOS;
+        $bb = Get-CimInstance Win32_BaseBoard; $o = Get-CimInstance Win32_OperatingSystem;
+        $p = @(Get-CimInstance Win32_Processor)[0];
+        $e = @(Get-CimInstance Win32_SystemEnclosure)[0];
+        "$($cs.Manufacturer)"; "$($cs.Model)"; "$($b.Manufacturer)"; "$($b.SMBIOSBIOSVersion)";
+        "$($bb.Manufacturer)"; "$($bb.Product)"; "$($o.ProductType)";
+        (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID;
+        "$($p.Architecture)"; "$($e.ChassisTypes[0])"; "$($cs.HypervisorPresent)"; "end""#;
+    let Some(v) = cim_lines(script, 12) else {
+        return;
+    };
+    // CIM reads the same SMBIOS strings, placeholders included: only a string
+    // sys-lib kept is compared.
+    if let Some(m) = host::model() {
+        assert_eq!(m.name, v[1]);
+        if let Some(vendor) = m.vendor {
+            assert_eq!(vendor, v[0]);
+        }
+    }
+    let firmware = host::firmware().expect("the firmware type is always known");
+    if let Some(vendor) = firmware.vendor {
+        assert_eq!(vendor, v[2]);
+    }
+    if let Some(version) = firmware.version {
+        assert_eq!(version, v[3]);
+    }
+    if let Some(b) = host::board() {
+        if let Some(vendor) = b.vendor {
+            assert_eq!(vendor, v[4]);
+        }
+        if let Some(name) = b.name {
+            assert_eq!(name, v[5]);
+        }
+    }
+    assert_eq!(os::is_server_edition(), Some(v[6] != "1"));
+    assert_eq!(os::edition(), Some(v[7].as_str()));
+    let native = match v[8].as_str() {
+        "9" => Arch::X86_64,
+        "12" => Arch::Aarch64,
+        "0" => Arch::X86,
+        other => panic!("Win32_Processor.Architecture {other}"),
+    };
+    assert_eq!(cpu::native_arch(), native);
+
+    // A host with Hyper-V, WSL 2, or VBS has a hypervisor underneath and is not
+    // a VM (E-84); a machine without one cannot be a VM at all.
+    let names_a_vm = ["Virtual Machine", "VMware", "VirtualBox", "QEMU", "KVM"]
+        .iter()
+        .any(|n| v[0].contains(n) || v[1].contains(n));
+    if names_a_vm {
+        assert!(virt::is_vm(), "{} {}", v[0], v[1]);
+    }
+    if v[10].eq_ignore_ascii_case("false") {
+        assert!(!virt::is_vm());
+    }
+    if virt::is_vm() {
+        assert_eq!(os::form_factor(), os::FormFactor::Unknown);
+        assert!(!virt::detect().evidence.is_empty());
+    } else if v[9] == "3" {
+        assert!(os::is_desktop(), "{:?}", os::detect_form_factor());
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn test_live_windows_topology_and_modules_match_cim() {
+    use sys_lib::{cpu::CacheKind, mem};
+    let script = r#"$p = @(Get-CimInstance Win32_Processor);
+        $m = @(Get-CimInstance Win32_PhysicalMemory);
+        $p.Count; ($p | Measure-Object NumberOfCores -Sum).Sum;
+        ($p | Measure-Object L3CacheSize -Sum).Sum;
+        $m.Count; [long]($m | Measure-Object Capacity -Sum).Sum; "end""#;
+    let Some(v) = cim_lines(script, 6) else {
+        return;
+    };
+    let t = cpu::topology();
+    assert_eq!(t.packages.len(), number(&v[0]));
+    assert_eq!(t.cores.len(), number(&v[1]));
+    let logical: usize = t.cores.iter().map(|c| c.logical.len()).sum();
+    assert_eq!(logical, cpu::logical());
+    assert!(t.packages.iter().all(|p| !p.cores.is_empty()));
+    let first = cpu::caches().first().expect("every CPU reports a cache");
+    assert_eq!(first.level, 1);
+    assert_ne!(cpu::cache_line(), 0);
+    // Hypervisors under CI report what they like for this class.
+    if std::env::var_os("CI").is_none() {
+        let l3: u64 = cpu::caches()
+            .iter()
+            .filter(|c| c.level == 3 && c.kind == CacheKind::Unified)
+            .map(|c| c.size.raw())
+            .sum();
+        let cim = v[2].parse::<u64>().unwrap() * 1024;
+        if cim != 0 {
+            assert_eq!(l3, cim, "level 3 cache");
+        }
+    }
+    let modules = mem::modules().unwrap();
+    assert_eq!(modules.len(), number(&v[3]));
+    let total: u64 = modules.iter().map(|m| m.size.raw()).sum();
+    assert_eq!(total, v[4].parse::<u64>().unwrap(), "installed memory");
+}
+
+#[cfg(windows)]
+#[test]
+fn test_live_windows_disks_match_cim() {
+    use sys_lib::disk::{self, DiskKind};
+    let script = r#"$d = $env:SystemDrive.TrimEnd(':');
+        "$((Get-Partition -DriveLetter $d | Get-Disk | Get-PhysicalDisk).MediaType)"; "end""#;
+    let Some(v) = cim_lines(script, 2) else {
+        return;
+    };
+    let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+    let root = format!("{drive}\\");
+    let windows = disk::of(format!("{root}Windows")).unwrap();
+    assert_eq!(windows.mount_point.to_str(), Some(root.as_str()));
+    assert!(windows.device.eq_ignore_ascii_case(&drive));
+    assert!(disk::list().unwrap().contains(&windows));
+    match v[0].as_str() {
+        "SSD" => assert_eq!(windows.kind, DiskKind::Ssd),
+        "HDD" => assert_eq!(windows.kind, DiskKind::Hdd),
+        _ => {}
+    }
+    // A junction: the disk of what it leads to, here the same volume.
+    let link = std::env::temp_dir().join(format!("sys-lib-live-link-{}", std::process::id()));
+    let target = std::env::temp_dir();
+    let (link_text, target_text) = (link.display().to_string(), target.display().to_string());
+    let made = tool("cmd", &["/c", "mklink", "/J", &link_text, &target_text]).is_some();
+    if made {
+        let through = disk::of(&link);
+        let _ = std::fs::remove_dir(&link);
+        assert_eq!(through.unwrap().device, disk::of(&target).unwrap().device);
+    }
+    assert!(disk::of(format!("{root}definitely-not-here")).is_err_and(|e| e.is_unavailable()));
+}
+
+#[cfg(windows)]
+#[test]
+fn test_live_windows_network_matches_cim() {
+    use std::net::IpAddr;
+
+    use sys_lib::net;
+    let script = r#"$up = @(Get-NetIPInterface -ConnectionState Connected | ForEach-Object InterfaceIndex | Sort-Object -Unique);
+        $s = @(Get-DnsClientServerAddress | Where-Object { $up -contains $_.InterfaceIndex } | ForEach-Object ServerAddresses | Sort-Object -Unique);
+        $r = @(Get-NetRoute -DestinationPrefix 0.0.0.0/0 -ErrorAction SilentlyContinue | ForEach-Object ifIndex);
+        "$($s -join ' ')"; "$($r -join ' ')"; "end""#;
+    let Some(v) = cim_lines(script, 3) else {
+        return;
+    };
+    let site_local = "fec0:0:0:ffff::";
+    let mut cim: Vec<IpAddr> = v[0]
+        .split_whitespace()
+        .filter(|s| !s.starts_with(site_local))
+        .map(|s| s.split('%').next().unwrap().parse().unwrap())
+        .collect();
+    cim.sort_unstable();
+    cim.dedup();
+    let mut ours = net::dns().unwrap().servers;
+    ours.sort_unstable();
+    assert_eq!(ours, cim, "DNS servers");
+
+    let routes: Vec<u32> = v[1]
+        .split_whitespace()
+        .map(|s| s.parse().unwrap())
+        .collect();
+    match net::primary().unwrap() {
+        Some(i) => assert!(routes.contains(&i.index), "{} not in {routes:?}", i.index),
+        None => assert!(routes.is_empty(), "{routes:?}"),
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn test_live_windows_zone_locale_power_and_sessions_match_dotnet_and_cim() {
+    use sys_lib::power;
+    let script = r#"$z = [TimeZoneInfo]::Local;
+        $z.Id; [long]$z.GetUtcOffset([DateTime]::UtcNow).TotalSeconds; (Get-Culture).Name;
+        @(Get-CimInstance Win32_Battery).Count; "end""#;
+    let Some(v) = cim_lines(script, 5) else {
+        return;
+    };
+    let tz = host::timezone().unwrap();
+    assert_eq!(tz.windows.as_deref(), Some(v[0].as_str()));
+    assert_eq!(
+        i64::from(tz.utc_offset_seconds),
+        v[1].parse::<i64>().unwrap()
+    );
+    assert!(tz.iana.is_some(), "{} is in the zone table", v[0]);
+    if !v[2].is_empty() {
+        assert_eq!(host::locale().map(|l| l.tag), Some(v[2].as_str()));
+    }
+    assert_eq!(power::has_battery(), number(&v[3]) > 0);
+    assert_eq!(host::clock_sync().unwrap(), None);
+    // `quser` exits non-zero with nobody logged in, and Home editions lack it.
+    if let Some(out) = tool("quser", &[]) {
+        let ours = host::sessions().unwrap();
+        for line in out.lines().skip(1) {
+            let user = line
+                .trim_start_matches(['>', ' '])
+                .split_whitespace()
+                .next();
+            let user = user.unwrap();
+            assert!(
+                ours.iter().any(|s| s.user.eq_ignore_ascii_case(user)),
+                "{user} missing from {} sessions",
+                ours.len()
+            );
+        }
+    }
+}
+
+#[cfg(all(windows, feature = "device-id"))]
+#[test]
+fn test_live_windows_device_sources_are_read() {
+    use sys_lib::device::{self, Anchor, SourceState};
+    let r = device::report();
+    let state = |anchor| {
+        r.sources
+            .iter()
+            .find(|s| s.anchor == anchor)
+            .map(|s| s.state)
+    };
+    // Windows always has a MachineGuid, and SMBIOS needs no privilege.
+    assert_eq!(state(Anchor::InstallId), Some(SourceState::Present));
+    assert!(r.default_basis_available);
+    assert!(matches!(
+        state(Anchor::PlatformUuid),
+        Some(SourceState::Present | SourceState::Placeholder)
+    ));
+    assert!(device::id("com.hivedb.sys-lib.live").is_ok());
+}
+
 #[test]
 fn test_live_samplers_measure_real_activity() {
     use std::time::Duration;
@@ -412,4 +858,50 @@ fn test_live_counts_are_consistent_everywhere() {
     assert_ne!(cpu::is_64bit(), cpu::is_32bit());
     assert!(!os::name().is_empty() && !os::distro().is_empty() && !os::distro_id().is_empty());
     assert_eq!(process::id(), std::process::id());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_live_linux_detection_matches_the_tools() {
+    use sys_lib::{cpu, disk, host, net, virt};
+    if let Some(offset) = need("date", &["+%z"]) {
+        // "+0100" is 3600 seconds east.
+        let t = offset.trim();
+        let sign = if t.starts_with('-') { -1 } else { 1 };
+        let (hours, minutes): (i32, i32) = (t[1..3].parse().unwrap(), t[3..5].parse().unwrap());
+        assert_eq!(
+            host::timezone().unwrap().utc_offset_seconds,
+            sign * (hours * 3600 + minutes * 60)
+        );
+    }
+    if let Some(line) = need("getconf", &["LEVEL1_DCACHE_LINESIZE"])
+        && let Ok(line) = line.trim().parse::<usize>()
+        && line != 0
+    {
+        assert_eq!(cpu::cache_line(), line);
+    }
+    let root = disk::of("/").unwrap();
+    assert_eq!(root.mount_point, std::path::Path::new("/"));
+    assert!(root.space.is_some());
+    assert_eq!(cpu::native_arch(), cpu::arch());
+    assert!(!cpu::is_translated());
+    if let Some(route) = need("ip", &["route", "show", "default"])
+        && let Some(dev) = route.split_whitespace().skip_while(|w| *w != "dev").nth(1)
+    {
+        assert_eq!(
+            net::primary().unwrap().map(|i| i.name).as_deref(),
+            Some(dev)
+        );
+    }
+    if let Ok(release) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
+        assert_eq!(virt::is_wsl(), release.to_lowercase().contains("microsoft"));
+    }
+    assert_eq!(
+        cpu::topology()
+            .cores
+            .iter()
+            .map(|c| c.logical.len())
+            .sum::<usize>(),
+        cpu::logical()
+    );
 }

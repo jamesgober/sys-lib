@@ -778,8 +778,8 @@ pub enum Launcher { Systemd, Launchd, WindowsService, ContainerInit, Init, Termi
 | Launcher | Linux | macOS | Windows |
 |---|---|---|---|
 | `Systemd` | `INVOCATION_ID` and the `.service` unit in `/proc/self/cgroup` | | |
-| `Launchd` | | parent pid 1 and `XPC_SERVICE_NAME` set to a label | |
-| `WindowsService` | | | session 0 (`ProcessIdToSessionId`) and no console window |
+| `Launchd` | | parent pid 1 and `XPC_SERVICE_NAME` set to a label (weak evidence) | |
+| `WindowsService` | | | session 0 (`ProcessIdToSessionId`) and no console window; a scheduled task running as SYSTEM looks the same, and `unit` is `None` |
 | `ContainerInit` | process id 1 inside a container (`virt`) | | |
 | `Init` | process id 1 outside a container | | |
 | `Ssh` | `SSH_CONNECTION` (weak evidence) | same | |
@@ -1459,7 +1459,7 @@ pub enum CacheKind { Data, Instruction, Unified }
 pub struct NumaNode { pub id: u32, pub cpus: Vec<u32>, pub memory: Option<Bytes> }
 ```
 
-Static facts read on first use: about 1 ns afterwards; the first call reads up to a few hundred small files on large Linux hosts (1 to 5 ms on a 256-CPU machine [est.]), which is why they are separate from `cpu::name()`. CPU hot-plug after the first call is not reflected; `cpu::online()` is the live count. Lists are sorted by id. macOS reports one NUMA node with every CPU.
+Static facts read on first use: about 1 ns afterwards; the first call reads up to a few hundred small files on large Linux hosts (1 to 5 ms on a 256-CPU machine [est.]), which is why they are separate from `cpu::name()`. CPU hot-plug after the first call is not reflected; `cpu::online()` is the live count. Lists are sorted by id. On Linux a core's id is its lowest logical CPU. macOS reports one NUMA node with every CPU, and its logical CPU numbers are positions, efficiency cores first (the OS offers no CPU-to-core mapping). Windows gives a NUMA node's memory on a one-node machine and `None` on several: it offers free memory per node, not attached memory.
 
 ```rust
 use sys_lib as sys;
@@ -1672,7 +1672,7 @@ pub struct MemoryModule {
 #[non_exhaustive] pub enum MemoryForm { Dimm, SoDimm, Soldered, Other, Unknown }
 ```
 
-The installed memory sticks, from the SMBIOS type 17 records (the same bounded, fuzzed SMBIOS parser device identity uses). Windows reads them unprivileged (`GetSystemFirmwareTable('RSMB')`). Linux keeps the raw table root-only (`/sys/firmware/dmi/tables/DMI`, mode 0400): `PermissionDenied` with a hint unless the process runs as root. macOS: `Unsupported` for slot details on Apple silicon (unified memory, one package); Intel Macs from the IORegistry memory node [verify]. Empty slots are left out. Serial numbers are never read into the result.
+The installed memory sticks, from the SMBIOS type 17 records (the same bounded, fuzzed SMBIOS parser device identity uses). Windows reads them unprivileged (`GetSystemFirmwareTable('RSMB')`). Linux keeps the raw table root-only (`/sys/firmware/dmi/tables/DMI`, mode 0400): `PermissionDenied` with a hint unless the process runs as root. macOS: `Unsupported` (Apple silicon has unified memory, one package; no documented source was confirmed for Intel Macs, D-059). Empty slots are left out. Serial numbers are never read into the result.
 
 ---
 
@@ -1702,7 +1702,7 @@ impl Space { pub fn used(&self) -> Bytes; pub fn used_percent(&self) -> Percent;
 pub struct Disk {
     pub mount_point: PathBuf,
     pub device: String,          // "/dev/nvme0n1p2", "C:", "\\?\Volume{...}\"
-    pub label: Option<String>,   // volume label (Windows; macOS from 0.5)
+    pub label: Option<String>,   // volume label (Windows, macOS)
     pub filesystem: String,      // "ext4", "btrfs", "apfs", "NTFS", "overlay"
     pub kind: DiskKind,
     pub space: Option<Space>,    // None for media not present (Windows lists it with filesystem "unknown")
@@ -1731,7 +1731,7 @@ impl Default for ListOptions;
 | DSK-02 | `list()` | 0.4 | Linux 20 µs + 3 µs per mount; Windows 50 to 500 µs |
 | DSK-03 | `list_with(options)` | 0.4 | as `list()` |
 | DSK-04 | `DiskKind` SSD/HDD | 0.5 | 2 to 10 µs per disk |
-| DSK-05 | `of(path)` | 0.5 | 5 to 30 µs |
+| DSK-05 | `of(path)` | 0.5 | Linux 20 µs + 3 µs per mount; Windows 110 to 200 µs (measured) |
 
 `list()` never blocks on a dead network mount: network filesystems are skipped unless `include_network` is set, and Windows volume calls run with critical-error dialogs disabled, so an empty card reader never pops up "insert a disk" (threat T8). Mount points appear once per filesystem (deduplicated by device number); escaped characters in Linux mount points (`\040` and friends) are decoded. Inside a container, `list()` shows the container's mounts (the overlay root, volumes): that is correct for the process, and the host's disks are neither visible nor guessed. `space(path)` blocks if the caller points it at a dead network mount; that is the caller's choice and documented. More mounts than `max_mounts` is `TooLarge`, checked before allocation. The list is sorted by mount point.
 
@@ -1839,7 +1839,7 @@ if let Some(p) = sys::disk::pressure()? {
 pub mod net {
     pub fn interfaces() -> Result<Vec<Interface>>;
     pub fn addresses() -> Result<Vec<IpAddr>>;        // non-loopback, non-link-local addresses of up interfaces
-    pub fn primary() -> Result<Option<Interface>>;    // the one holding the default route
+    pub fn primary() -> Result<Option<Interface>>;    // the one holding the default route (IPv4 only on Windows)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2045,7 +2045,7 @@ pub struct Dns {
 }
 ```
 
-The DNS servers this machine is configured to use, read from configuration only: sys-lib never sends a DNS query. Linux: `/etc/resolv.conf` (`nameserver`, `search`, `domain`), and when it points at the systemd-resolved stub, `/run/systemd/resolve/resolv.conf` for the upstream servers. macOS: the SystemConfiguration dynamic store `State:/Network/Global/DNS` [verify], falling back to `/etc/resolv.conf`. Windows: the DNS server lists of the up adapters from `GetAdaptersAddresses`, in interface-metric order. Bounded: at most 64 servers and 64 search domains; anything longer is `TooLarge`.
+The DNS servers this machine is configured to use, read from configuration only: sys-lib never sends a DNS query. Linux: `/etc/resolv.conf` (`nameserver`, `search`, `domain`), and when it points at the systemd-resolved stub, `/run/systemd/resolve/resolv.conf` for the upstream servers. macOS: the SystemConfiguration dynamic store `State:/Network/Global/DNS`, falling back to `/etc/resolv.conf`. Windows: the DNS server lists of the up adapters from `GetAdaptersAddresses`, in interface-metric order, without the `fec0:0:0:ffff::` placeholders Windows lists on adapters with no IPv6 DNS; `search` holds the adapters' suffixes. Bounded: at most 64 servers and 64 search domains; anything longer is `TooLarge`.
 
 ### Interface options
 
@@ -2115,7 +2115,7 @@ pub struct Model { pub vendor: Option<&'static str>, pub name: &'static str, pub
 - `name()` is live: DHCP and `hostnamectl` change it while processes run. A name that is not UTF-8 is converted lossily; longer than 255 bytes is truncated.
 - `uptime()` is monotonic and counts time suspended; `boot_time()` is the boot instant, the same on every call (it moves only when the wall clock is stepped).
 - `timezone()` returns the zone **name** and the current offset, not zone arithmetic (that is a calendar crate's job). `TZ` is used only when it is a valid name (at most 64 bytes, no `..`, no control characters, a leading `:` stripped); it is never opened as a path. When `/etc/localtime` is a copy rather than a link, the name comes from `/etc/timezone` or is `None`: zone files are not compared to guess. On Windows the IANA name comes from an embedded copy of the CLDR Windows-zone table.
-- `locale()` is `None` for `C`, `POSIX`, and `C.UTF-8` (no language preference expressed).
+- `locale()` is `None` for `C`, `POSIX`, and `C.UTF-8` (no language preference expressed). macOS falls back to the system locale, since an application started from the Finder has no `LANG`.
 - `model()` is the hardware model from DMI, SMBIOS, the device tree ("Raspberry Pi 5"), or `hw.model` on macOS ("Mac14,9"; no marketing-name table is shipped).
 
 The host name, time zone, and locale are identifying values; keep them out of output that leaves the machine unless that is intended.
@@ -2188,7 +2188,7 @@ pub struct Board { pub vendor: Option<&'static str>, pub name: Option<&'static s
 |---|---|---|
 | Linux | `/sys/class/dmi/id/{bios_vendor,bios_version,bios_date}` (mode 0444); UEFI when `/sys/firmware/efi` exists | `board_vendor`, `board_name`, `board_version` (0444) |
 | Windows | SMBIOS type 0 from `GetSystemFirmwareTable('RSMB')`; `GetFirmwareType` | SMBIOS type 2 |
-| macOS | vendor "Apple Inc.", version from the IORegistry (`system-firmware-version` on Apple silicon, the boot ROM version on Intel) [verify property names]; always UEFI-class | `board-id` of `IOPlatformExpertDevice` (Intel); Apple silicon: the model identifier |
+| macOS | vendor "Apple Inc."; Apple silicon: version from `system-firmware-version` in the IORegistry, kind `Unknown` (iBoot is not UEFI); Intel: kind `Uefi`, version `None` (D-059) | `board-id` of `IOPlatformExpertDevice` (Intel); Apple silicon: the model identifier |
 
 Placeholder strings ("To be filled by O.E.M.", "Default string") are `None`. Serial numbers are never part of these answers (they are identifiers; see `device`). Inside a VM these describe the virtual firmware, which is correct for the process.
 
@@ -2210,7 +2210,7 @@ pub struct ClockSync {
 }
 ```
 
-Whether the system clock is kept in sync (NTP, chrony, PTP, Windows Time), which leases, distributed locks, and hybrid logical clocks depend on: a cluster node with an unsynchronised clock should not take part. Linux and macOS: `ntp_adjtime` in read-only mode (no flags set), `TIME_ERROR` or `STA_UNSYNC` meaning not synchronised. Windows: `GetSystemTimeAdjustmentPrecise` reports whether time adjustment is active; synchronised state from the Windows Time service's last successful sync [verify an unprivileged source before 0.5; `Ok(None)` otherwise]. Reading time itself stays in clock-lib.
+Whether the system clock is kept in sync (NTP, chrony, PTP, Windows Time), which leases, distributed locks, and hybrid logical clocks depend on: a cluster node with an unsynchronised clock should not take part. Linux: `adjtimex` in read-only mode (no mode bits set), `TIME_ERROR` or `STA_UNSYNC` meaning not synchronised; a sandbox refusing the call is `Ok(None)`. macOS: `ntp_adjtime` in read-only mode, but the kernel starts with `STA_UNSYNC` set and `timed` may set the clock without clearing it, so a clear flag is `synchronized: true` and a set flag is `Ok(None)`, never a claim that the clock is adrift. Windows and iOS: `Ok(None)`: no unprivileged call tells (D-054). `Ok(None)` means not known, so a cluster should treat it as such and not as unsynchronised. Reading time itself stays in clock-lib.
 
 ### Sessions
 
@@ -2226,7 +2226,7 @@ pub mod host {
 pub struct Session { pub user: String, pub terminal: Option<String>, pub remote: bool, pub since: Option<SystemTime> }
 ```
 
-Who is logged in: Linux and macOS from the utmp database (`getutxent`), Windows from `WTSEnumerateSessionsW` and `WTSQuerySessionInformationW`. The remote host address is not returned (only whether the session is remote). User names are personal data: keep them out of output that leaves the machine.
+Who is logged in: Linux from the utmp file itself (a system that no longer keeps one gives an empty list, D-056), macOS from `getutxent`, Windows from `WTSEnumerateSessionsW` and `WTSQuerySessionInformationW` (wtsapi32, loaded at run time: `Unsupported` where Windows has none, D-055; a session this process may not ask about is left out). iOS: `Unsupported`. The remote host address is not returned (only whether the session is remote). User names are personal data: keep them out of output that leaves the machine.
 
 ---
 
@@ -2282,7 +2282,7 @@ pub enum Strength { Strong, Weak }
 | VRT-03 | `hypervisor()`, `container()` | about 1 ns |
 | VRT-04 | `evidence` | 0 |
 
-Layered checks (CPUID hypervisor leaves, DMI strings, hypervisor files, container marker files and cgroup names, the overlay root, the Kubernetes service account, WSL's kernel release) with every check that fired named in `evidence` (constant strings, never raw values). A Windows **host** with Hyper-V, WSL 2, or virtualization-based security enabled sees "Microsoft Hv" in CPUID too; with the root-partition privilege it is not reported as a VM. Inside WSL 2 both `is_vm()` and `is_wsl()` are true. A container inside a VM sets both `container` and `hypervisor`. Evidence from environment variables (`KUBERNETES_SERVICE_HOST`) is `Weak`: any process can set it.
+Layered checks (CPUID hypervisor leaves, DMI strings, hypervisor files, container marker files and cgroup names, the overlay root, the Kubernetes service account, WSL's kernel release) with every check that fired named in `evidence` (constant strings, never raw values). A Windows **host** with Hyper-V, WSL 2, or virtualization-based security enabled sees "Microsoft Hv" in CPUID too; with the root-partition privilege it is not reported as a VM (checked on such a host). Under Rosetta 2 CPUID is not read: translation is not virtualization. Inside WSL 2 both `is_vm()` and `is_wsl()` are true. A container inside a VM sets both `container` and `hypervisor`. Evidence from environment variables (`KUBERNETES_SERVICE_HOST`) is `Weak`: any process can set it.
 
 Detection is advisory. Do not make security decisions on it (threat T14).
 
@@ -2333,7 +2333,7 @@ pub enum BatteryState { Charging, Discharging, Full, NotCharging, Unknown }
 | PWR-02 | `battery()` | 10 to 40 µs / 50 to 200 µs / 0.3 µs |
 | PWR-03 | `on_ac()` | 5 to 20 µs / 20 µs / 0.3 µs |
 
-The system battery only: wireless mice, keyboards, and headsets report batteries too and are excluded. Several internal batteries are combined by energy (the sum of energy now over the sum of energy when full), not by averaging percentages. A desktop without power information gives `on_ac() == Ok(None)`, not a guess. Windows reports no health or cycle count through `GetSystemPowerStatus` (`None`). Android: best effort through the Linux path (SELinux often denies it: `PermissionDenied`). iOS: `Unsupported`.
+The system battery only: wireless mice, keyboards, and headsets report batteries too and are excluded. Several internal batteries are combined by energy (the sum of energy now over the sum of energy when full), not by averaging percentages. A desktop without power information gives `on_ac() == Ok(None)`, not a guess; a Mac desktop says `Some(true)`, because IOKit reports mains power there. Windows reports one combined entry and no health or cycle count through `GetSystemPowerStatus` (`None`); each pack on its own is not verified. Android: best effort through the Linux path (SELinux often denies it: `PermissionDenied`). iOS: `Unsupported`.
 
 ```rust
 use sys_lib as sys;
@@ -2345,7 +2345,7 @@ if sys::power::on_ac()? == Some(false) { /* on battery */ }
 # Ok::<(), sys_lib::Error>(())
 ```
 
-**Each battery** (PWR-04, since 0.5): `power::batteries() -> Result<Vec<Battery>>` returns every system battery separately (laptops with two packs, UPS-backed devices that report as system batteries), in the order the OS lists them; `battery()` stays the combined value.
+**Each battery** (PWR-04, since 0.5): `power::batteries() -> Result<Vec<Battery>>` returns every system battery separately (laptops with two packs, UPS-backed devices that report as system batteries), in the order the OS lists them; `battery()` stays the combined value. Windows gives one combined entry.
 
 ---
 
@@ -2737,7 +2737,7 @@ pub struct Comparison { pub verdict: Verdict, pub matched: Vec<Anchor>, pub chan
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[non_exhaustive]
 pub enum Verdict {
-    Same,         // every anchor present in both matches
+    Same,         // every anchor present in both matches, and more than the CPU signature was compared
     LikelySame,   // matched weight >= 5 and at most one strong anchor changed
     Different,
 }

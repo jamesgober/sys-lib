@@ -8,7 +8,8 @@ use super::Root;
 use crate::{
     Bytes, Error, Result,
     parse::{parse_u64, proc_status, procfs, trim},
-    process::{ProcessIo, ProcessMemory},
+    process::{LaunchFacts, Launcher, ProcessIo, ProcessMemory},
+    virt::Strength,
 };
 
 fn malformed(source: &'static str) -> Error {
@@ -105,6 +106,44 @@ pub(crate) fn io(root: &Root) -> Result<ProcessIo> {
         })
     })?
     .ok_or_else(|| malformed("/proc/self/io"))
+}
+
+/// The systemd unit in a `/proc/self/cgroup` path: its last component, when
+/// that is a `.service`.
+pub(crate) fn service_unit(cgroup: &str) -> Option<&str> {
+    cgroup
+        .lines()
+        .filter_map(|l| l.rsplit(':').next()?.rsplit('/').next())
+        .find(|unit| unit.ends_with(".service") && unit.len() <= 256)
+}
+
+/// How this process was started. The cgroup is set by the service manager; the
+/// environment alone is weak evidence.
+pub(crate) fn launch(root: &Root, env: LaunchEnv, pid: u32) -> LaunchFacts {
+    let cgroup = root.text("/proc/self/cgroup").unwrap_or_default();
+    let unit = service_unit(&cgroup).map(str::to_owned);
+    let cron = matches!(unit.as_deref(), Some("cron.service" | "crond.service"));
+    let service = match (&unit, env.invocation) {
+        _ if cron => None,
+        (Some(_), _) => Some((Launcher::Systemd, unit.clone(), Strength::Strong)),
+        (None, true) => Some((Launcher::Systemd, None, Strength::Weak)),
+        (None, false) => None,
+    };
+    LaunchFacts {
+        service,
+        is_pid1: pid == 1,
+        notify_socket: env.notify_socket,
+        ssh: env.ssh,
+        cron,
+    }
+}
+
+/// The environment variables [`launch`] looks at. Weak evidence.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct LaunchEnv {
+    pub(crate) invocation: bool,
+    pub(crate) notify_socket: bool,
+    pub(crate) ssh: bool,
 }
 
 #[cfg(test)]

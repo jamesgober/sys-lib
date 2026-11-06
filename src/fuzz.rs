@@ -6,8 +6,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_docs)]
 
 use crate::parse::{
-    cgroup, cpu_list::CpuSet, cpu_name, cpuinfo, mountinfo, os_release, pid_file, proc_status,
-    procfs, release, version,
+    cgroup, cpu_list::CpuSet, cpu_name, cpuinfo, locale, mountinfo, os_release, pid_file,
+    proc_status, procfs, release, resolv, smbios, tz, uevent, utmp, version,
 };
 
 pub fn os_release(data: &[u8]) {
@@ -173,5 +173,69 @@ pub fn procfs(data: &[u8]) {
     let _ = procfs::cgroup_bytes(data);
     if let Some(word) = procfs::bracketed(data) {
         assert!(word.len() < data.len());
+    }
+}
+
+pub fn smbios(data: &[u8]) {
+    let f = smbios::facts(data);
+    for s in [f.bios.and_then(|b| b.vendor), f.asset_tag]
+        .into_iter()
+        .flatten()
+    {
+        assert!(s.len() <= 256);
+    }
+    assert!(smbios::structures(data).count() <= smbios::MAX_STRUCTURES);
+    let _ = smbios::anchors(data);
+    assert!(smbios::memory_devices(data).len() <= smbios::MAX_STRUCTURES);
+}
+
+pub fn uevent(data: &[u8]) {
+    let _ = uevent::parse(data);
+}
+
+pub fn resolv(data: &[u8]) {
+    let r = resolv::parse(data);
+    assert!(r.servers.len() <= resolv::MAX_ENTRIES && r.search.len() <= resolv::MAX_ENTRIES);
+}
+
+pub fn utmp(data: &[u8]) {
+    for layout in [utmp::COMPAT32, utmp::NATIVE64] {
+        assert!(utmp::parse(data, layout).len() <= utmp::MAX_RECORDS);
+    }
+}
+
+pub fn windows_zones(data: &[u8]) {
+    let text = String::from_utf8_lossy(data);
+    let _ = tz::iana_for_windows(&text);
+    for name in [
+        tz::from_env(&text),
+        tz::from_link(&text),
+        tz::from_file(data),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        // A name is never a path out of the zone directory.
+        assert!(tz::valid_name(name) && !name.contains("..") && !name.starts_with('/'));
+    }
+    if let Some(tag) = locale::tag(&text) {
+        assert!(tag.len() <= locale::MAX_LOCALE);
+    }
+}
+
+#[cfg(feature = "device-id")]
+pub fn fingerprint(data: &[u8]) {
+    use crate::device::Fingerprint;
+
+    if let Ok(f) = Fingerprint::from_bytes(data) {
+        assert_eq!(
+            f.to_bytes().as_slice(),
+            data,
+            "a parsed fingerprint round-trips"
+        );
+        assert_eq!(
+            Fingerprint::from_bytes(&f.to_bytes()).ok().as_ref(),
+            Some(&f)
+        );
     }
 }

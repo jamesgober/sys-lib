@@ -191,6 +191,23 @@ pub fn list_with(options: ListOptions) -> Result<Vec<Disk>> {
     Ok(disks)
 }
 
+/// The mount holding `path`. Only that filesystem is asked for its space, so a
+/// dead network mount elsewhere does not matter; `path` on one blocks.
+///
+/// ```
+/// let d = sys_lib::disk::of(".")?;
+/// println!("{} on {} ({:?})", d.filesystem, d.mount_point.display(), d.kind);
+/// # Ok::<(), sys_lib::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// `NotFound` when `path` does not exist or the mount table is hidden;
+/// `PermissionDenied` when it cannot be reached.
+pub fn of(path: impl AsRef<Path>) -> Result<Disk> {
+    crate::sys::disk_of(path.as_ref())
+}
+
 /// The interval [`io`] measures over: 1 s.
 pub const DEFAULT_WINDOW: Duration = Duration::from_secs(1);
 

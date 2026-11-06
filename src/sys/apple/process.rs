@@ -1,17 +1,19 @@
-//! This process: Mach `task_info`, `getrusage`, `getrlimit`, and (macOS only)
-//! libproc for threads, descriptors, the start time, and disk I/O.
+//! This process: Mach `task_info`, `getrusage`, `getrlimit`, (macOS only)
+//! libproc for threads, descriptors, the start time, and disk I/O, and how it
+//! was started.
 
 use core::ffi::c_int;
 #[cfg(target_os = "macos")]
 use core::ffi::c_void;
-use std::time::SystemTime;
+use std::{os::unix::ffi::OsStrExt, time::SystemTime};
 
 use super::{ffi, kern_error, last_errno, os_error};
 #[cfg(target_os = "macos")]
 use crate::Error;
 use crate::{
     Bytes, Result,
-    process::{CpuTime, Limit, Limits, ProcessIo, ProcessMemory},
+    process::{CpuTime, LaunchFacts, Launcher, Limit, Limits, ProcessIo, ProcessMemory},
+    virt::Strength,
 };
 
 const MEMORY: &str = "process memory";
@@ -39,6 +41,33 @@ fn task_basic_info() -> Result<ffi::MachTaskBasicInfo> {
         return Err(kern_error(MEMORY, "task_info", kr));
     }
     Ok(info)
+}
+
+/// launchd is process 1 and names each job in `XPC_SERVICE_NAME`; a process it
+/// did not start directly sees "0" or an inherited name. Environment variables
+/// are weak evidence: any parent can set them.
+pub(crate) fn launch() -> LaunchFacts {
+    let label = std::env::var_os("XPC_SERVICE_NAME");
+    launch_from(
+        ffi::getppid(),
+        label.as_ref().map(|l| l.as_bytes()),
+        std::env::var_os("SSH_CONNECTION").is_some(),
+        std::process::id() == 1,
+    )
+}
+
+/// The facts from the parent, the label, and the rest.
+fn launch_from(parent: c_int, label: Option<&[u8]>, ssh: bool, is_pid1: bool) -> LaunchFacts {
+    let label = label.filter(|&l| parent == 1 && !l.is_empty() && l != b"0");
+    LaunchFacts {
+        service: label.map(|l| {
+            let label = crate::parse::lossy(l, 256);
+            (Launcher::Launchd, Some(label), Strength::Weak)
+        }),
+        is_pid1,
+        ssh,
+        ..LaunchFacts::default()
+    }
 }
 
 /// `getrusage(RUSAGE_SELF)`.
@@ -308,6 +337,25 @@ pub(crate) fn process_io() -> Result<ProcessIo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_process_apple_launch_facts() {
+        let label: Option<&[u8]> = Some(b"com.example.site");
+        let job = launch_from(1, label, false, false);
+        let (by, unit, strength) = job.service.unwrap();
+        assert_eq!(by, Launcher::Launchd);
+        assert_eq!(unit.as_deref(), Some("com.example.site"));
+        assert_eq!(strength, Strength::Weak);
+        // A shell's child inherits the name; the parent gives it away.
+        assert_eq!(launch_from(4242, label, false, false).service, None);
+        // Launched by launchd, with no job of its own.
+        assert_eq!(launch_from(1, Some(b"0"), false, false).service, None);
+        assert_eq!(launch_from(1, Some(b""), false, false).service, None);
+        assert_eq!(launch_from(1, None, false, false).service, None);
+        let ssh = launch_from(4242, None, true, false);
+        assert!(ssh.ssh && !ssh.is_pid1);
+        assert!(launch_from(0, None, false, true).is_pid1);
+    }
 
     #[test]
     fn test_process_apple_start_time_bounds() {

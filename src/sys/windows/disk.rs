@@ -1,4 +1,5 @@
-//! Disks: free space, the mounted volumes, and the physical disks' counters.
+//! Disks: free space, the mounted volumes, the volume holding a path, and the
+//! physical disks' counters.
 
 use std::{
     ffi::{OsString, c_void},
@@ -9,7 +10,9 @@ use std::{
     time::Duration,
 };
 
-use super::{NoDialogs, Owned, ffi, from_wide, hundred_ns, last_error, non_negative, unsupported};
+use super::{
+    NoDialogs, Owned, ffi, from_wide, hundred_ns, last_error, non_negative, unsupported, wide,
+};
 use crate::{
     Error, Pressure, Result,
     disk::{Disk, DiskKind, DiskRaw, ListOptions, Space},
@@ -339,8 +342,8 @@ fn drive_roots(options: &ListOptions, roots: &mut Vec<Root>, letters: u32) -> Re
     Ok(true)
 }
 
-/// What `GetDriveTypeW` says the storage is. Telling solid-state from rotating
-/// fixed disks arrives in 0.5.
+/// What `GetDriveTypeW` says the storage is: a fixed drive is one [`fixed_kind`]
+/// looks at.
 fn drive_kind(drive: u32) -> DiskKind {
     match drive {
         ffi::DRIVE_REMOVABLE => DiskKind::Removable,
@@ -348,6 +351,73 @@ fn drive_kind(drive: u32) -> DiskKind {
         ffi::DRIVE_CDROM => DiskKind::Optical,
         ffi::DRIVE_RAMDISK => DiskKind::Ram,
         _ => DiskKind::Unknown,
+    }
+}
+
+/// The volume's own device: `\\.\C:`, or `\\?\Volume{GUID}` without the
+/// trailing backslash, which would name its root directory.
+fn volume_device(device: &str) -> Vec<u16> {
+    match device.strip_suffix('\\') {
+        Some(volume) => wide(volume),
+        None => wide(&format!(r"\\.\{device}")),
+    }
+}
+
+/// `IOCTL_STORAGE_QUERY_PROPERTY` for the seek penalty, on the volume opened
+/// with no access rights (the control is `FILE_ANY_ACCESS`). `Unknown` for what
+/// does not answer: a spanned volume, a virtual disk driver.
+fn fixed_kind(device: &str) -> DiskKind {
+    let path = volume_device(device);
+    // SAFETY: `path` is NUL-terminated; no security attributes or template.
+    let handle = unsafe {
+        ffi::CreateFileW(
+            path.as_ptr(),
+            0,
+            ffi::FILE_SHARE_READ | ffi::FILE_SHARE_WRITE,
+            std::ptr::null_mut(),
+            ffi::OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == ffi::INVALID_HANDLE_VALUE {
+        return DiskKind::Unknown;
+    }
+    let handle = Owned(handle);
+    let query = ffi::StoragePropertyQuery {
+        property_id: ffi::STORAGE_DEVICE_SEEK_PENALTY_PROPERTY,
+        query_type: ffi::PROPERTY_STANDARD_QUERY,
+        additional_parameters: [0],
+    };
+    let mut answer = ffi::DeviceSeekPenaltyDescriptor {
+        version: 0,
+        size: 0,
+        incurs_seek_penalty: 0,
+    };
+    let mut returned = 0u32;
+    // SAFETY: `handle` is open; `query` and `answer` are the buffers of the sizes
+    // passed; the call is synchronous (no OVERLAPPED).
+    let ok = unsafe {
+        ffi::DeviceIoControl(
+            handle.0,
+            ffi::IOCTL_STORAGE_QUERY_PROPERTY,
+            (&raw const query).cast::<c_void>(),
+            size_of::<ffi::StoragePropertyQuery>() as u32,
+            (&raw mut answer).cast::<c_void>(),
+            size_of::<ffi::DeviceSeekPenaltyDescriptor>() as u32,
+            &raw mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0
+        || (returned as usize) <= offset_of!(ffi::DeviceSeekPenaltyDescriptor, incurs_seek_penalty)
+    {
+        return DiskKind::Unknown;
+    }
+    if answer.incurs_seek_penalty != 0 {
+        DiskKind::Hdd
+    } else {
+        DiskKind::Ssd
     }
 }
 
@@ -388,12 +458,118 @@ fn describe(root: &Root, options: &ListOptions) -> Option<(Disk, Option<u32>)> {
         device: root.device.clone(),
         label: Some(from_wide(&label)).filter(|l| ok && !l.is_empty()),
         filesystem,
-        kind: drive_kind(drive),
+        kind: if drive == ffi::DRIVE_FIXED {
+            fixed_kind(&root.device)
+        } else {
+            drive_kind(drive)
+        },
         space: if ok { space_of(&root.path).ok() } else { None },
         read_only: ok && flags & ffi::FILE_READ_ONLY_VOLUME != 0,
         removable: drive == ffi::DRIVE_REMOVABLE,
     };
     Some((disk, ok.then_some(serial)))
+}
+
+/// A mount point in the spelling the list uses: without the verbatim prefix
+/// `\\?\` of a drive or a share, which a canonical path carries. A volume name
+/// keeps it.
+fn plain_root(root: &[u16]) -> Vec<u16> {
+    let verbatim: Vec<u16> = r"\\?\".encode_utf16().collect();
+    let unc: Vec<u16> = r"UNC\".encode_utf16().collect();
+    let Some(rest) = root.strip_prefix(&verbatim[..]) else {
+        return root.to_vec();
+    };
+    if let Some(share) = rest.strip_prefix(&unc[..]) {
+        let mut out = vec![u16::from(b'\\'), u16::from(b'\\')];
+        out.extend_from_slice(share);
+        return out;
+    }
+    if rest.get(1) == Some(&u16::from(b':')) {
+        rest.to_vec()
+    } else {
+        root.to_vec()
+    }
+}
+
+/// The device name of a mount point that is not a drive letter: the volume's
+/// `\\?\Volume{GUID}\` name as the list gives it, or for a share, its name.
+fn mount_device(root: &[u16], path: &[u16]) -> String {
+    let mut name = [0u16; VOLUME_NAME];
+    // SAFETY: `path` is NUL-terminated; `name` is writable for its length in units.
+    let ok = unsafe {
+        ffi::GetVolumeNameForVolumeMountPointW(path.as_ptr(), name.as_mut_ptr(), name.len() as u32)
+    };
+    if ok != 0 {
+        from_wide(&name)
+    } else {
+        let text = String::from_utf16_lossy(root);
+        text.strip_suffix('\\').map(str::to_owned).unwrap_or(text)
+    }
+}
+
+fn of_error(e: &std::io::Error) -> Option<Error> {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => Some(Error::NotFound {
+            what: "disk of a path",
+            source: "GetFinalPathNameByHandleW",
+        }),
+        std::io::ErrorKind::PermissionDenied => Some(Error::PermissionDenied {
+            what: "disk of a path",
+            hint: "run as a user that may read the path, or treat the value as unknown",
+        }),
+        _ => None,
+    }
+}
+
+/// The volume holding `path`, as the list describes it. The path is resolved
+/// first: `GetVolumePathNameW` answers for a path that does not exist, and
+/// stops at the volume a link is on, not the one it leads to. A file system
+/// that cannot give a final path is asked with the path as written.
+pub(crate) fn disk_of(path: &Path) -> Result<Disk> {
+    let _quiet = NoDialogs::new();
+    let real = match std::fs::canonicalize(path) {
+        Ok(real) => real,
+        Err(e) => match of_error(&e) {
+            Some(error) => return Err(error),
+            None => path.to_path_buf(),
+        },
+    };
+    with_wide_path(&real, |p| {
+        let mut root = vec![0u16; p.len() + 1];
+        // SAFETY: `p` is NUL-terminated; `root` is writable for its length in
+        // units.
+        let ok =
+            unsafe { ffi::GetVolumePathNameW(p.as_ptr(), root.as_mut_ptr(), root.len() as u32) };
+        if ok == 0 {
+            return Err(Error::Os {
+                what: "disk of a path",
+                call: "GetVolumePathNameW",
+                code: last_error(),
+            });
+        }
+        let end = root.iter().position(|&c| c == 0).unwrap_or(root.len());
+        let plain = plain_root(&root[..end]);
+        let path = nul_terminated(&plain);
+        let device = match drive_letter(&plain) {
+            Some(letter) => letter_device(letter),
+            None => mount_device(&plain, &path),
+        };
+        let root = Root {
+            path,
+            device,
+            volume: true,
+        };
+        let options = ListOptions {
+            include_network: true,
+            ..ListOptions::default()
+        };
+        describe(&root, &options)
+            .map(|(disk, _)| disk)
+            .ok_or(Error::NotFound {
+                what: "disk of a path",
+                source: "GetDriveTypeW",
+            })
+    })
 }
 
 /// What opening and querying one physical drive gave.
@@ -588,6 +764,47 @@ mod tests {
         assert_eq!(drive_kind(ffi::DRIVE_FIXED), DiskKind::Unknown);
         assert_eq!(drive_kind(ffi::DRIVE_CDROM), DiskKind::Optical);
         assert_eq!(drive_kind(ffi::DRIVE_REMOVABLE), DiskKind::Removable);
+    }
+
+    #[test]
+    fn test_disk_windows_volume_devices_and_plain_roots() {
+        assert_eq!(volume_device("C:"), units("\\\\.\\C:\0"));
+        assert_eq!(
+            volume_device("\\\\?\\Volume{1}\\"),
+            units("\\\\?\\Volume{1}\0")
+        );
+        let plain = |s: &str| String::from_utf16_lossy(&plain_root(&units(s)));
+        assert_eq!(plain(r"C:\"), r"C:\");
+        assert_eq!(plain(r"\\?\C:\"), r"C:\");
+        assert_eq!(plain(r"\\?\C:\mnt\d\"), r"C:\mnt\d\");
+        assert_eq!(plain(r"\\?\UNC\server\share\"), r"\\server\share\");
+        assert_eq!(plain(r"\\server\share\"), r"\\server\share\");
+        assert_eq!(plain(r"\\?\Volume{1}\"), r"\\?\Volume{1}\");
+    }
+
+    #[test]
+    fn test_disk_windows_live_of_a_path_is_the_listed_disk() {
+        let here = std::env::current_dir().unwrap();
+        let d = disk_of(&here).unwrap();
+        let again = disk_of(Path::new("Cargo.toml")).unwrap();
+        // Free space moves between the two calls.
+        assert_eq!(
+            (&d.mount_point, &d.device, d.kind),
+            (&again.mount_point, &again.device, again.kind)
+        );
+        let listed = disks(&ListOptions::default()).unwrap();
+        let same = listed.iter().find(|l| l.device == d.device).unwrap();
+        assert_eq!(same.mount_point, d.mount_point);
+        assert_eq!((same.kind, &same.filesystem), (d.kind, &d.filesystem));
+        assert!(
+            disk_of(Path::new(r"C:\definitely\not\here\sys-lib"))
+                .is_err_and(|e| e.is_unavailable())
+        );
+        let root = disk_of(Path::new(r"C:\")).unwrap();
+        assert_eq!(
+            (root.mount_point.to_str(), root.device.as_str()),
+            (Some(r"C:\"), "C:")
+        );
     }
 
     #[test]

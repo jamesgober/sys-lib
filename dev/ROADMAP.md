@@ -40,7 +40,7 @@ Exit: WASP's phase 0 can be written against 0.3 (build info first line, instance
 - [x] Live comparison with the OS's own tools on every runner (`tests/live.rs`), 64 threads at first use (`tests/concurrency.rs`).
 - [x] README quick start (Tier 1 first).
 
-## v0.4.0 - Extended: live readings (DONE, 2026-10-28)
+## v0.4.0 - Extended: live readings (DONE, 2026-10-30)
 API: ROOT-05, ROOT-07, ROOT-08 · PRC-02 to PRC-10 (PRC-05 from 0.5, D-044), PRC-13 to PRC-15 · CPU-07 to CPU-12, CPU-14, CPU-15, CPU-20 to CPU-25, CPU-30 to CPU-32 (CPU-32 from 0.5, D-052) · MEM-01 to MEM-11, MEM-13 · DSK-01 to DSK-03, DSK-06, DSK-07 · NET-01 to NET-05, NET-07 to NET-09 · HST-02, HST-03, HST-09, HST-10.
 Exit: tower's memory watermark and load shedding and metrics-lib's system collector can be built on 0.4; every live reading allocation-free where promised; all container fixtures pass.
 - Moved to 0.5 (D-051): `ubuntu-24.04-desktop-amd`, which still needs a bare-metal Linux desktop.
@@ -53,20 +53,23 @@ Exit: tower's memory watermark and load shedding and metrics-lib's system collec
 - [x] Memory with E-28 to E-35; attack tests T5, T6, T7, T8 (`src/linux/hostile.rs`, which found an uptime panic, fixed).
 - [x] Fixtures recaptured with `capture.sh` v3 (the live-reading files); fuzz target `procfs` for the new parsers.
 
-## v0.5.0 - Detection and identity
+## v0.5.0 - Detection and identity (DONE, 2026-11-02)
 API: OS-08 to OS-13 · CPU-13, CPU-40 to CPU-44 · MEM-12 · DSK-04, DSK-05 · NET-06, NET-10 · HST-05 to HST-08, HST-11 to HST-13 · VRT-01 to VRT-05 · PWR-01 to PWR-04 · PRC-24, PRC-25 · DEV-01 to DEV-07 · ROOT-06.
 Exit: every item above implemented and tested on Linux, macOS, Windows; `docs/SOURCES.md`, `docs/PLATFORM-NOTES.md`, `docs/ARCHITECTURE.md` complete for everything shipped so far.
-- [ ] Fixture moved from 0.4 (D-051): `ubuntu-24.04-desktop-amd`, captured with `tests/fixtures/capture.sh` on a bare-metal Linux desktop.
-- [ ] `Disk::label` on macOS (D-053).
-- [ ] Form factor, virtualization and cloud vendor (E-79 to E-91), power and each battery, time zone and locale (E-92 to E-95), hardware model, firmware and motherboard.
-- [ ] How the program was started (systemd, launchd, Windows service, container init, terminal, SSH, cron), with evidence strength.
-- [ ] DNS servers (resolv.conf, the systemd-resolved stub, SystemConfiguration, adapter lists); clock synchronization; sessions; memory modules (SMBIOS type 17).
-- [ ] Device identity with E-69 to E-78; crypt-io wired behind `device-id`; `docs/DEVICE-ID.md`; attack tests T1, T2, T3, T13, T14, T15.
-- [ ] Android and iOS best-effort paths (iOS `os_proc_available_memory()` for `mem::free()`), documented in `docs/PLATFORM-NOTES.md`.
+- Moved to 0.6 (D-062): `ubuntu-24.04-desktop-amd`, which still needs a bare-metal Linux desktop.
+- [x] `Disk::label` on macOS (D-053).
+- [x] Form factor, virtualization and cloud vendor (E-79 to E-91), power and each battery, time zone and locale (E-92 to E-95), hardware model, firmware and motherboard.
+- [x] How the program was started (systemd, launchd, Windows service, container init, terminal, SSH, cron), with evidence strength.
+- [x] DNS servers (resolv.conf, the systemd-resolved stub, SystemConfiguration, adapter lists); clock synchronization where it can be believed (D-054); sessions; memory modules (SMBIOS type 17; `Unsupported` on macOS, D-059).
+- [x] Device identity with E-69 to E-78; crypt-io wired behind `device-id`; `docs/DEVICE-ID.md`; attack tests T1, T2, T3, T13, T14, T15.
+- [x] Android and iOS best-effort paths, documented in `docs/PLATFORM-NOTES.md`. `os_proc_available_memory()` for `mem::free()` on iOS was not added: it needs a device to check, and moves to 0.6 (D-062).
+- [x] Fuzz targets `smbios`, `uevent`, `resolv`, `utmp`, `windows_zones`, `fingerprint`; a Nano Server job in CI (D-055).
 
 ## v0.6.0 - Environment and reports (feature complete)
 API: RDY-01 to RDY-04 · BEN-01 to BEN-03 · SEC-01 to SEC-05 · SNS-01 · GPU-01 · PRB-01.
 Exit: every item in `docs/API.md` implemented and tested; FreeBSD and 32-bit Linux implemented; nothing left for 1.x.
+- [ ] Fixture moved from 0.5 (D-062): `ubuntu-24.04-desktop-amd`, captured with `tests/fixtures/capture.sh` on a bare-metal Linux desktop.
+- [ ] iOS `os_proc_available_memory()` for `mem::free()` (D-062).
 - [ ] Server readiness report for the General, Database, WebServer, and Benchmark profiles, every check with its why and fix, read-only (D-030).
 - [ ] Benchmark environment report, with `is_reproducible()`.
 - [ ] Security posture report (Secure Boot, TPM, disk encryption, SELinux/AppArmor, ASLR, lockdown, code integrity, firewall, CPU vulnerabilities).

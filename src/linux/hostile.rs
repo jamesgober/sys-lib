@@ -15,10 +15,10 @@ use super::{FILE_LIMIT, Root, cgroup::Cgroups, cpu, disk, mem, net, process, sta
 use crate::{Error, cpu::Times, disk::ListOptions};
 
 /// A temporary machine tree, removed when dropped.
-struct Tree(PathBuf);
+pub(crate) struct Tree(PathBuf);
 
 impl Tree {
-    fn new(tag: &str) -> Tree {
+    pub(crate) fn new(tag: &str) -> Tree {
         let dir =
             std::env::temp_dir().join(format!("sys-lib-hostile-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -26,13 +26,17 @@ impl Tree {
         Tree(dir)
     }
 
-    fn put(&self, abs: &str, content: &[u8]) {
+    pub(crate) fn put(&self, abs: &str, content: &[u8]) {
         let path = self.0.join(abs.trim_start_matches('/'));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, content).unwrap();
     }
 
-    fn root(&self) -> Root {
+    pub(crate) fn mkdir(&self, abs: &str) {
+        fs::create_dir_all(self.0.join(abs.trim_start_matches('/'))).unwrap();
+    }
+
+    pub(crate) fn root(&self) -> Root {
         Root::at(&self.0)
     }
 
@@ -82,6 +86,36 @@ const FILES: &[&str] = &[
     "/proc/sys/fs/file-nr",
     "/sys/devices/system/cpu/online",
     "/sys/kernel/mm/transparent_hugepage/enabled",
+    "/proc/net/route",
+    "/proc/net/ipv6_route",
+    "/proc/1/cgroup",
+    "/etc/resolv.conf",
+    "/etc/machine-info",
+    "/etc/machine-id",
+    "/etc/timezone",
+    "/run/utmp",
+    "/run/systemd/container",
+    "/sys/hypervisor/type",
+    "/sys/firmware/acpi/pm_profile",
+    "/sys/firmware/dmi/tables/DMI",
+    "/sys/class/dmi/id/sys_vendor",
+    "/sys/class/dmi/id/product_name",
+    "/sys/class/dmi/id/bios_date",
+    "/sys/class/dmi/id/chassis_type",
+    "/sys/class/dmi/id/product_uuid",
+    "/sys/class/dmi/id/board_serial",
+    "/sys/class/power_supply/BAT0/type",
+    "/sys/class/power_supply/BAT0/uevent",
+    "/sys/devices/system/cpu/present",
+    "/sys/devices/system/cpu/cpu0/topology/core_cpus_list",
+    "/sys/devices/system/cpu/cpu0/topology/physical_package_id",
+    "/sys/devices/system/cpu/cpu0/cpu_capacity",
+    "/sys/devices/system/cpu/cpu0/cache/index0/level",
+    "/sys/devices/system/cpu/cpu0/cache/index0/type",
+    "/sys/devices/system/cpu/cpu0/cache/index0/size",
+    "/sys/devices/system/cpu/cpu0/cache/index0/shared_cpu_list",
+    "/sys/devices/system/node/node0/cpulist",
+    "/sys/devices/system/node/node0/meminfo",
 ];
 
 /// Runs every 0.4 reading over `root`, checking the invariants of whatever
@@ -133,6 +167,24 @@ fn read_everything(root: &Root) {
     let _ = net::totals(root);
     let _ = net::counters(root, 4096);
     let _ = net::connections(root);
+    let _ = net::default_route(root);
+    if let Ok(d) = net::dns(root) {
+        assert!(d.servers.len() <= crate::parse::resolv::MAX_ENTRIES);
+    }
+    let _ = super::virt::detect(root, None, super::virt::Env::default());
+    let _ = super::hardware::facts(root);
+    let _ = super::hardware::form_factor(root, false, false);
+    let _ = super::hardware::modules(root);
+    let _ = super::topology::read(root);
+    let _ = super::host::zone_name(root, None);
+    let _ = super::host::sessions(root);
+    let _ = super::power::has_battery(root);
+    if let Ok(all) = super::power::batteries(root) {
+        for b in all {
+            assert!(b.battery.charge <= crate::Percent::FULL);
+        }
+    }
+    let _ = super::power::on_ac(root);
     let _ = process::memory(root, 4096);
     let _ = process::memory_detail(root);
     let _ = process::io(root);

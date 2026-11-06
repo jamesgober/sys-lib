@@ -13,7 +13,58 @@
 
 ---
 
-## [0.4.0] - 2026-10-28
+## [0.5.0] - 2026-11-02
+
+Detection and identity: what this machine is and what it runs inside, how the
+program was started, power, DNS, and an application-scoped device id.
+
+### Added
+
+- `virt`: `detect()`, `is_vm()`, `is_container()`, `is_wsl()`,
+  `is_kubernetes()`, `hypervisor()`, `container()`, and `cloud()`, every answer
+  with the checks that fired, and no call to a metadata service.
+- `os`: `edition()`, `codename()`, `is_server_edition()`, `is_64bit()`,
+  `form_factor()`, `detect_form_factor()`, and the `is_desktop()`-style checks.
+- `cpu`: `native_arch()`, `is_translated()`, `topology()`, `caches()`,
+  `cache_line()`, `numa_nodes()`, and `is_hybrid()`.
+- `mem::modules()`; `disk::of()`, `DiskKind::Ssd` and `Hdd`, and volume labels
+  on macOS; `net::primary()` and `net::dns()`.
+- `host`: `timezone()`, `locale()`, `model()`, `firmware()`, `board()`,
+  `clock_sync()`, and `sessions()`.
+- `power`: `has_battery()`, `battery()`, `batteries()`, and `on_ac()`, leaving
+  out peripheral batteries and combining packs by energy.
+- `process`: `launch()`, `is_service()`, and `is_interactive()`.
+- `summary()`: every fact for a log line or a support bundle, as `Display`,
+  key-value pairs, or JSON, with no host name, user, MAC, or device id.
+- `device` (feature `device-id`, bringing crypt-io): `id()`, `fingerprint()`,
+  `report()`, `builder()`, `DeviceId`, `Fingerprint`, and `StabilityReport`.
+  The derivation `sys-lib/device/v1` is frozen for all of 1.x.
+- `docs/DEVICE-ID.md`, `docs/ARCHITECTURE.md`, and `docs/PLATFORM-NOTES.md`;
+  examples `summary` and `device_id`.
+- Parsers for SMBIOS, `uevent`, `resolv.conf`, utmp, time zone names, and
+  locales, with fuzz targets, and one for stored fingerprints; attack tests T1,
+  T2, T3, T13, T14, and T15; a CI job that runs a real binary on Nano Server.
+
+### Fixed
+
+- WSL 2 with systemd writes `wsl` to `/run/systemd/container`, and its root is
+  an overlay: neither makes it a container (D-061). Found by the WSL fixture.
+- The macOS CoreFoundation and IOKit owners, and the Windows registry and
+  wtsapi32 owners, were built with `bool::then_some`, which makes its value
+  before testing: a missing IOKit property released NULL and stopped the
+  process. Found by the macOS CI runners, with a backtrace from lldb.
+
+### Changed
+
+- `capture.sh` version 4 records the remaining world-readable DMI files,
+  `/sys/firmware/efi`, and `/proc/sys/kernel/arch`.
+- The `ubuntu-24.04-desktop-amd` fixture and iOS `os_proc_available_memory()`
+  move to 0.6 (D-062).
+- The 0.4.0 date below corrected to the day it was published.
+
+---
+
+## [0.4.0] - 2026-10-30
 
 Live readings: memory and swap with container limits, CPU usage and load,
 disks and disk I/O rates, network interfaces, traffic and connections,
@@ -210,7 +261,8 @@ The scaffold and the plan. No functional code yet.
   `dev/ROADMAP.md`.
 - `tests/fixtures/` and `fuzz/` skeletons.
 
-[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jamesgober/sys-lib/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jamesgober/sys-lib/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/sys-lib/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/sys-lib/compare/v0.1.0...v0.2.0
