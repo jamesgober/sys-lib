@@ -49,6 +49,10 @@ program was started, power, DNS, and an application-scoped device id.
 
 - WSL 2 with systemd writes `wsl` to `/run/systemd/container`, and its root is
   an overlay: neither makes it a container (D-061). Found by the WSL fixture.
+- The macOS CoreFoundation and IOKit owners, and the Windows registry and
+  wtsapi32 owners, were built with `bool::then_some`, which makes its value
+  before testing: a missing IOKit property released NULL and stopped the
+  process. Found by the macOS CI runners, with a backtrace from lldb.
 
 ### Changed
 

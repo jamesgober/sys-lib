@@ -15,8 +15,14 @@ pub(super) struct Cf(ffi::CfRef);
 
 impl Cf {
     /// Takes the one reference a Create or Copy function returned; null is `None`.
+    /// The owner is made only for a real object: `then_some` would make one for
+    /// null too and drop it, which is `CFRelease(NULL)`, a crash.
     pub(super) fn new(object: ffi::CfRef) -> Option<Cf> {
-        (!object.is_null()).then_some(Cf(object))
+        if object.is_null() {
+            None
+        } else {
+            Some(Cf(object))
+        }
     }
 
     /// An immutable UTF-8 `CFString`.
@@ -198,9 +204,10 @@ impl<'a> Ref<'a> {
 pub(super) struct Io(pub(super) ffi::IoObject);
 
 impl Io {
-    /// Takes an object an IOKit call returned; 0 is `None`.
+    /// Takes an object an IOKit call returned; 0 is `None`, and nothing is
+    /// released for it (see `Cf::new`).
     pub(super) fn new(object: ffi::IoObject) -> Option<Io> {
-        (object != 0).then_some(Io(object))
+        if object == 0 { None } else { Some(Io(object)) }
     }
 
     /// The service a matching dictionary finds. The dictionary's one reference
@@ -281,5 +288,21 @@ impl Drop for Io {
     fn drop(&mut self) {
         // SAFETY: this value owns the object, released once.
         unsafe { ffi::IOObjectRelease(self.0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_iokit_null_is_none_and_never_released() {
+        // A property a registry entry does not have comes back null: before the
+        // fix, taking it released NULL and CoreFoundation stopped the process.
+        assert!(Cf::new(core::ptr::null()).is_none());
+        assert!(Io::new(0).is_none());
+        let platform = Io::service(c"IOPlatformExpertDevice").unwrap();
+        let missing = Cf::string("test", "sys-lib: no such property").unwrap();
+        assert!(platform.property(&missing).is_none());
     }
 }

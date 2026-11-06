@@ -113,7 +113,8 @@ impl Key {
                 &raw mut key,
             )
         };
-        (rc == 0).then_some(Key(key))
+        // Only an opened key gets an owner, which closes it.
+        if rc == 0 { Some(Key(key)) } else { None }
     }
 
     /// A `REG_SZ` value, at most 1 KiB of UTF-16.

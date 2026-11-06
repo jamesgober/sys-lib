@@ -86,7 +86,12 @@ fn query(wts: &'static Wts, session: u32, class: i32) -> Option<(WtsMemory, usiz
     let mut bytes = 0u32;
     // SAFETY: `memory` and `bytes` are writable locals the call fills.
     let ok = unsafe { (wts.query)(THIS_SERVER, session, class, &raw mut memory, &raw mut bytes) };
-    (ok != 0 && !memory.is_null()).then_some((WtsMemory(memory, wts), bytes as usize))
+    // Only memory wtsapi32 allocated gets an owner, which frees it.
+    if ok != 0 && !memory.is_null() {
+        Some((WtsMemory(memory, wts), bytes as usize))
+    } else {
+        None
+    }
 }
 
 /// The session's user name; `None` when it cannot be read.
