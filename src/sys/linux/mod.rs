@@ -2,9 +2,11 @@
 //! `crate::linux`), and a short list of libc calls where no file carries the
 //! value.
 
+mod detect;
 mod ffi;
 mod live;
 
+pub(crate) use detect::*;
 pub(crate) use live::*;
 
 use std::{
@@ -33,16 +35,14 @@ pub(crate) fn os() -> OsFacts {
     facts
 }
 
-/// Android has no os-release: the release comes from a system property.
+/// A system property, when it is set.
 #[cfg(target_os = "android")]
-fn android(facts: &mut OsFacts) {
+pub(super) fn property(name: &CStr) -> Option<String> {
     let mut buf = [0 as c_char; ffi::PROP_VALUE_MAX];
-    // SAFETY: the name is a NUL-terminated literal and `buf` has the
-    // PROP_VALUE_MAX bytes the call may write, NUL included.
-    let len = unsafe {
-        ffi::__system_property_get(c"ro.build.version.release".as_ptr(), buf.as_mut_ptr())
-    };
-    let version = (len > 0)
+    // SAFETY: the name is NUL-terminated and `buf` has the PROP_VALUE_MAX
+    // bytes the call may write, NUL included.
+    let len = unsafe { ffi::__system_property_get(name.as_ptr(), buf.as_mut_ptr()) };
+    (len > 0)
         .then(|| {
             let bytes: Vec<u8> = buf
                 .iter()
@@ -52,7 +52,13 @@ fn android(facts: &mut OsFacts) {
                 .collect();
             crate::parse::lossy(&bytes, 64)
         })
-        .filter(|v| !v.is_empty());
+        .filter(|v| !v.is_empty())
+}
+
+/// Android has no os-release: the release comes from a system property.
+#[cfg(target_os = "android")]
+fn android(facts: &mut OsFacts) {
+    let version = property(c"ro.build.version.release");
     facts.name = match &version {
         Some(v) => format!("Android {v}"),
         None => "Android".to_owned(),

@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>unsafe</code> is denied at the crate root and allowed only in one OS module per platform.
     </p>
     <blockquote>
-        <strong>Status: <code>0.4.0</code>, live readings.</strong> The boot kit (OS identity and the distribution, CPU counts and names, the host, the user, build info, instance info, the process guard), and now memory and swap with container limits, CPU usage, load, and pressure, disks and disk I/O, network interfaces, download and upload, connection counts, and this process's memory, CPU time, threads, files, limits, and I/O. Detection and identity, environment reports, and the rest arrive through <code>0.6</code>; the complete approved API, each item with its version, is in <a href="./docs/API.md"><code>docs/API.md</code></a>. Design: <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a>; schedule: <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
+        <strong>Status: <code>0.5.0</code>, detection and identity.</strong> The boot kit, the live readings (memory, CPU, disks, network, pressure, this process), and now virtualization and containers, form factor, topology and caches, power, DNS, the time zone, firmware, how the program was started, <code>summary()</code>, and an application-scoped device id. Environment reports, FreeBSD, and 32-bit Linux arrive in <code>0.6</code>; the complete approved API, each item with its version, is in <a href="./docs/API.md"><code>docs/API.md</code></a>. Design: <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a>; schedule: <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -46,7 +46,7 @@ Cargo's rename makes the crate `sys` in your code:
 
 ```toml
 [dependencies]
-sys = { package = "sys-lib", version = "0.4" }
+sys = { package = "sys-lib", version = "0.5" }
 ```
 
 Tier 1 is one plain call per fact. Static facts are read once and cached, so
@@ -116,12 +116,20 @@ Tier 2 adds detail behind the same modules (`sys::os::info()`, `sys::os::os_rele
 `sys::process::Guard::builder(..)`); errors say what failed and what to do,
 and a fact the OS does not expose is `Error::Unsupported`, never a guess.
 
-### Planned through 0.6
+### What it runs on
 
 ```rust
-let v = sys::virt::detect();                                    // 0.5: VM, container, WSL, cloud
-let id = sys::device::id("site")?;                              // 0.5: an application-scoped device id
-let r = sys::readiness::report(sys::readiness::Profile::Database); // 0.6: is this host fit to serve?
+let v = sys::virt::detect();            // VM, container, WSL, Kubernetes, each with its evidence
+println!("{}", sys::summary());         // the facts for a log line, with no identifiers
+
+// With the `device-id` feature:
+let id = sys::device::id("com.example.app")?;   // keyed, so applications cannot correlate it
+```
+
+### Planned for 0.6
+
+```rust
+let r = sys::readiness::report(sys::readiness::Profile::Database); // is this host fit to serve?
 ```
 
 The complete planned API, with the version each item arrives in, is in [`docs/API.md`](./docs/API.md); where every value comes from on each operating system is in [`docs/SOURCES.md`](./docs/SOURCES.md). See [`dev/PLAN.md`](./dev/PLAN.md) for the full scope, what is deliberately left to other crates, and the decision log.

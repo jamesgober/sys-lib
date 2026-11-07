@@ -1,19 +1,26 @@
 //! macOS and iOS: sysctl, Mach, libproc, CoreFoundation, and (macOS only) IOKit.
 //!
 //! The live readings (0.4) are split by area: `mem`, `cpu`, `disk`, `net`,
-//! `process` (this process), and `host`. This file keeps the static facts, the
-//! process guard's needs, and the helpers the areas share: sysctl reads, errno
-//! mapping, byte readers, and the Mach send-right wrapper.
+//! `process` (this process), and `host`; the detection and identity readings
+//! (0.5) add `detect`, `topology`, `power`, and `device`. `iokit` holds the
+//! CoreFoundation and IOKit wrappers they share. This file keeps the static
+//! facts, the process guard's needs, and the helpers the areas share: sysctl
+//! reads, errno mapping, byte readers, and the Mach send-right wrapper.
 
 mod cpu;
+mod detect;
+#[cfg(feature = "device-id")]
+mod device;
 mod disk;
 mod ffi;
 mod host;
+#[cfg(target_os = "macos")]
+mod iokit;
 mod mem;
 mod net;
+mod power;
 mod process;
-
-pub(crate) use self::{cpu::*, disk::*, host::*, mem::*, net::*, process::*};
+mod topology;
 
 use std::{
     ffi::{CStr, c_char, c_void},
@@ -23,6 +30,11 @@ use std::{
 #[cfg(feature = "guard")]
 use std::{fs::OpenOptions, path::Path};
 
+#[cfg(feature = "device-id")]
+pub(crate) use self::device::*;
+pub(crate) use self::{
+    cpu::*, detect::*, disk::*, host::*, mem::*, net::*, power::*, process::*, topology::*,
+};
 use crate::{
     Error, Result,
     cpu::Vendor,
@@ -37,8 +49,8 @@ use crate::{process::Limit, sys::FsKind};
 // Helpers shared by the readings
 // ---------------------------------------------------------------------------
 
-/// `Unsupported` on this platform (iOS lacks libproc, IOKit, and `getfsstat`).
-#[cfg(not(target_os = "macos"))]
+/// `Unsupported` on this platform (iOS lacks libproc, IOKit, and `getfsstat`;
+/// no Apple platform gives memory modules).
 fn unsupported(what: &'static str) -> Error {
     Error::Unsupported {
         what,
@@ -174,7 +186,6 @@ fn u64_at(data: &[u8], at: usize) -> Option<u64> {
 }
 
 /// The bytes of a fixed C character array up to its first NUL.
-#[cfg(target_os = "macos")]
 fn c_array_bytes(chars: &[c_char]) -> Vec<u8> {
     chars
         .iter()
@@ -283,18 +294,15 @@ pub(crate) fn os() -> OsFacts {
     } else {
         ("macOS", "macos")
     };
-    let name = match &version {
-        Some(v) => {
-            let major = crate::parse::version::parse(v).map(|p| p.0);
-            match major
-                .and_then(codename)
-                .filter(|_| cfg!(target_os = "macos"))
-            {
-                Some(c) => format!("{family} {v} {c}"),
-                None => format!("{family} {v}"),
-            }
-        }
-        None => family.to_owned(),
+    let release_name = version
+        .as_deref()
+        .and_then(crate::parse::version::parse)
+        .and_then(|p| codename(p.0))
+        .filter(|_| cfg!(target_os = "macos"));
+    let name = match (&version, release_name) {
+        (Some(v), Some(c)) => format!("{family} {v} {c}"),
+        (Some(v), None) => format!("{family} {v}"),
+        (None, _) => family.to_owned(),
     };
     OsFacts {
         name,
@@ -303,6 +311,8 @@ pub(crate) fn os() -> OsFacts {
         distro: family.to_owned(),
         distro_id: id.to_owned(),
         release: None,
+        edition: None,
+        codename: release_name.map(str::to_owned),
         name_source: Source::Sysctl,
     }
 }

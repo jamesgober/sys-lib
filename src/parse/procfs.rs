@@ -7,10 +7,12 @@
 
 use core::time::Duration;
 
-use super::{lines, parse_u64, trim};
+use super::{lines, lossy, parse_hex, parse_u64, trim};
 
 /// At most this many lines are read from a line-based file (T7).
 const MAX_LINES: usize = 1 << 16;
+/// At most this many routes are read.
+const MAX_ROUTES: usize = 1 << 16;
 
 /// The fields of `/proc/meminfo` sys-lib uses, in bytes (`kB` there is 1024).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -389,9 +391,94 @@ pub(crate) fn bracketed(data: &[u8]) -> Option<&[u8]> {
     Some(&data[open + 1..close])
 }
 
+/// The interface of the default route in `/proc/net/route`: destination and
+/// mask zero, the `RTF_UP` flag set, the lowest metric.
+pub(crate) fn default_route_v4(data: &[u8]) -> Option<String> {
+    let mut best: Option<(u64, &[u8])> = None;
+    for line in lines(data, MAX_ROUTES).skip(1) {
+        let mut w = line
+            .split(|b| b.is_ascii_whitespace())
+            .filter(|w| !w.is_empty());
+        let (Some(name), Some(destination), Some(_gateway), Some(flags)) =
+            (w.next(), w.next(), w.next(), w.next())
+        else {
+            continue;
+        };
+        let Some(metric) = w.nth(2).and_then(parse_u64) else {
+            continue;
+        };
+        let mask = w.next();
+        let up = parse_hex(flags).is_some_and(|f| f & 1 != 0);
+        if up
+            && destination == b"00000000"
+            && mask == Some(b"00000000")
+            && best.is_none_or(|(m, _)| metric < m)
+        {
+            best = Some((metric, name));
+        }
+    }
+    best.map(|(_, name)| lossy(name, 64))
+}
+
+/// The interface of the default route in `/proc/net/ipv6_route`: destination
+/// `::/0`, up, not the kernel's unreachable entry on `lo`.
+pub(crate) fn default_route_v6(data: &[u8]) -> Option<String> {
+    let mut best: Option<(u64, &[u8])> = None;
+    for line in lines(data, MAX_ROUTES) {
+        let mut w = line
+            .split(|b| b.is_ascii_whitespace())
+            .filter(|w| !w.is_empty());
+        let (Some(destination), Some(prefix)) = (w.next(), w.next()) else {
+            continue;
+        };
+        // Source, its length, the next hop, then the metric.
+        let Some(metric) = w.nth(3).and_then(parse_hex) else {
+            continue;
+        };
+        // Reference count, use count, then the flags and the device.
+        let (Some(flags), Some(name)) = (w.nth(2), w.next()) else {
+            continue;
+        };
+        if destination.iter().all(|&b| b == b'0')
+            && prefix == b"00"
+            && name != b"lo"
+            && parse_hex(flags).is_some_and(|f| f & 1 != 0)
+            && best.is_none_or(|(m, _)| metric < m)
+        {
+            best = Some((metric, name));
+        }
+    }
+    best.map(|(_, name)| lossy(name, 64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_procfs_default_route_v4() {
+        let data =
+            b"Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n\
+            eth1\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\n\
+            eth0\t00000000\t0100A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
+            down0\t00000000\t0100A8C0\t0002\t0\t0\t1\t00000000\t0\t0\t0\n\
+            eth2\t0000A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n";
+        assert_eq!(default_route_v4(data).as_deref(), Some("eth0"));
+        assert_eq!(default_route_v4(b"Iface Destination\n"), None);
+        assert_eq!(default_route_v4(b""), None);
+    }
+
+    #[test]
+    fn test_procfs_default_route_v6() {
+        let zeros = "00000000000000000000000000000000";
+        let data = format!(
+            "{zeros} 00 {zeros} 00 {zeros} ffffffff 00000001 00000000 00200200 lo\n\
+             {zeros} 00 {zeros} 00 fe800000000000000000000000000001 00000400 00000001 00000000 00000003 wlan0\n\
+             fe800000000000000000000000000000 40 {zeros} 00 {zeros} 00000100 00000001 00000000 00000001 wlan0\n"
+        );
+        assert_eq!(default_route_v6(data.as_bytes()).as_deref(), Some("wlan0"));
+        assert_eq!(default_route_v6(b"junk\n"), None);
+    }
 
     const MEMINFO: &[u8] = b"MemTotal:       32737560 kB\nMemFree:         1234560 kB\n\
         MemAvailable:   20000000 kB\nBuffers:          100000 kB\nCached:          9000000 kB\n\

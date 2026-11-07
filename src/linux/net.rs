@@ -7,9 +7,9 @@ use core::ops::ControlFlow;
 
 use super::{Root, join_name};
 use crate::{
-    Bytes, Result,
-    net::{Connections, Counters, InterfaceKind, MacKind, Totals},
-    parse::{lossy, parse_u64, procfs, trim},
+    Bytes, Error, Result,
+    net::{Connections, Counters, Dns, InterfaceKind, MacKind, Totals},
+    parse::{lossy, parse_u64, procfs, resolv, trim},
 };
 
 /// The longest interface name the kernel allows (`IFNAMSIZ` 16 with the NUL).
@@ -130,6 +130,70 @@ pub(crate) struct Details {
 
 /// Whether `name` may build a `/sys` path (E-55: names come from the OS, but
 /// are still validated).
+/// The interface holding the default route: the IPv4 route with the lowest
+/// metric, else the IPv6 one.
+pub(crate) fn default_route(root: &Root) -> Option<String> {
+    let v4 = root.read(
+        "/proc/net/route",
+        1 << 20,
+        "default route",
+        "/proc/net/route",
+    );
+    if let Some(name) = v4.ok().and_then(|d| procfs::default_route_v4(&d)) {
+        return Some(name);
+    }
+    let v6 = root.read(
+        "/proc/net/ipv6_route",
+        1 << 20,
+        "default route",
+        "/proc/net/ipv6_route",
+    );
+    v6.ok().and_then(|d| procfs::default_route_v6(&d))
+}
+
+/// An interface's index.
+pub(crate) fn index(root: &Root, name: &str) -> Option<u32> {
+    if !valid_name(name.as_bytes()) {
+        return None;
+    }
+    let text = root.text(&format!("/sys/class/net/{name}/ifindex"))?;
+    text.parse().ok()
+}
+
+/// What `/etc/resolv.conf` says, and behind a local stub what the stub's own
+/// configuration says.
+pub(crate) fn dns(root: &Root) -> Result<Dns> {
+    const FILE: &str = "/etc/resolv.conf";
+    const UPSTREAM: &str = "/run/systemd/resolve/resolv.conf";
+    let read = |path: &'static str| -> Result<resolv::Resolv> {
+        let data = root.read(path, 1 << 16, "DNS configuration", path)?;
+        let r = resolv::parse(&data);
+        if r.too_large {
+            return Err(Error::TooLarge {
+                what: "DNS configuration",
+                limit: resolv::MAX_ENTRIES as u64,
+            });
+        }
+        Ok(r)
+    };
+    let local = read(FILE)?;
+    let mut out = Dns {
+        servers: local.servers,
+        upstream: Vec::new(),
+        search: local.search,
+    };
+    if !out.servers.is_empty()
+        && out.servers.iter().all(resolv::is_stub)
+        && let Ok(up) = read(UPSTREAM)
+    {
+        out.upstream = up.servers;
+        if out.search.is_empty() {
+            out.search = up.search;
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn valid_name(name: &[u8]) -> bool {
     !name.is_empty()
         && name.len() <= IFNAMSIZ

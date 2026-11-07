@@ -110,3 +110,45 @@ path = "fuzz_targets/procfs.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "smbios"
+path = "fuzz_targets/smbios.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "uevent"
+path = "fuzz_targets/uevent.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resolv"
+path = "fuzz_targets/resolv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "utmp"
+path = "fuzz_targets/utmp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "windows_zones"
+path = "fuzz_targets/windows_zones.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fingerprint"
+path = "fuzz_targets/fingerprint.rs"
+test = false
+doc = false
+bench = false

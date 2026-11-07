@@ -7,8 +7,14 @@ use std::sync::OnceLock;
 use super::{SendRight, SysctlError, ffi, kern_error};
 use crate::{
     Pressure, PressureLevel, Result,
-    mem::{HugePages, MemRaw, MemWant, MemoryEvents, MemorySource, PagingRaw},
+    mem::{HugePages, MemRaw, MemWant, MemoryEvents, MemoryModule, MemorySource, PagingRaw},
 };
+
+/// Apple silicon's memory is one package with the chip. The registry node an
+/// Intel Mac describes its slots in could not be confirmed, so neither answers.
+pub(crate) fn memory_modules() -> Result<Vec<MemoryModule>> {
+    Err(super::unsupported("memory modules"))
+}
 
 pub(crate) fn memory(want: MemWant) -> Result<MemRaw> {
     const WHAT: &str = "memory";

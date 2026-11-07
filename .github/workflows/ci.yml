@@ -51,6 +51,17 @@ jobs:
         run: cargo test --all-features
       - name: Test (no default features)
         run: cargo test --no-default-features
+      # A crash in a test thread loses its output: one at a time, uncaptured,
+      # the log names the test that stopped the run.
+      - name: Name the crashing test
+        if: failure()
+        run: cargo test --lib --all-features -- --test-threads=1 --nocapture
+      # A trap inside CoreFoundation or IOKit prints nothing: lldb prints where.
+      - name: Backtrace of the crash (macOS)
+        if: failure() && runner.os == 'macOS'
+        run: |
+          exe=$(cargo test --lib --all-features --no-run --message-format=json             | jq -r 'select(.profile.test == true and .target.kind[0] == "lib") | .executable' | head -1)
+          lldb --batch -o run -k "thread backtrace" -k quit -- "$exe" --test-threads=1 --nocapture
       - name: Build examples
         run: cargo build --examples
       # Both modes: a doc link to a feature-gated item breaks only when that
@@ -76,6 +87,10 @@ jobs:
           - aarch64-linux-android
           - aarch64-apple-ios
         rust: [stable, "1.89"]
+    env:
+      # blake3 (feature device-id) would build C and assembly for the target,
+      # and these jobs have no compiler for it. Its Rust code checks the same.
+      CARGO_FEATURE_PURE: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -142,6 +157,24 @@ jobs:
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation"
           PROPTEST_CASES: "16"
+
+  # A DLL in the import table that a stripped-down Windows lacks stops the whole
+  # program before `main`, so a real binary runs where the fewest DLLs exist.
+  nanoserver:
+    name: Nano Server
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build a static binary
+        env:
+          RUSTFLAGS: -Ctarget-feature=+crt-static
+        run: cargo build --example summary --features device-id
+      - name: Run it on Nano Server
+        shell: bash
+        run: |
+          mkdir nano && cp target/debug/examples/summary.exe nano/
+          docker run --rm -v "$(cygpath -w "$PWD/nano"):C:\\app" mcr.microsoft.com/windows/nanoserver:ltsc2022 'C:\app\summary.exe'
 
   fuzz-smoke:
     name: Fuzz (smoke, 20 s per target)

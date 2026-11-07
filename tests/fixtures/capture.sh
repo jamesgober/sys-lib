@@ -26,7 +26,7 @@
 set -euo pipefail
 export LC_ALL=C
 
-readonly SCRIPT_VERSION=3
+readonly SCRIPT_VERSION=4
 readonly MAX_BYTES=1048576
 
 die() { echo "capture.sh: $*" >&2; exit 1; }
@@ -85,6 +85,7 @@ for f in meminfo stat loadavg uptime cpuinfo vmstat diskstats \
          pressure/memory pressure/cpu pressure/io \
          net/dev net/route net/ipv6_route net/snmp net/sockstat net/sockstat6 \
          sys/kernel/osrelease sys/kernel/ostype sys/kernel/version sys/kernel/hostname \
+         sys/kernel/arch \
          sys/fs/file-nr xen/capabilities 1/cgroup \
          self/status self/cgroup self/mountinfo self/statm self/stat self/limits self/io; do
     copy "/proc/$f"
@@ -123,8 +124,9 @@ each "/sys/class/power_supply/*" type scope online status capacity uevent
 each "/sys/block/*" removable dev
 each "/sys/block/*/queue" rotational
 # DMI: the world-readable files only (0444); serials and UUIDs are 0400 and never copied.
-each /sys/class/dmi/id chassis_type sys_vendor product_name product_family product_version \
-    board_vendor board_name bios_vendor
+each /sys/class/dmi/id chassis_type chassis_asset_tag sys_vendor product_name product_family \
+    product_version board_vendor board_name board_version bios_vendor bios_version bios_date
+mark /sys/firmware/efi
 copy /sys/firmware/acpi/pm_profile
 copy /sys/hypervisor/type
 copy /sys/kernel/mm/transparent_hugepage/enabled

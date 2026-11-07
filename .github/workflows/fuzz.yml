@@ -36,6 +36,12 @@ jobs:
           - instance_id
           - bytes_display
           - procfs
+          - smbios
+          - uevent
+          - resolv
+          - utmp
+          - windows_zones
+          - fingerprint
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@nightly

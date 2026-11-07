@@ -63,9 +63,15 @@ macro_rules! same_layout {
     };
 }
 
-// The live-reading interface, answered `Unsupported` until a platform defines
-// its own (see the module's documentation).
+// The readings, answered `Unsupported` until a platform defines its own (see
+// the module's documentation).
+mod detection;
 mod pending;
+
+// CPUID: shared by the x86 backends.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[allow(unsafe_code)]
+mod x86;
 
 // Linux and Android on 64-bit targets. Struct layouts are verified for LP64
 // (glibc, musl, bionic); a 32-bit Linux target has no verified layout yet and
@@ -139,6 +145,9 @@ pub(crate) struct OsFacts {
     pub(crate) distro: String,
     pub(crate) distro_id: String,
     pub(crate) release: Option<ReleaseFacts>,
+    /// "Professional", a Linux `VARIANT_ID`.
+    pub(crate) edition: Option<String>,
+    pub(crate) codename: Option<String>,
     pub(crate) name_source: Source,
 }
 
@@ -171,6 +180,30 @@ pub(crate) struct CpuFacts {
     /// A name that needs no cleaning (ARM cores named from their part numbers).
     pub(crate) name: Option<String>,
     pub(crate) vendor: Vendor,
+}
+
+/// The CPU's layout as a platform reports it; `crate::cpu` sorts and caches it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TopologyFacts {
+    pub(crate) topology: crate::cpu::Topology,
+    pub(crate) caches: Vec<crate::cpu::Cache>,
+    pub(crate) numa: Vec<crate::cpu::NumaNode>,
+}
+
+/// The machine's firmware facts as a platform reports them; `crate::host`
+/// keeps them. No serial numbers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HardwareFacts {
+    pub(crate) model_vendor: Option<String>,
+    pub(crate) model_name: Option<String>,
+    pub(crate) model_family: Option<String>,
+    pub(crate) firmware_kind: Option<crate::host::FirmwareKind>,
+    pub(crate) firmware_vendor: Option<String>,
+    pub(crate) firmware_version: Option<String>,
+    pub(crate) firmware_date: Option<String>,
+    pub(crate) board_vendor: Option<String>,
+    pub(crate) board_name: Option<String>,
+    pub(crate) board_version: Option<String>,
 }
 
 /// A filesystem's type name and whether its locks may not hold across machines.

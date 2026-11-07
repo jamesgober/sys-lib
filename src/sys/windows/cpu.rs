@@ -6,7 +6,11 @@ use std::{
     time::Duration,
 };
 
-use super::{Key, ffi, hundred_ns, non_negative, os_error, unsupported};
+use super::{
+    Key, ffi, hundred_ns, non_negative, os_error,
+    topology::{Records, count_records},
+    unsupported,
+};
 use crate::{
     Error, Mhz, Pressure, Result,
     cpu::{CpuQuota, Frequency, Load, States, Times, Vendor},
@@ -79,60 +83,9 @@ pub(crate) fn cpu() -> CpuFacts {
 /// Counts the `relationship` records of `GetLogicalProcessorInformationEx`
 /// (cores or packages) across every processor group.
 fn count_relations(relationship: i32) -> Option<usize> {
-    let mut len = 0u32;
-    // SAFETY: a null buffer with length 0 asks for the size needed.
-    unsafe {
-        ffi::GetLogicalProcessorInformationEx(relationship, std::ptr::null_mut(), &raw mut len)
-    };
-    if len == 0 || len > 16 << 20 {
-        return None;
-    }
-    // u64 elements keep the records 8-byte aligned, as the structs require.
-    let mut buf = vec![0u64; (len as usize).div_ceil(8)];
-    // SAFETY: `buf` holds at least `len` writable bytes.
-    let ok = unsafe {
-        ffi::GetLogicalProcessorInformationEx(
-            relationship,
-            buf.as_mut_ptr().cast::<u8>(),
-            &raw mut len,
-        )
-    };
-    if ok == 0 {
-        return None;
-    }
-    // SAFETY: `buf` is `buf.len() * 8` initialised bytes; a u8 view of it is valid.
-    let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len() * 8) };
-    let count = count_records(&bytes[..(len as usize).min(bytes.len())], relationship);
+    let records = Records::read(relationship)?;
+    let count = count_records(records.bytes(), relationship);
     (count > 0).then_some(count)
-}
-
-/// The records of kind `relationship` in a `GetLogicalProcessorInformationEx`
-/// buffer; parsing stops at the first record that does not fit.
-fn count_records(bytes: &[u8], relationship: i32) -> usize {
-    let mut count = 0usize;
-    let mut at = 0usize;
-    while at + 8 <= bytes.len() {
-        let field = |o: usize| {
-            u32::from_ne_bytes([
-                bytes[at + o],
-                bytes[at + o + 1],
-                bytes[at + o + 2],
-                bytes[at + o + 3],
-            ])
-        };
-        let (kind, size) = (
-            field(ffi::lpi::RELATIONSHIP) as i32,
-            field(ffi::lpi::SIZE) as usize,
-        );
-        if size == 0 || at + size > bytes.len() {
-            break;
-        }
-        if kind == relationship {
-            count += 1;
-        }
-        at += size;
-    }
-    count
 }
 
 pub(crate) fn cpu_available(logical: usize) -> usize {

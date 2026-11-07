@@ -1,16 +1,18 @@
 //! Disks: `statfs` for one path, `getfsstat` for the mount table (macOS), and
-//! the IOKit block-storage statistics for I/O (macOS).
+//! on macOS the IOKit block-storage statistics for I/O and device
+//! characteristics for the medium, and `getattrlist` for the volume name.
 
-#[cfg(target_os = "macos")]
-use std::os::unix::ffi::OsStringExt;
-use std::{ffi::CStr, mem::MaybeUninit, os::unix::ffi::OsStrExt, path::Path};
+use std::{
+    ffi::CStr,
+    mem::MaybeUninit,
+    os::unix::ffi::{OsStrExt, OsStringExt},
+    path::Path,
+};
 
 use super::{ffi, last_errno, os_error};
-#[cfg(target_os = "macos")]
-use crate::disk::DiskKind;
 use crate::{
     Error, Pressure, Result,
-    disk::{Disk, DiskRaw, ListOptions, Space},
+    disk::{Disk, DiskKind, DiskRaw, ListOptions, Space},
 };
 
 /// `MAXPATHLEN`: the kernel refuses longer paths, so they never need the heap.
@@ -88,24 +90,143 @@ pub(crate) fn disks(options: &ListOptions) -> Result<Vec<Disk>> {
         let Some(class) = classify(st, options) else {
             continue;
         };
-        let mount_point = std::path::PathBuf::from(std::ffi::OsString::from_vec(
-            super::c_array_bytes(&st.mntonname),
-        ));
         // A network mount is here only when the caller included it, accepting
         // the risk of a hang on a dead one: its space is read like the rest.
-        let space = Some(fresh_space(&mount_point).unwrap_or_else(|| space_of(st)));
-        out.push(Disk {
-            device: crate::parse::lossy(&super::c_array_bytes(&st.mntfromname), PATH_MAX),
-            mount_point,
-            label: None,
-            filesystem: crate::parse::lossy(&super::c_array_bytes(&st.fstypename), 16),
-            kind: class,
-            space,
-            read_only: st.flags & ffi::MNT_RDONLY != 0,
-            removable: st.flags & ffi::MNT_REMOVABLE != 0,
-        });
+        let space = fresh_space(&mount_point_of(st)).unwrap_or_else(|| space_of(st));
+        out.push(disk_from(st, class, space));
     }
     Ok(out)
+}
+
+/// A `statfs`'s mount point.
+fn mount_point_of(st: &ffi::Statfs) -> std::path::PathBuf {
+    std::path::PathBuf::from(std::ffi::OsString::from_vec(super::c_array_bytes(
+        &st.mntonname,
+    )))
+}
+
+/// The `Disk` for a mount, the same from the list and from `disk_of`.
+fn disk_from(st: &ffi::Statfs, class: DiskKind, space: Space) -> Disk {
+    Disk {
+        device: crate::parse::lossy(&super::c_array_bytes(&st.mntfromname), PATH_MAX),
+        mount_point: mount_point_of(st),
+        label: volume_label(st, class),
+        filesystem: crate::parse::lossy(&super::c_array_bytes(&st.fstypename), 16),
+        kind: medium(st, class),
+        space: Some(space),
+        read_only: st.flags & ffi::MNT_RDONLY != 0,
+        removable: st.flags & ffi::MNT_REMOVABLE != 0,
+    }
+}
+
+/// The mount holding `path`, from one `statfs`, which names the mount without
+/// reading a table. Every kind of mount is answered: the caller chose the path.
+pub(crate) fn disk_of(path: &Path) -> Result<Disk> {
+    const WHAT: &str = "disk of a path";
+    let mut buf = [0u8; PATH_MAX];
+    let path = c_path(path, &mut buf)?;
+    let st = statfs(path).map_err(|code| os_error(WHAT, "statfs", code))?;
+    let every = ListOptions {
+        include_network: true,
+        include_pseudo: true,
+        include_duplicates: true,
+        ..ListOptions::default()
+    };
+    let class = classify(&st, &every).unwrap_or(DiskKind::Unknown);
+    Ok(disk_from(&st, class, space_of(&st)))
+}
+
+/// `Ssd` or `Hdd` for a fixed local disk, from IOKit; every other kind stays.
+#[cfg(target_os = "macos")]
+fn medium(st: &ffi::Statfs, class: DiskKind) -> DiskKind {
+    if class != DiskKind::Unknown {
+        return class;
+    }
+    bsd_name(&super::c_array_bytes(&st.mntfromname))
+        .and_then(|name| iokit::medium(&name))
+        .unwrap_or(class)
+}
+
+/// iOS has no public IOKit.
+#[cfg(not(target_os = "macos"))]
+fn medium(_st: &ffi::Statfs, class: DiskKind) -> DiskKind {
+    class
+}
+
+/// The BSD name of a mount's device: `/dev/disk3s1s1` is `disk3s1s1`, and an
+/// APFS snapshot names its volume after an `@` (`snapshot@/dev/disk1s5`).
+/// Anything else (`map auto_home`, a server path) has none.
+#[cfg(any(target_os = "macos", test))]
+fn bsd_name(device: &[u8]) -> Option<std::ffi::CString> {
+    let device = device.rsplit(|&b| b == b'@').next()?;
+    let name = device.strip_prefix(b"/dev/")?;
+    let valid = !name.is_empty() && name.iter().all(u8::is_ascii_alphanumeric);
+    if valid {
+        std::ffi::CString::new(name).ok()
+    } else {
+        None
+    }
+}
+
+/// The name of the volume mounted here, as Finder shows it. Network and pseudo
+/// mounts are not asked: `getattrlist` would wait on a dead server (threat T8).
+#[cfg(target_os = "macos")]
+fn volume_label(st: &ffi::Statfs, class: DiskKind) -> Option<String> {
+    if matches!(class, DiskKind::Network | DiskKind::Virtual) {
+        return None;
+    }
+    let mut path = [0u8; PATH_MAX];
+    let path = c_path(&mount_point_of(st), &mut path).ok()?;
+    let mut list = ffi::Attrlist {
+        bitmapcount: ffi::ATTR_BIT_MAP_COUNT,
+        volattr: ffi::ATTR_VOL_INFO | ffi::ATTR_VOL_NAME,
+        ..ffi::Attrlist::default()
+    };
+    // Room for the length, the `attrreference_t`, and a name of `MAXPATHLEN`.
+    let mut buf = [0u8; LABEL_NAME + PATH_MAX];
+    // SAFETY: `path` is NUL-terminated, `list` is a valid `attrlist`, and `buf`
+    // is `buf.len()` writable bytes, of which the kernel writes at most that many.
+    let rc = unsafe {
+        ffi::getattrlist(
+            path.as_ptr(),
+            (&raw mut list).cast::<core::ffi::c_void>(),
+            buf.as_mut_ptr().cast::<core::ffi::c_void>(),
+            buf.len(),
+            ffi::FSOPT_NOFOLLOW,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    parse_label(&buf)
+}
+
+/// iOS keeps the volumes to itself.
+#[cfg(not(target_os = "macos"))]
+fn volume_label(_st: &ffi::Statfs, _class: DiskKind) -> Option<String> {
+    None
+}
+
+/// Where an `ATTR_VOL_NAME` answer's `attrreference_t` ends.
+#[cfg(any(target_os = "macos", test))]
+const LABEL_NAME: usize = 12;
+
+/// The name in a `getattrlist` answer: a `u32` total length, then an
+/// `attrreference_t` (the data's offset from the reference itself, and its
+/// length with the NUL), then the data. Everything is checked against the
+/// total and the buffer.
+#[cfg(any(target_os = "macos", test))]
+fn parse_label(buf: &[u8]) -> Option<String> {
+    const REFERENCE: usize = 4;
+    let total = usize::try_from(super::u32_at(buf, 0)?).ok()?;
+    let buf = buf.get(..total)?;
+    let offset = usize::try_from(super::i32_at(buf, REFERENCE)?).ok()?;
+    let len = usize::try_from(super::u32_at(buf, REFERENCE + 4)?).ok()?;
+    let start = REFERENCE.checked_add(offset)?;
+    let name = buf.get(start..start.checked_add(len)?)?;
+    let name = name.split(|&b| b == 0).next()?;
+    let text = crate::parse::lossy(name, PATH_MAX);
+    (!text.is_empty()).then_some(text)
 }
 
 /// `statfs` on a mount point, for numbers the kernel refreshes.
@@ -124,9 +245,8 @@ fn fresh_space(mount_point: &Path) -> Option<Space> {
 ///   the APFS helper volumes (VM, Preboot, Update, xarts, iSCPreboot,
 ///   Hardware) and the Data volume, which share the root volume's container,
 ///   so its free space is counted once (E-39).
-/// - Removable media (`MNT_REMOVABLE`): `Removable`; anything else `Unknown`
-///   until solid-state detection (0.5).
-#[cfg(target_os = "macos")]
+/// - Removable media (`MNT_REMOVABLE`): `Removable`; anything else `Unknown`,
+///   which `medium` then refines.
 fn classify(st: &ffi::Statfs, options: &ListOptions) -> Option<DiskKind> {
     let fstype = super::c_array_bytes(&st.fstypename);
     let pseudo = matches!(fstype.as_slice(), b"devfs" | b"autofs");
@@ -243,72 +363,32 @@ pub(crate) fn disk_pressure() -> Result<Option<Pressure>> {
     Ok(None)
 }
 
-/// The IOKit side of disk I/O: every object is released by its owner on every
+/// The IOKit side of disks: every object is released by its owner on every
 /// path.
 #[cfg(target_os = "macos")]
 mod iokit {
-    use core::{
-        ffi::{c_char, c_void},
-        time::Duration,
-    };
+    use core::time::Duration;
+    use std::ffi::CStr;
 
-    use super::super::{ffi, kern_error};
-    use crate::{Error, Result, disk::DiskRaw};
+    use super::super::{
+        ffi,
+        iokit::{Cf, Io, Ref},
+        kern_error,
+    };
+    use crate::{
+        Error, Result,
+        disk::{DiskKind, DiskRaw},
+    };
 
     const WHAT: &str = "disk I/O";
 
     /// The most block-storage drivers read; more is `TooLarge`.
     const MAX_DRIVERS: usize = 4_096;
 
-    /// A CoreFoundation object this code owns (one reference), released on drop.
-    pub(super) struct Cf(ffi::CfRef);
-
-    impl Cf {
-        fn new(object: ffi::CfRef) -> Option<Cf> {
-            (!object.is_null()).then_some(Cf(object))
-        }
-
-        /// An immutable UTF-8 `CFString`.
-        fn string(text: &str) -> Result<Cf> {
-            let len = ffi::CfIndex::try_from(text.len()).unwrap_or(0);
-            // SAFETY: `text` is `len` readable bytes; the null allocator is
-            // the default one.
-            let object = unsafe {
-                ffi::CFStringCreateWithBytes(
-                    core::ptr::null(),
-                    text.as_ptr(),
-                    len,
-                    ffi::CF_STRING_ENCODING_UTF8,
-                    0,
-                )
-            };
-            Cf::new(object).ok_or_else(|| kern_error(WHAT, "CFStringCreateWithBytes", 0))
-        }
-
-        fn is(&self, type_id: ffi::CfTypeId) -> bool {
-            // SAFETY: `self.0` is a live CoreFoundation object.
-            unsafe { ffi::CFGetTypeID(self.0) == type_id }
-        }
-    }
-
-    impl Drop for Cf {
-        fn drop(&mut self) {
-            // SAFETY: this value owns one reference, released once.
-            unsafe { ffi::CFRelease(self.0) };
-        }
-    }
-
-    /// An IOKit object this code owns, released on drop.
-    pub(super) struct Io(ffi::IoObject);
-
-    impl Drop for Io {
-        fn drop(&mut self) {
-            if self.0 != 0 {
-                // SAFETY: this value owns the object, released once.
-                unsafe { ffi::IOObjectRelease(self.0) };
-            }
-        }
-    }
+    /// The most registry levels walked from a volume to its device: an APFS
+    /// volume sits on a container on a partition on a whole disk, a few levels
+    /// each.
+    const MAX_DEPTH: usize = 32;
 
     /// The property names, created once per reading.
     pub(super) struct Keys {
@@ -326,23 +406,22 @@ mod iokit {
         /// The `IOBlockStorageDriver.h` statistics keys (times in nanoseconds)
         /// and `kIOBSDNameKey`.
         pub(super) fn new() -> Result<Keys> {
+            let key = |text| Cf::string(WHAT, text);
             Ok(Keys {
-                statistics: Cf::string("Statistics")?,
-                bytes_read: Cf::string("Bytes (Read)")?,
-                bytes_written: Cf::string("Bytes (Write)")?,
-                reads: Cf::string("Operations (Read)")?,
-                writes: Cf::string("Operations (Write)")?,
-                read_time: Cf::string("Total Time (Read)")?,
-                write_time: Cf::string("Total Time (Write)")?,
-                bsd_name: Cf::string("BSD Name")?,
+                statistics: key("Statistics")?,
+                bytes_read: key("Bytes (Read)")?,
+                bytes_written: key("Bytes (Write)")?,
+                reads: key("Operations (Read)")?,
+                writes: key("Operations (Write)")?,
+                read_time: key("Total Time (Read)")?,
+                write_time: key("Total Time (Write)")?,
+                bsd_name: key("BSD Name")?,
             })
         }
     }
 
     /// Calls `f` with each `IOBlockStorageDriver` and its position.
-    pub(super) fn for_each_driver(
-        mut f: impl FnMut(ffi::IoObject, usize) -> Result<()>,
-    ) -> Result<()> {
+    pub(super) fn for_each_driver(mut f: impl FnMut(&Io, usize) -> Result<()>) -> Result<()> {
         // SAFETY: the class name is NUL-terminated.
         let matching = unsafe { ffi::IOServiceMatching(c"IOBlockStorageDriver".as_ptr()) };
         if matching.is_null() {
@@ -361,17 +440,18 @@ mod iokit {
         if kr != ffi::KERN_SUCCESS {
             return Err(kern_error(WHAT, "IOServiceGetMatchingServices", kr));
         }
-        let iterator = Io(iterator);
+        let Some(iterator) = Io::new(iterator) else {
+            return Ok(());
+        };
         for n in 0..=MAX_DRIVERS {
             // SAFETY: `iterator` is a live iterator this function owns.
-            let driver = Io(unsafe { ffi::IOIteratorNext(iterator.0) });
-            if driver.0 == 0 {
+            let Some(driver) = Io::new(unsafe { ffi::IOIteratorNext(iterator.0) }) else {
                 return Ok(());
-            }
+            };
             if n == MAX_DRIVERS {
                 break;
             }
-            f(driver.0, n)?;
+            f(&driver, n)?;
         }
         Err(Error::TooLarge {
             what: "block storage drivers",
@@ -380,23 +460,19 @@ mod iokit {
     }
 
     /// A driver's `Statistics` dictionary, or `None` when it has none.
-    pub(super) fn statistics(driver: ffi::IoObject, keys: &Keys) -> Option<DiskRaw> {
-        // SAFETY: `driver` is a live registry entry; the key is a live
-        // `CFString`; the null allocator is the default one. The result, if
-        // any, carries one reference, owned by `stats`.
-        let stats = Cf::new(unsafe {
-            ffi::IORegistryEntryCreateCFProperty(driver, keys.statistics.0, core::ptr::null(), 0)
-        })?;
-        if !stats.is(ffi::CFDictionaryGetTypeID()) {
+    pub(super) fn statistics(driver: &Io, keys: &Keys) -> Option<DiskRaw> {
+        let stats = driver.property(&keys.statistics)?;
+        let stats = stats.get();
+        if !stats.is_dictionary() {
             return None;
         }
-        let read_time = number(&stats, &keys.read_time);
-        let write_time = number(&stats, &keys.write_time);
+        let read_time = number(stats, &keys.read_time);
+        let write_time = number(stats, &keys.write_time);
         Some(DiskRaw {
-            read: number(&stats, &keys.bytes_read),
-            written: number(&stats, &keys.bytes_written),
-            reads: number(&stats, &keys.reads),
-            writes: number(&stats, &keys.writes),
+            read: number(stats, &keys.bytes_read),
+            written: number(stats, &keys.bytes_written),
+            reads: number(stats, &keys.reads),
+            writes: number(stats, &keys.writes),
             busy: None,
             op_time: Some(Duration::from_nanos(read_time.saturating_add(write_time))),
             disks: 1,
@@ -405,71 +481,50 @@ mod iokit {
 
     /// An integer value of a dictionary; 0 when missing, negative, or not a
     /// number.
-    fn number(dictionary: &Cf, key: &Cf) -> u64 {
-        // SAFETY: both are live objects; the value is borrowed (get rule), valid
-        // while `dictionary` is.
-        let value = unsafe { ffi::CFDictionaryGetValue(dictionary.0, key.0) };
-        if value.is_null() {
-            return 0;
-        }
-        // SAFETY: `value` is a live object borrowed from `dictionary`.
-        let type_id = unsafe { ffi::CFGetTypeID(value) };
-        if type_id != ffi::CFNumberGetTypeID() {
-            return 0;
-        }
-        let mut n: i64 = 0;
-        // SAFETY: `value` is a `CFNumber` and `n` is a writable 64-bit integer,
-        // the size of `kCFNumberSInt64Type`.
-        let ok = unsafe {
-            ffi::CFNumberGetValue(
-                value,
-                ffi::CF_NUMBER_SINT64_TYPE,
-                (&raw mut n).cast::<c_void>(),
-            )
-        };
-        if ok == 0 {
-            return 0;
-        }
-        u64::try_from(n).unwrap_or(0)
+    fn number(dictionary: Ref<'_>, key: &Cf) -> u64 {
+        dictionary
+            .value(key)
+            .and_then(Ref::int)
+            .and_then(|n| u64::try_from(n).ok())
+            .unwrap_or(0)
     }
 
     /// The BSD name (`disk0`) of the driver's whole-disk media, its first child
     /// in the service plane, as `iostat` finds it.
-    pub(super) fn bsd_name(driver: ffi::IoObject, keys: &Keys) -> Option<String> {
-        let mut child: ffi::IoObject = 0;
-        // SAFETY: `driver` is a live registry entry, the plane name is
-        // NUL-terminated, and `child` is writable; a child returned is owned by
-        // `media` below.
-        let kr = unsafe {
-            ffi::IORegistryEntryGetChildEntry(driver, c"IOService".as_ptr(), &raw mut child)
-        };
-        let media = Io(child);
-        if kr != ffi::KERN_SUCCESS || media.0 == 0 {
-            return None;
-        }
-        // SAFETY: as in `statistics`, for the media entry.
-        let name = Cf::new(unsafe {
-            ffi::IORegistryEntryCreateCFProperty(media.0, keys.bsd_name.0, core::ptr::null(), 0)
-        })?;
-        if !name.is(ffi::CFStringGetTypeID()) {
-            return None;
-        }
-        let mut buf = [0 as c_char; 64];
-        // SAFETY: `name` is a `CFString` and `buf` is 64 writable bytes.
-        let ok = unsafe {
-            ffi::CFStringGetCString(
-                name.0,
-                buf.as_mut_ptr(),
-                buf.len() as ffi::CfIndex,
-                ffi::CF_STRING_ENCODING_UTF8,
-            )
-        };
-        if ok == 0 {
-            return None;
-        }
-        let bytes = super::super::c_array_bytes(&buf);
-        let text = crate::parse::lossy(&bytes, 64);
+    pub(super) fn bsd_name(driver: &Io, keys: &Keys) -> Option<String> {
+        let media = driver.child()?;
+        let name = media.property(&keys.bsd_name)?;
+        let mut buf = [0u8; 64];
+        let text = crate::parse::lossy(name.get().text(&mut buf)?, 64);
         (!text.is_empty()).then_some(text)
+    }
+
+    /// What a BSD device is stored on: `Medium Type` in the `Device
+    /// Characteristics` of the nearest ancestor that has them. `None` when none
+    /// says (a virtual disk).
+    pub(super) fn medium(name: &CStr) -> Option<DiskKind> {
+        let characteristics = Cf::string(WHAT, "Device Characteristics").ok()?;
+        let medium_type = Cf::string(WHAT, "Medium Type").ok()?;
+        let mut entry = Io::bsd_device(name)?;
+        for _ in 0..MAX_DEPTH {
+            entry = entry.parent()?;
+            if let Some(found) = entry.property(&characteristics) {
+                let mut buf = [0u8; 32];
+                let value = found.get().value(&medium_type)?.text(&mut buf)?;
+                return super::medium_kind(value);
+            }
+        }
+        None
+    }
+}
+
+/// The kind a `Medium Type` value names (IOStorageDeviceCharacteristics.h).
+#[cfg(any(target_os = "macos", test))]
+fn medium_kind(value: &[u8]) -> Option<DiskKind> {
+    match value {
+        b"Solid State" => Some(DiskKind::Ssd),
+        b"Rotational" => Some(DiskKind::Hdd),
+        _ => None,
     }
 }
 
@@ -512,7 +567,82 @@ mod tests {
         assert_eq!(space_of(&st).total.raw(), u64::MAX);
     }
 
-    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_disk_apple_bsd_name_from_device() {
+        assert_eq!(
+            bsd_name(b"/dev/disk3s1s1").unwrap().as_c_str(),
+            c"disk3s1s1"
+        );
+        let snapshot = bsd_name(b"com.apple.os.update-0A1B@/dev/disk1s5");
+        assert_eq!(snapshot.unwrap().as_c_str(), c"disk1s5");
+        for device in [
+            &b"map auto_home"[..],
+            b"devfs",
+            b"//user@server/share",
+            b"/dev/",
+            b"/dev/../etc",
+            b"/dev/disk0 s1",
+        ] {
+            assert_eq!(bsd_name(device), None, "{device:?}");
+        }
+    }
+
+    #[test]
+    fn test_disk_apple_medium_values() {
+        assert_eq!(medium_kind(b"Solid State"), Some(DiskKind::Ssd));
+        assert_eq!(medium_kind(b"Rotational"), Some(DiskKind::Hdd));
+        assert_eq!(medium_kind(b"Tape"), None);
+        assert_eq!(medium_kind(b""), None);
+    }
+
+    /// A `getattrlist` answer holding `name` with its NUL.
+    fn label_answer(name: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let total = (LABEL_NAME + name.len() + 1) as u32;
+        buf.extend(total.to_ne_bytes());
+        // The data follows the eight-byte reference.
+        buf.extend(8i32.to_ne_bytes());
+        buf.extend((name.len() as u32 + 1).to_ne_bytes());
+        buf.extend(name);
+        buf.push(0);
+        buf
+    }
+
+    #[test]
+    fn test_disk_apple_label_from_attribute_buffer() {
+        let mut buf = label_answer("Macintosh HD".as_bytes());
+        assert_eq!(parse_label(&buf).as_deref(), Some("Macintosh HD"));
+        buf.resize(1036, 0);
+        assert_eq!(parse_label(&buf).as_deref(), Some("Macintosh HD"));
+        assert_eq!(
+            parse_label(&label_answer("\u{e9}t\u{e9}".as_bytes())).as_deref(),
+            Some("\u{e9}t\u{e9}")
+        );
+        assert_eq!(parse_label(&label_answer(b"")), None, "an unnamed volume");
+    }
+
+    #[test]
+    fn test_disk_apple_label_rejects_bad_offsets() {
+        let good = label_answer(b"Data");
+        assert_eq!(parse_label(&good[..6]), None);
+        assert_eq!(parse_label(&[]), None);
+        // The total runs past the buffer.
+        let mut long = good.clone();
+        long[..4].copy_from_slice(&5000u32.to_ne_bytes());
+        assert_eq!(parse_label(&long), None);
+        // A negative offset, and one past the end.
+        let mut negative = good.clone();
+        negative[4..8].copy_from_slice(&(-8i32).to_ne_bytes());
+        assert_eq!(parse_label(&negative), None);
+        let mut past = good.clone();
+        past[4..8].copy_from_slice(&4000i32.to_ne_bytes());
+        assert_eq!(parse_label(&past), None);
+        // A length that overflows the end.
+        let mut huge = good;
+        huge[8..12].copy_from_slice(&u32::MAX.to_ne_bytes());
+        assert_eq!(parse_label(&huge), None);
+    }
+
     fn mount(fstype: &[u8], flags: u32) -> ffi::Statfs {
         // SAFETY: a zeroed `statfs` is valid (integers and arrays only).
         let mut st: ffi::Statfs = unsafe { MaybeUninit::zeroed().assume_init() };
@@ -523,7 +653,6 @@ mod tests {
         st
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn test_disk_apple_classify_by_type_and_flags() {
         use ffi::{MNT_DONTBROWSE, MNT_LOCAL, MNT_REMOVABLE};
@@ -578,6 +707,24 @@ mod tests {
         for (name, _) in &each {
             assert!(name.starts_with("disk"), "{name}");
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_disk_apple_live_disk_of() {
+        let root = disk_of(Path::new("/")).unwrap();
+        assert_eq!(root.mount_point, Path::new("/"));
+        assert!(root.device.starts_with("/dev/"), "{root:?}");
+        assert!(root.space.is_some_and(|s| s.total.raw() > 0));
+        let listed = disks(&ListOptions::default()).unwrap();
+        let listed = listed.iter().find(|d| d.mount_point == Path::new("/"));
+        assert_eq!(root.kind, listed.unwrap().kind);
+        let dev = disk_of(Path::new("/dev")).unwrap();
+        assert_eq!((dev.kind, dev.label), (DiskKind::Virtual, None));
+        assert!(matches!(
+            disk_of(Path::new("/definitely/not/here/sys-lib")),
+            Err(Error::NotFound { .. })
+        ));
     }
 
     #[test]

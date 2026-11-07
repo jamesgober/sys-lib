@@ -14,15 +14,21 @@
 
 pub(crate) mod cgroup;
 pub(crate) mod cpu;
+#[cfg(feature = "device-id")]
+pub(crate) mod device;
 pub(crate) mod disk;
+pub(crate) mod hardware;
 pub(crate) mod host;
 #[cfg(test)]
-mod hostile;
+pub(crate) mod hostile;
 pub(crate) mod mem;
 pub(crate) mod net;
 pub(crate) mod os;
+pub(crate) mod power;
 pub(crate) mod process;
 pub(crate) mod stat;
+pub(crate) mod topology;
+pub(crate) mod virt;
 
 use core::ops::ControlFlow;
 use std::{
@@ -245,6 +251,23 @@ impl Root {
         }
     }
 
+    /// Reads a file into `out`, at most its length, with no other copy made:
+    /// for identifiers, which go only into a buffer that is wiped (threat T1).
+    #[cfg_attr(not(feature = "device-id"), allow(dead_code))]
+    pub(crate) fn read_into(&self, abs: &str, out: &mut [u8]) -> Result<usize, io::ErrorKind> {
+        let mut file = File::open(self.resolve(abs)).map_err(|e| e.kind())?;
+        let mut len = 0;
+        while len < out.len() {
+            match file.read(&mut out[len..]) {
+                Ok(0) => break,
+                Ok(n) => len += n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e.kind()),
+            }
+        }
+        Ok(len)
+    }
+
     /// A small file's trimmed text, or `None` if it is missing or unreadable.
     pub(crate) fn text(&self, abs: &str) -> Option<String> {
         self.with(abs, "file", "file", |d| {
@@ -253,14 +276,12 @@ impl Root {
         .ok()
     }
 
-    #[allow(dead_code)] // container and virtualization markers, 0.4
     pub(crate) fn exists(&self, abs: &str) -> bool {
         self.resolve(abs).exists()
     }
 
     /// The target of a symbolic link. Fixture trees hold no real links; they
     /// record the target in `<path>.link`.
-    #[cfg_attr(not(test), allow(dead_code))] // the time zone and block devices, 0.4
     pub(crate) fn link_target(&self, abs: &str) -> Option<String> {
         #[cfg(test)]
         if let Some(log) = &self.log {
@@ -275,7 +296,6 @@ impl Root {
     }
 
     /// The names in a directory, at most `max`, sorted.
-    #[allow(dead_code)] // disks, interfaces, and sensors, 0.4
     pub(crate) fn dir_names(&self, abs: &str, max: usize) -> Vec<String> {
         let Ok(entries) = std::fs::read_dir(self.resolve(abs)) else {
             return Vec::new();
@@ -390,7 +410,39 @@ mod tests {
             "/proc/self/io",
             "/proc/sys/kernel/hostname",
             "/proc/sys/kernel/osrelease",
+            "/proc/sys/kernel/arch",
             "/proc/sys/fs/file-nr",
+            "/proc/sys/fs/binfmt_misc/WSLInterop",
+            "/proc/1/cgroup",
+            "/proc/vz",
+            "/proc/bc",
+            "/proc/xen/capabilities",
+            "/proc/device-tree/hypervisor/compatible",
+            "/proc/device-tree/model",
+            "/proc/device-tree/chassis-type",
+            "/proc/net/route",
+            "/proc/net/ipv6_route",
+            "/.dockerenv",
+            "/etc/machine-id",
+            "/etc/machine-info",
+            "/etc/localtime",
+            "/etc/timezone",
+            "/etc/resolv.conf",
+            "/run/.containerenv",
+            "/run/systemd/container",
+            "/run/systemd/resolve/resolv.conf",
+            "/run/utmp",
+            "/var/run/utmp",
+            "/var/lib/dbus/machine-id",
+            "/var/run/secrets/kubernetes.io/serviceaccount",
+            "/sys/hypervisor/type",
+            "/sys/firmware/efi",
+            "/sys/firmware/acpi/pm_profile",
+            "/sys/firmware/dmi/tables/DMI",
+            "/sys/class/dmi/id",
+            "/sys/class/power_supply",
+            "/sys/devices/cpu_core/cpus",
+            "/sys/devices/cpu_atom/cpus",
             "/sys/devices/system/cpu/present",
             "/sys/devices/system/cpu/online",
             "/sys/kernel/mm/transparent_hugepage/enabled",
@@ -424,6 +476,31 @@ mod tests {
             "cpufreq/base_frequency",
             "cpufreq/cpuinfo_max_freq",
             "cpufreq/scaling_cur_freq",
+            "cpu_capacity",
+        ];
+        const DMI_FILES: &[&str] = &[
+            "sys_vendor",
+            "product_name",
+            "product_family",
+            "product_version",
+            "board_vendor",
+            "board_name",
+            "board_version",
+            "bios_vendor",
+            "bios_version",
+            "bios_date",
+            "chassis_type",
+            "chassis_asset_tag",
+            "product_uuid",
+            "board_serial",
+            "product_serial",
+        ];
+        const CACHE_FILES: &[&str] = &[
+            "level",
+            "type",
+            "size",
+            "coherency_line_size",
+            "shared_cpu_list",
         ];
         const NET_FILES: &[&str] = &[
             "addr_assign_type",
@@ -436,6 +513,7 @@ mod tests {
             "phy80211",
             "bridge",
             "device",
+            "ifindex",
         ];
         if path.split('/').any(|c| c == "..") {
             return false;
@@ -453,7 +531,39 @@ mod tests {
         };
         let digits = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
         let iface = |n: &str| !n.is_empty() && n.len() <= 15 && !n.contains('/');
-        named("/sys/devices/system/cpu/cpu", CPU_FILES, &digits)
+        let cache_file = || {
+            path.strip_prefix("/sys/devices/system/cpu/cpu")
+                .and_then(|r| r.split_once("/cache/index"))
+                .and_then(|(n, r)| Some((n, r.split_once('/')?)))
+                .is_some_and(|(n, (i, f))| digits(n) && digits(i) && CACHE_FILES.contains(&f))
+        };
+        let dmi_file = || {
+            path.strip_prefix("/sys/class/dmi/id/")
+                .is_some_and(|f| DMI_FILES.contains(&f))
+        };
+        let node_file = || {
+            path.strip_prefix("/sys/devices/system/node/node")
+                .and_then(|r| r.split_once('/'))
+                .is_some_and(|(n, f)| digits(n) && matches!(f, "cpulist" | "meminfo"))
+        };
+        let supply_file = || {
+            path.strip_prefix("/sys/class/power_supply/")
+                .and_then(|r| r.split_once('/'))
+                .is_some_and(|(n, f)| {
+                    !n.is_empty() && matches!(f, "type" | "scope" | "online" | "uevent")
+                })
+        };
+        let block_file = || {
+            path.strip_prefix("/sys/block/")
+                .and_then(|r| r.split_once('/'))
+                .is_some_and(|(n, f)| !n.is_empty() && f == "queue/rotational")
+        };
+        cache_file()
+            || dmi_file()
+            || node_file()
+            || supply_file()
+            || block_file()
+            || named("/sys/devices/system/cpu/cpu", CPU_FILES, &digits)
             || named("/sys/class/net/", NET_FILES, &iface)
             || named("/sys/block/", &[], &iface)
             || named("/sys/block/", &["removable"], &iface)

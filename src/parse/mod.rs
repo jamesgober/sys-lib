@@ -17,6 +17,7 @@ pub(crate) mod cgroup;
 pub(crate) mod cpu_list;
 pub(crate) mod cpu_name;
 pub(crate) mod cpuinfo;
+pub(crate) mod locale;
 pub(crate) mod mountinfo;
 pub(crate) mod os_release;
 #[cfg_attr(not(feature = "guard"), allow(dead_code))] // the guard's pid file
@@ -24,6 +25,11 @@ pub(crate) mod pid_file;
 pub(crate) mod proc_status;
 pub(crate) mod procfs;
 pub(crate) mod release;
+pub(crate) mod resolv;
+pub(crate) mod smbios;
+pub(crate) mod tz;
+pub(crate) mod uevent;
+pub(crate) mod utmp;
 pub(crate) mod version;
 
 /// Splits `data` into lines, at most `max` of them, without allocating.

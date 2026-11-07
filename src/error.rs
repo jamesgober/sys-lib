@@ -106,6 +106,14 @@ pub enum Error {
         /// Why, as an I/O error (the kind and a message naming the fix).
         source: io::Error,
     },
+    /// No usable identifier exists for the requested basis. See
+    /// `device::report()` for the state of each source.
+    #[cfg(feature = "device-id")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "device-id")))]
+    NoIdentifierSource {
+        /// The basis asked for.
+        basis: crate::device::Basis,
+    },
     /// The hard open-file limit is below the process guard's minimum.
     OpenFilesTooLow {
         /// The hard limit the process has.
@@ -217,6 +225,11 @@ impl fmt::Display for Error {
                 f,
                 "the lock directory {} cannot be used: {source}",
                 path.display()
+            ),
+            #[cfg(feature = "device-id")]
+            Self::NoIdentifierSource { basis } => write!(
+                f,
+                "no usable device identifier for {basis:?}: device::report() shows the state of each source"
             ),
             Self::OpenFilesTooLow { have, need } => write!(
                 f,
