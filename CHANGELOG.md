@@ -13,7 +13,20 @@
 
 ---
 
-## [0.5.0] - 2026-11-02
+## [0.5.1] - 2026-11-07
+
+### Fixed
+
+- docs.rs built only the Linux documentation for 0.5.0: the Windows and macOS
+  builds failed in blake3's build script (feature `device-id`), which compiles
+  C for the target and found no compiler for it. docs.rs now builds blake3's
+  portable Rust code, so every platform's items are documented again. Nothing
+  changes outside docs.rs.
+- The 0.5.0 date below corrected to the day it was published.
+
+---
+
+## [0.5.0] - 2026-11-07
 
 Detection and identity: what this machine is and what it runs inside, how the
 program was started, power, DNS, and an application-scoped device id.
@@ -261,7 +274,8 @@ The scaffold and the plan. No functional code yet.
   `dev/ROADMAP.md`.
 - `tests/fixtures/` and `fuzz/` skeletons.
 
-[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/jamesgober/sys-lib/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jamesgober/sys-lib/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jamesgober/sys-lib/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/sys-lib/compare/v0.2.0...v0.3.0
