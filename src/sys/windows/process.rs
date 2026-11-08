@@ -20,10 +20,19 @@ pub(crate) fn parent_id() -> Option<u32> {
 }
 
 fn read_parent_id() -> Option<u32> {
+    let entry = own_entry().ok()?;
+    // The System Idle Process (0) is nobody's parent.
+    (entry.th32_parent_process_id != 0).then_some(entry.th32_parent_process_id)
+}
+
+/// This process's entry in a process snapshot: its parent and thread count.
+/// A process snapshot lists processes only; a thread snapshot lists every
+/// thread on the machine, which costs a quarter of a second on a busy host.
+fn own_entry() -> Result<ffi::ProcessEntry32W> {
     // SAFETY: plain flags; the returned handle is checked before use.
     let snapshot = unsafe { ffi::CreateToolhelp32Snapshot(ffi::TH32CS_SNAPPROCESS, 0) };
     if snapshot == ffi::INVALID_HANDLE_VALUE {
-        return None;
+        return Err(os_error("process snapshot", "CreateToolhelp32Snapshot"));
     }
     let snapshot = Owned(snapshot);
     let pid = std::process::id();
@@ -44,14 +53,17 @@ fn read_parent_id() -> Option<u32> {
     let mut seen = 0usize;
     while more && seen < MAX_ENTRIES {
         if entry.th32_process_id == pid {
-            // The System Idle Process (0) is nobody's parent.
-            return (entry.th32_parent_process_id != 0).then_some(entry.th32_parent_process_id);
+            return Ok(entry);
         }
         seen += 1;
         // SAFETY: as above.
         more = unsafe { ffi::Process32NextW(snapshot.0, &raw mut entry) } != 0;
     }
-    None
+    Err(Error::Malformed {
+        what: "process snapshot",
+        source: "CreateToolhelp32Snapshot",
+        line: None,
+    })
 }
 
 /// `GetProcessMemoryInfo` for this process.
@@ -129,42 +141,23 @@ pub(crate) fn cpu_time() -> Result<CpuTime> {
 
 /// This process's threads, from a system-wide thread snapshot.
 pub(crate) fn threads() -> Result<usize> {
-    // SAFETY: plain flags; the returned handle is checked before use.
-    let snapshot = unsafe { ffi::CreateToolhelp32Snapshot(ffi::TH32CS_SNAPTHREAD, 0) };
-    if snapshot == ffi::INVALID_HANDLE_VALUE {
-        return Err(os_error("thread count", "CreateToolhelp32Snapshot"));
-    }
-    let snapshot = Owned(snapshot);
-    let pid = std::process::id();
-    let mut entry = ffi::ThreadEntry32 {
-        size: size_of::<ffi::ThreadEntry32>() as u32,
-        cnt_usage: 0,
-        th32_thread_id: 0,
-        th32_owner_process_id: 0,
-        tp_base_pri: 0,
-        tp_delta_pri: 0,
-        flags: 0,
-    };
-    let (mut count, mut seen) = (0usize, 0usize);
-    // SAFETY: `entry` is a THREADENTRY32 with its size set.
-    let mut more = unsafe { ffi::Thread32First(snapshot.0, &raw mut entry) } != 0;
-    while more && seen < MAX_ENTRIES {
-        if entry.th32_owner_process_id == pid {
-            count += 1;
-        }
-        seen += 1;
-        // SAFETY: as above.
-        more = unsafe { ffi::Thread32Next(snapshot.0, &raw mut entry) } != 0;
-    }
-    if count == 0 {
-        // The calling thread is always in the snapshot.
-        return Err(Error::Malformed {
+    let entry = own_entry().map_err(|e| match e {
+        Error::Malformed { source, line, .. } => Error::Malformed {
+            what: "thread count",
+            source,
+            line,
+        },
+        e => e,
+    })?;
+    match entry.cnt_threads {
+        // The calling thread always counts.
+        0 => Err(Error::Malformed {
             what: "thread count",
             source: "CreateToolhelp32Snapshot",
             line: None,
-        });
+        }),
+        n => Ok(n as usize),
     }
-    Ok(count)
 }
 
 /// The guard counts threads on Unix only (Windows has no umask race); its
