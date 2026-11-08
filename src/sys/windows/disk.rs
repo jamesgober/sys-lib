@@ -28,10 +28,10 @@ const VOLUME_NAME: usize = 64;
 const MAX_MOUNT_PATHS: usize = 1 << 16;
 
 /// Physical drive numbers probed past the last one that answered.
-const MISSES: u32 = 8;
+pub(super) const MISSES: u32 = 8;
 
 /// The highest physical drive number probed.
-const MAX_DRIVES: u32 = 1024;
+pub(super) const MAX_DRIVES: u32 = 1024;
 
 /// Calls `f` with `path` as NUL-terminated UTF-16, converted on the stack up
 /// to 511 units and allocated only past that.
@@ -581,7 +581,7 @@ enum Probe {
 }
 
 /// `\\.\PhysicalDrive<n>`, NUL-terminated, built on the stack.
-fn drive_path(n: u32, buf: &mut [u16; 32]) {
+pub(super) fn drive_path(n: u32, buf: &mut [u16; 32]) {
     let mut at = 0;
     for b in r"\\.\PhysicalDrive".bytes() {
         buf[at] = u16::from(b);

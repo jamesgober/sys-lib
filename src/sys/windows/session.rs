@@ -1,7 +1,7 @@
 //! Login sessions (wtsapi32) and how this process was started.
 
 use std::{
-    ffi::{CStr, c_void},
+    ffi::c_void,
     mem::{size_of, transmute},
     ptr::{null_mut, read_unaligned},
     sync::OnceLock,
@@ -9,7 +9,8 @@ use std::{
 };
 
 use super::{
-    ffi, filetime_to_system, from_wide, net::string_at, non_negative, os_error, unsupported, wide,
+    export, ffi, filetime_to_system, from_wide, net::string_at, non_negative, os_error,
+    system_library, unsupported,
 };
 use crate::{
     Error, Result,
@@ -31,26 +32,11 @@ struct Wts {
     free: ffi::WtsFreeMemory,
 }
 
-/// A named export of `module`.
-fn export(module: ffi::Handle, name: &CStr) -> Option<*mut c_void> {
-    // SAFETY: `module` is a loaded module and `name` is NUL-terminated.
-    let address = unsafe { ffi::GetProcAddress(module, name.as_ptr()) };
-    (!address.is_null()).then_some(address)
-}
-
 /// wtsapi32, loaded from System32 once and kept; `None` where Windows has none.
 fn wts() -> Option<&'static Wts> {
     static WTS: OnceLock<Option<Wts>> = OnceLock::new();
     WTS.get_or_init(|| {
-        let name = wide("wtsapi32.dll");
-        // SAFETY: `name` is NUL-terminated and outlives the call; no file handle
-        // is passed, and the flag restricts the search to System32.
-        let module = unsafe {
-            ffi::LoadLibraryExW(name.as_ptr(), null_mut(), ffi::LOAD_LIBRARY_SEARCH_SYSTEM32)
-        };
-        if module.is_null() {
-            return None;
-        }
+        let module = system_library("wtsapi32.dll")?;
         let enumerate = export(module, c"WTSEnumerateSessionsW")?;
         let query = export(module, c"WTSQuerySessionInformationW")?;
         let free = export(module, c"WTSFreeMemory")?;

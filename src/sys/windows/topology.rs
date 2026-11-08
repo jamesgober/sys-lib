@@ -200,6 +200,19 @@ fn add_numa(groups: &Groups, body: &[u8], nodes: &mut Vec<NumaNode>) {
     }
 }
 
+/// Whether any core runs more than one logical processor (`LTP_PC_SMT`);
+/// `None` when the buffer has no core records.
+pub(super) fn smt_of(bytes: &[u8]) -> Option<bool> {
+    let mut cores = records(bytes)
+        .filter(|&(kind, _)| kind == lpi::RELATION_PROCESSOR_CORE)
+        .peekable();
+    cores.peek()?;
+    Some(cores.any(|(_, body)| {
+        body.get(lpi::PROCESSOR_FLAGS)
+            .is_some_and(|flags| flags & lpi::LTP_PC_SMT != 0)
+    }))
+}
+
 /// A higher efficiency class is the faster core. All alike is not hybrid,
 /// whatever the class; the classes below the top one are the efficient cores.
 fn core_kind(class: u8, lowest: u8, highest: u8) -> CoreKind {
@@ -526,6 +539,23 @@ mod tests {
         let mut b = groups(&[0b11]);
         b.extend(cache(1, 9, 1, &[(0, 0b11)]));
         assert!(topology_of(&b).caches.is_empty());
+    }
+
+    #[test]
+    fn test_topology_windows_smt_from_core_flags() {
+        let mut one = processor(lpi::RELATION_PROCESSOR_CORE, 0, &[(0, 0b11)]);
+        let plain = processor(lpi::RELATION_PROCESSOR_CORE, 0, &[(0, 0b100)]);
+        assert_eq!(smt_of(&plain), Some(false));
+        let mut both = plain.clone();
+        both.extend(&one);
+        assert_eq!(smt_of(&both), Some(false), "no flag set yet");
+        one[lpi::BODY + lpi::PROCESSOR_FLAGS] = lpi::LTP_PC_SMT;
+        let mut both = plain.clone();
+        both.extend(&one);
+        assert_eq!(smt_of(&both), Some(true));
+        let package = processor(lpi::RELATION_PROCESSOR_PACKAGE, 0, &[(0, 0b111)]);
+        assert_eq!(smt_of(&package), None, "no core records");
+        assert_eq!(smt_of(&[]), None);
     }
 
     #[test]
