@@ -268,15 +268,11 @@ mod gpu {
         let device_id = id(device, &keys.device_id);
         let vendor = vendor_id.map_or(GpuVendor::Other, GpuVendor::from_pci);
         let vram = vram(device, keys);
-        let kind = match kind_of(vendor) {
-            // AMD makes both; memory of its own makes it a card.
-            GpuKind::Unknown if vram.is_some() => GpuKind::Discrete,
-            kind => kind,
-        };
         let name = device
             .property(&keys.model)
             .and_then(|model| name_of(model.get()))
             .unwrap_or_else(|| fallback_name(vendor, device_id));
+        let kind = pci_kind(vendor, &name, vram.is_some());
         // An integrated adapter's figure is the share of main memory it may
         // use, not memory of its own.
         let memory = if kind == GpuKind::Integrated {
@@ -334,6 +330,20 @@ mod gpu {
             // Apple silicon's memory is shared with the CPU.
             memory: None,
             driver,
+        }
+    }
+
+    /// A PCI adapter's kind. Apple makes no PCI graphics: an Apple display
+    /// controller on PCI is the paravirtualised one a macOS virtual machine
+    /// on an Intel host shows ("Apple Paravirtualized Graphics Device"). AMD
+    /// makes both kinds; memory of its own makes it a card.
+    pub(super) fn pci_kind(vendor: GpuVendor, name: &str, own_memory: bool) -> GpuKind {
+        if vendor == GpuVendor::Apple || name.contains("Paravirtual") {
+            return GpuKind::Virtual;
+        }
+        match kind_of(vendor) {
+            GpuKind::Unknown if own_memory => GpuKind::Discrete,
+            kind => kind,
         }
     }
 
@@ -502,6 +512,38 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn test_report_apple_pci_kind() {
+        use crate::gpu::{GpuKind, GpuVendor};
+        // What the macos-15-intel runner (a virtual machine) lists.
+        let paravirt = "Apple Paravirtualized Graphics Device";
+        assert_eq!(
+            gpu::pci_kind(GpuVendor::Apple, paravirt, false),
+            GpuKind::Virtual
+        );
+        assert_eq!(
+            gpu::pci_kind(GpuVendor::Other, paravirt, false),
+            GpuKind::Virtual
+        );
+        assert_eq!(
+            gpu::pci_kind(GpuVendor::Intel, "Intel UHD Graphics 630", false),
+            GpuKind::Integrated
+        );
+        assert_eq!(
+            gpu::pci_kind(GpuVendor::Amd, "AMD Radeon Pro 5500M", true),
+            GpuKind::Discrete
+        );
+        assert_eq!(
+            gpu::pci_kind(GpuVendor::Amd, "AMD GPU 0x7340", false),
+            GpuKind::Unknown
+        );
+        assert_eq!(
+            gpu::pci_kind(GpuVendor::Nvidia, "NVIDIA GeForce GT 750M", false),
+            GpuKind::Discrete
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn test_report_apple_accelerator_kind() {
         use crate::gpu::{GpuKind, GpuVendor};
         assert_eq!(
@@ -581,116 +623,5 @@ mod tests {
             }
             Err(e) => assert!(e.is_unavailable(), "{e}"),
         }
-    }
-
-    // TEMPORARY: prints what each reading returns on the CI runners, then
-    // fails so the single-threaded rerun shows it. Removed once read.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn test_report_apple_zz_ci_dump() {
-        use super::super::iokit::{Cf, Io};
-        eprintln!("DUMP temperatures {:?}", temperatures());
-        eprintln!("DUMP gpus {:?}", gpus());
-        eprintln!("DUMP tuning {:?}", tuning());
-        let dir = std::env::temp_dir();
-        let disk = crate::disk::of(&dir).unwrap();
-        eprintln!("DUMP disk {disk:?}");
-        eprintln!("DUMP data_dir {:?}", data_dir_tuning(&dir, &disk));
-        eprintln!(
-            "DUMP root data_dir {:?}",
-            data_dir_tuning(Path::new("/"), &disk)
-        );
-        eprintln!("DUMP bench {:?}", bench_facts());
-        eprintln!("DUMP posture {:?}", posture());
-        eprintln!("DUMP bench env {:?}", crate::bench::environment());
-        eprintln!(
-            "DUMP readiness\n{}",
-            crate::readiness::report_for(crate::readiness::Profile::Database, &dir)
-        );
-        let model = Cf::string("t", "model").unwrap();
-        let class_code = Cf::string("t", "class-code").unwrap();
-        let vendor = Cf::string("t", "vendor-id").unwrap();
-        let bundle = Cf::string("t", "CFBundleIdentifier").unwrap();
-        let show = |e: &Io| {
-            let class = e.class().map(|c| String::from_utf8_lossy(&c).into_owned());
-            let m = e.property(&model).map(|v| {
-                let mut buf = [0u8; 256];
-                let v = v.get();
-                v.text(&mut buf)
-                    .map(|t| String::from_utf8_lossy(t).into_owned())
-                    .or_else(|| v.data().map(|d| format!("data {d:02x?}")))
-            });
-            let cc = e
-                .property(&class_code)
-                .and_then(|v| v.get().data().map(|d| format!("{d:02x?}")));
-            let vid = e
-                .property(&vendor)
-                .and_then(|v| v.get().data().map(|d| format!("{d:02x?}")));
-            let b = e.property(&bundle).and_then(|v| {
-                let mut buf = [0u8; 256];
-                v.get()
-                    .text(&mut buf)
-                    .map(|t| String::from_utf8_lossy(t).into_owned())
-            });
-            eprintln!(
-                "  class {class:?} model {m:?} class-code {cc:?} vendor-id {vid:?} bundle {b:?}"
-            );
-        };
-        eprintln!("DUMP IOAccelerator");
-        let _ = Io::for_each(c"IOAccelerator", 64, "t", |e| {
-            show(e);
-            Ok(())
-        });
-        eprintln!("DUMP AGXAccelerator");
-        let _ = Io::for_each(c"AGXAccelerator", 64, "t", |e| {
-            show(e);
-            Ok(())
-        });
-        eprintln!("DUMP IOPCIDevice");
-        let _ = Io::for_each(c"IOPCIDevice", 4096, "t", |e| {
-            show(e);
-            Ok(())
-        });
-        eprintln!(
-            "DUMP brand {:?}",
-            super::super::sysctl_string(c"machdep.cpu.brand_string")
-        );
-        eprintln!(
-            "DUMP osproductversion {:?}",
-            super::super::sysctl_string(c"kern.osproductversion")
-        );
-        eprintln!(
-            "DUMP osproductversioncompat {:?}",
-            super::super::sysctl_string(c"kern.osproductversioncompat")
-        );
-        eprintln!(
-            "DUMP system_version_compat {:?}",
-            super::super::sysctl_int(c"kern.system_version_compat")
-        );
-        let set = |v: i32| {
-            let mut v = v;
-            // SAFETY: test only: the name is NUL-terminated and `v` an int.
-            unsafe {
-                ffi::sysctlbyname(
-                    c"kern.system_version_compat".as_ptr(),
-                    core::ptr::null_mut(),
-                    core::ptr::null_mut(),
-                    (&raw mut v).cast(),
-                    4,
-                )
-            }
-        };
-        eprintln!("DUMP set compat 1 -> {}", set(1));
-        eprintln!(
-            "DUMP osproductversion under compat {:?}",
-            super::super::sysctl_string(c"kern.osproductversion")
-        );
-        eprintln!("DUMP set compat 0 -> {}", set(0));
-        eprintln!(
-            "DUMP osproductversion after {:?}",
-            super::super::sysctl_string(c"kern.osproductversion")
-        );
-        eprintln!("DUMP mem {:?}", crate::mem::snapshot());
-        panic!("CI dump: read the output above");
     }
 }
