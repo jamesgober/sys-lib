@@ -358,20 +358,45 @@ fn between(now: &Times, then: &Times, interval: Duration) -> Result<Usage> {
 /// The total and per-core counters, into `buf`. When more cores report than
 /// `buf` holds (hot-plug, E-22), it grows once and reads again: the only
 /// allocation in a sampler's steady state.
+/// The most CPUs a per-core reading makes room for (T7).
+const MAX_CORES: usize = 16_384;
+
+/// Per-core times into `buf`, growing it while the OS lists more CPUs than it
+/// holds: CPUs brought online since, or a probed host larger than this one.
 fn read_cores(origin: &Origin, buf: &mut Vec<Times>) -> Result<(Times, usize)> {
-    let (total, n) = match origin.cpu_times_per_core(buf) {
-        Err(Error::TooLarge { .. }) => {
-            buf.resize(buf.len() * 2 + super::logical(), Times::default());
-            origin.cpu_times_per_core(buf)?
+    loop {
+        match origin.cpu_times_per_core(buf) {
+            Err(Error::TooLarge { .. }) if buf.len() < MAX_CORES => {
+                let len = (buf.len() * 2 + super::logical()).min(MAX_CORES);
+                buf.resize(len, Times::default());
+            }
+            r => {
+                let (total, n) = r?;
+                return Ok((total, n.min(buf.len())));
+            }
         }
-        r => r?,
-    };
-    Ok((total, n.min(buf.len())))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_read_cores_grows_for_a_larger_probed_host() {
+        // A probed host can have more CPUs than this machine (CI runners have
+        // four; the fixture has 32): the buffer grows until they fit.
+        let host = crate::origin::Host {
+            root: crate::linux::fixtures::root("wsl2"),
+            net_dev: "/proc/net/dev",
+        };
+        let origin = Origin::host(std::sync::Arc::new(host));
+        let mut buf = vec![Times::default(); 1];
+        let (_, n) = read_cores(&origin, &mut buf).unwrap();
+        assert_eq!(n, 32);
+        assert!(buf.len() >= 32);
+    }
 
     const ALL: States = States {
         iowait: true,
