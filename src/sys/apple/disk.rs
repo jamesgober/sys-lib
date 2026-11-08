@@ -16,10 +16,10 @@ use crate::{
 };
 
 /// `MAXPATHLEN`: the kernel refuses longer paths, so they never need the heap.
-const PATH_MAX: usize = 1024;
+pub(super) const PATH_MAX: usize = 1024;
 
 /// `path` as a NUL-terminated C string in `buf`, without allocating.
-fn c_path<'a>(path: &Path, buf: &'a mut [u8; PATH_MAX]) -> Result<&'a CStr> {
+pub(super) fn c_path<'a>(path: &Path, buf: &'a mut [u8; PATH_MAX]) -> Result<&'a CStr> {
     let bytes = path.as_os_str().as_bytes();
     if bytes.contains(&0) {
         return Err(Error::InvalidInput {
@@ -42,7 +42,7 @@ fn c_path<'a>(path: &Path, buf: &'a mut [u8; PATH_MAX]) -> Result<&'a CStr> {
 }
 
 /// `statfs` on a C path.
-fn statfs(path: &CStr) -> core::result::Result<ffi::Statfs, i32> {
+pub(super) fn statfs(path: &CStr) -> core::result::Result<ffi::Statfs, i32> {
     let mut buf = MaybeUninit::<ffi::Statfs>::zeroed();
     // SAFETY: `path` is NUL-terminated and `buf` is a writable `statfs`.
     let rc = unsafe { ffi::statfs(path.as_ptr(), buf.as_mut_ptr()) };
