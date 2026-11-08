@@ -86,7 +86,7 @@ pub fn temperatures() -> Result<Vec<Temperature>> {
 }
 
 /// Whether a reading is a temperature rather than a placeholder.
-#[allow(dead_code)] // INTERIM until every backend uses it
+#[allow(dead_code)] // unused on targets without a backend
 pub(crate) fn plausible(celsius: f32) -> bool {
     (-60.0..=250.0).contains(&celsius)
 }

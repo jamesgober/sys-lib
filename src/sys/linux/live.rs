@@ -188,6 +188,7 @@ fn statvfs(path: &Path) -> Result<ffi::Statvfs> {
 }
 
 fn space_of(st: &ffi::Statvfs) -> Space {
+    #[allow(clippy::useless_conversion, reason = "c_ulong is u32 on 32-bit targets")]
     let unit = u64::from(st.frsize);
     Space::new(
         st.blocks.saturating_mul(unit),

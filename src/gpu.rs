@@ -110,7 +110,7 @@ pub enum GpuKind {
 /// The kind a vendor's adapter usually is, for platforms that do not say:
 /// Intel and Apple are integrated, NVIDIA discrete, the hypervisors' virtual;
 /// AMD makes both, so `Unknown` unless the caller knows more.
-#[allow(dead_code)] // INTERIM until every backend uses it
+#[allow(dead_code)] // unused on targets without a backend
 pub(crate) const fn kind_of(vendor: GpuVendor) -> GpuKind {
     match vendor {
         GpuVendor::Intel | GpuVendor::Apple | GpuVendor::Qualcomm | GpuVendor::Arm => {
