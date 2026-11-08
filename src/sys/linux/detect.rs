@@ -159,10 +159,12 @@ pub(crate) fn timezone() -> Result<TimeZone> {
             .to_string_lossy()
             .into_owned()
     });
+    #[allow(clippy::useless_conversion, reason = "c_long is i32 on 32-bit targets")]
+    let utc_offset_seconds = i32::try_from(tm.gmtoff).unwrap_or(0);
     Ok(TimeZone {
         iana,
         windows: None,
-        utc_offset_seconds: i32::try_from(tm.gmtoff).unwrap_or(0),
+        utc_offset_seconds,
         abbreviation: abbreviation.filter(|a| !a.is_empty() && a.len() <= 16),
     })
 }

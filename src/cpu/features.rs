@@ -137,6 +137,10 @@ impl Features {
         1 << (feature as u32)
     }
 
+    #[cfg_attr(
+        not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")),
+        allow(dead_code)
+    )]
     fn insert(&mut self, feature: Feature) {
         self.bits |= Self::bit(feature);
     }

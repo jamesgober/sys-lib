@@ -76,18 +76,33 @@ mod x86;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) use x86::invariant_tsc as x86_invariant_tsc;
 
-// Linux and Android on 64-bit targets. Struct layouts are verified for LP64
-// (glibc, musl, bionic); a 32-bit Linux target has no verified layout yet and
-// gets no implementation (D-003).
-#[cfg(all(
-    any(target_os = "linux", target_os = "android"),
-    target_pointer_width = "64"
+// Linux and Android on 64-bit targets, and 32-bit glibc Linux on x86 and Arm.
+// Struct layouts are verified for LP64 (glibc, musl, bionic) and for those two
+// 32-bit targets; other 32-bit Linux targets (musl, bionic) have no verified
+// layout and answer as unsupported (D-003, D-063).
+#[cfg(any(
+    all(
+        any(target_os = "linux", target_os = "android"),
+        target_pointer_width = "64"
+    ),
+    all(
+        target_os = "linux",
+        target_env = "gnu",
+        any(target_arch = "x86", target_arch = "arm")
+    )
 ))]
 #[allow(unsafe_code)]
 mod linux;
-#[cfg(all(
-    any(target_os = "linux", target_os = "android"),
-    target_pointer_width = "64"
+#[cfg(any(
+    all(
+        any(target_os = "linux", target_os = "android"),
+        target_pointer_width = "64"
+    ),
+    all(
+        target_os = "linux",
+        target_env = "gnu",
+        any(target_arch = "x86", target_arch = "arm")
+    )
 ))]
 pub(crate) use linux::*;
 
@@ -118,6 +133,11 @@ pub(crate) use windows::*;
         target_pointer_width = "64"
     ),
     all(
+        target_os = "linux",
+        target_env = "gnu",
+        any(target_arch = "x86", target_arch = "arm")
+    ),
+    all(
         any(target_os = "macos", target_os = "ios"),
         target_pointer_width = "64"
     ),
@@ -128,6 +148,11 @@ mod unsupported;
     all(
         any(target_os = "linux", target_os = "android"),
         target_pointer_width = "64"
+    ),
+    all(
+        target_os = "linux",
+        target_env = "gnu",
+        any(target_arch = "x86", target_arch = "arm")
     ),
     all(
         any(target_os = "macos", target_os = "ios"),

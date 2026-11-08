@@ -31,7 +31,8 @@ pub struct Space {
 
 impl Space {
     /// A reading with its invariants applied: `available <= free <= total`.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))] // the platforms that sum or build these
+    // Unused on Windows, macOS, and targets without a backend.
+    #[allow(dead_code)]
     pub(crate) fn new(total: u64, free: u64, available: u64) -> Space {
         let free = free.min(total);
         Space {

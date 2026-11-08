@@ -51,3 +51,9 @@ pub(crate) fn bench_facts() -> BenchFacts {
 pub(crate) fn posture() -> Posture {
     Posture::default()
 }
+
+/// `USER_HZ`, for a probe on a Linux target without a backend: the value the
+/// kernel fixes for every architecture sys-lib builds for.
+pub(crate) fn clk_tck() -> u64 {
+    100
+}

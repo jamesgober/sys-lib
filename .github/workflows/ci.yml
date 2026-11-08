@@ -83,6 +83,8 @@ jobs:
       matrix:
         target:
           - x86_64-unknown-linux-musl
+          # 32-bit musl has no verified layouts: it builds the honest fallback.
+          - i686-unknown-linux-musl
           - i686-pc-windows-msvc
           - aarch64-linux-android
           - aarch64-apple-ios
@@ -114,6 +116,47 @@ jobs:
         run: cargo clippy --target ${{ matrix.target }} --all-targets --all-features -- -D warnings
       - name: Clippy and layout oracles (no default features)
         run: cargo clippy --target ${{ matrix.target }} --all-targets --no-default-features -- -D warnings
+
+  # 32-bit glibc Linux (D-063): the layout oracles compile for each target and
+  # the whole suite runs, i686 natively with multilib, armv7 under qemu-user.
+  linux32:
+    name: Test (${{ matrix.target }} / ${{ matrix.rust }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [i686-unknown-linux-gnu, armv7-unknown-linux-gnueabihf]
+        rust: [stable, "1.89"]
+    env:
+      CARGO_FEATURE_PURE: "1"
+      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUNNER: qemu-arm -L /usr/arm-linux-gnueabihf
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          targets: ${{ matrix.target }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install the target's C toolchain
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.target }}" = i686-unknown-linux-gnu ]; then
+            sudo apt-get install -y gcc-multilib
+          else
+            sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user
+          fi
+      - name: Clippy and layout oracles (all features)
+        run: cargo clippy --target ${{ matrix.target }} --all-targets --all-features -- -D warnings
+      - name: Clippy and layout oracles (no default features)
+        run: cargo clippy --target ${{ matrix.target }} --all-targets --no-default-features -- -D warnings
+      - name: Test (all features)
+        run: cargo test --target ${{ matrix.target }} --all-features
+      - name: Test (no default features)
+        run: cargo test --target ${{ matrix.target }} --no-default-features
 
   container:
     name: Container limits (cgroup v2)

@@ -188,7 +188,7 @@ fn statvfs(path: &Path) -> Result<ffi::Statvfs> {
 }
 
 fn space_of(st: &ffi::Statvfs) -> Space {
-    let unit = st.frsize;
+    let unit = u64::from(st.frsize);
     Space::new(
         st.blocks.saturating_mul(unit),
         st.bfree.saturating_mul(unit),

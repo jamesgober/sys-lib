@@ -5,9 +5,16 @@
 
 // On other hosts this module exists for the fixture tests only.
 #![cfg_attr(
-    not(all(
-        any(target_os = "linux", target_os = "android"),
-        target_pointer_width = "64"
+    not(any(
+        all(
+            any(target_os = "linux", target_os = "android"),
+            target_pointer_width = "64"
+        ),
+        all(
+            target_os = "linux",
+            target_env = "gnu",
+            any(target_arch = "x86", target_arch = "arm")
+        )
     )),
     allow(dead_code)
 )]
