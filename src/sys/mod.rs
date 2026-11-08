@@ -64,7 +64,7 @@ macro_rules! same_layout {
 }
 
 // The readings, answered `Unsupported` until a platform defines its own (see
-// the module's documentation).
+// the module's documentation). FreeBSD defines every item itself.
 mod detection;
 mod environment;
 mod pending;
@@ -111,6 +111,14 @@ mod windows;
 #[cfg(windows)]
 pub(crate) use windows::*;
 
+// FreeBSD on 64-bit targets (amd64, arm64), FreeBSD 12 and later: the layouts
+// are those of the 64-bit-inode ABI (D-090).
+#[cfg(all(target_os = "freebsd", target_pointer_width = "64"))]
+#[allow(unsafe_code)]
+mod freebsd;
+#[cfg(all(target_os = "freebsd", target_pointer_width = "64"))]
+pub(crate) use freebsd::*;
+
 // Everything else compiles and answers honestly: unknown, or what std knows.
 #[cfg(not(any(
     all(
@@ -121,6 +129,7 @@ pub(crate) use windows::*;
         any(target_os = "macos", target_os = "ios"),
         target_pointer_width = "64"
     ),
+    all(target_os = "freebsd", target_pointer_width = "64"),
     windows
 )))]
 mod unsupported;
@@ -133,6 +142,7 @@ mod unsupported;
         any(target_os = "macos", target_os = "ios"),
         target_pointer_width = "64"
     ),
+    all(target_os = "freebsd", target_pointer_width = "64"),
     windows
 )))]
 pub(crate) use unsupported::*;

@@ -1,0 +1,839 @@
+//! Network: `getifaddrs` for interfaces, addresses, and (from the `struct
+//! if_data` on each `AF_LINK` entry) the 64-bit counters, MTU, and link
+//! speed; the `NET_RT_DUMP` routing sysctl for the default route; the TCP
+//! state counters; and the resolver configuration.
+//!
+//! Every byte the OS hands back is copied out and parsed by safe code over
+//! slices: the routing-message walker and the `sockaddr` readers below.
+
+use core::{
+    ffi::{CStr, c_int, c_void},
+    mem::{offset_of, size_of},
+};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use super::{Key, bytes_at, ffi, i32_at, last_errno, os_error, u16_at};
+use crate::{
+    Bytes, Error, Result,
+    net::{
+        Connections, Counters, Dns, Interface, InterfaceKind, InterfaceOptions, IpNet, Mac, Totals,
+    },
+    parse::resolv,
+};
+
+// ---------------------------------------------------------------------------
+// The routing sysctl
+// ---------------------------------------------------------------------------
+
+const RT_DUMP: &str = "sysctl NET_RT_DUMP";
+/// The most routing-message bytes read; more is `TooLarge`.
+const MAX_ROUTES: usize = 16 << 20;
+
+/// One `sockaddr` of a routing message and what follows it. Each takes `sa_len`
+/// rounded up to a `long`, and an empty one still takes a `long` (`SA_SIZE` in
+/// net/route.h).
+fn next_sockaddr(data: &[u8]) -> Option<(&[u8], &[u8])> {
+    let len = usize::from(*data.first()?);
+    let step = if len == 0 { 8 } else { len.next_multiple_of(8) };
+    Some((data.get(..len)?, data.get(step..)?))
+}
+
+/// The interface of a route that is the machine's default: up, not a host
+/// route, to the unspecified address with an empty netmask. The netmask check
+/// keeps out the `0.0.0.0/1` a VPN adds.
+fn default_route(msg: &[u8]) -> Option<u32> {
+    if *msg.get(offset_of!(ffi::RtMsghdr, version))? != ffi::RTM_VERSION
+        || *msg.get(offset_of!(ffi::RtMsghdr, mtype))? != ffi::RTM_GET
+    {
+        return None;
+    }
+    let flags = i32_at(msg, offset_of!(ffi::RtMsghdr, flags))?;
+    let addrs = i32_at(msg, offset_of!(ffi::RtMsghdr, addrs))?;
+    if flags & ffi::RTF_UP == 0 || flags & ffi::RTF_HOST != 0 || addrs & ffi::RTA_DST == 0 {
+        return None;
+    }
+    let (dst, mut rest) = next_sockaddr(msg.get(size_of::<ffi::RtMsghdr>()..)?)?;
+    let Some(Sock::Ip(ip)) = parse_sockaddr(dst) else {
+        return None;
+    };
+    if !ip.is_unspecified() {
+        return None;
+    }
+    if addrs & ffi::RTA_GATEWAY != 0 {
+        rest = next_sockaddr(rest)?.1;
+    }
+    if addrs & ffi::RTA_NETMASK != 0 {
+        let (mask, _) = next_sockaddr(rest)?;
+        if prefix_len(mask, dst[offset_of!(ffi::Sockaddr, family)]) != 0 {
+            return None;
+        }
+    }
+    let index = u16_at(msg, offset_of!(ffi::RtMsghdr, index))?;
+    (index != 0).then_some(u32::from(index))
+}
+
+/// Walks a `NET_RT_DUMP` answer for the default route. Each message is at least
+/// 4 bytes, so the walk is bounded by the buffer.
+fn walk_routes(what: &'static str, buf: &[u8]) -> Result<Option<u32>> {
+    let malformed = || Error::Malformed {
+        what,
+        source: RT_DUMP,
+        line: None,
+    };
+    let mut at = 0;
+    while at < buf.len() {
+        let rest = &buf[at..];
+        let len =
+            usize::from(u16_at(rest, offset_of!(ffi::RtMsghdr, msglen)).ok_or_else(malformed)?);
+        if len < 4 || len > rest.len() {
+            return Err(malformed());
+        }
+        if let Some(index) = default_route(&rest[..len]) {
+            return Ok(Some(index));
+        }
+        at += len;
+    }
+    Ok(None)
+}
+
+/// The interface of the IPv4 default route, else the IPv6 one (an IPv6-only
+/// network has no other), in this process's routing table (its FIB); `None`
+/// with no default route.
+pub(crate) fn primary_interface() -> Result<Option<u32>> {
+    const WHAT: &str = "default route";
+    for family in [ffi::AF_INET, ffi::AF_INET6] {
+        let mib = [
+            ffi::CTL_NET,
+            ffi::PF_ROUTE,
+            0,
+            c_int::from(family),
+            ffi::NET_RT_DUMP,
+            0,
+        ];
+        let index = super::with_sysctl(WHAT, RT_DUMP, Key::Mib(&mib), MAX_ROUTES, |buf| {
+            walk_routes(WHAT, buf)
+        })?;
+        if index.is_some() {
+            return Ok(index);
+        }
+    }
+    Ok(None)
+}
+
+// ---------------------------------------------------------------------------
+// The resolver and the connection counts
+// ---------------------------------------------------------------------------
+
+/// The most of a resolver configuration read.
+const MAX_RESOLV: u64 = 1 << 20;
+
+fn dns_from(what: &'static str, parsed: resolv::Resolv) -> Result<Dns> {
+    if parsed.too_large {
+        return Err(Error::TooLarge {
+            what,
+            limit: resolv::MAX_ENTRIES as u64,
+        });
+    }
+    Ok(Dns {
+        servers: parsed.servers,
+        upstream: Vec::new(),
+        search: parsed.search,
+    })
+}
+
+/// `/etc/resolv.conf`, which `resolvconf(8)` keeps on FreeBSD; bounded.
+pub(crate) fn dns() -> Result<Dns> {
+    const WHAT: &str = "DNS configuration";
+    const PATH: &str = "/etc/resolv.conf";
+    use std::io::Read;
+    let io_error = |e: std::io::Error| os_error(WHAT, PATH, e.raw_os_error().unwrap_or(0));
+    let file = std::fs::File::open(PATH).map_err(io_error)?;
+    let mut data = Vec::new();
+    file.take(MAX_RESOLV + 1)
+        .read_to_end(&mut data)
+        .map_err(io_error)?;
+    if data.len() as u64 > MAX_RESOLV {
+        return Err(Error::TooLarge {
+            what: WHAT,
+            limit: MAX_RESOLV,
+        });
+    }
+    dns_from(WHAT, resolv::parse(&data))
+}
+
+/// `TCP_NSTATES` (netinet/tcp_fsm.h) and the two states counted apart.
+const TCP_NSTATES: usize = 11;
+const TCPS_ESTABLISHED: usize = 4;
+const TCPS_TIME_WAIT: usize = 10;
+
+/// The connections from `net.inet.tcp.states` (one 64-bit count per TCP
+/// state): established, time-wait, and every socket, listening included.
+fn tcp_from(data: &[u8]) -> Option<(u64, u64, u64)> {
+    if data.len() != TCP_NSTATES * 8 {
+        return None;
+    }
+    let state = |n: usize| super::u64_at(data, n * 8);
+    let mut total = 0u64;
+    for n in 0..TCP_NSTATES {
+        total = total.saturating_add(state(n)?);
+    }
+    Some((state(TCPS_ESTABLISHED)?, state(TCPS_TIME_WAIT)?, total))
+}
+
+/// The TCP counts by state (FreeBSD 11 and later), else the PCB count. UDP
+/// sockets are counted by no sysctl short of the whole PCB list.
+pub(crate) fn connections() -> Result<Connections> {
+    let mut buf = [0u8; TCP_NSTATES * 8];
+    let states = super::sysctl_raw(Key::Name(c"net.inet.tcp.states"), Some(&mut buf))
+        .ok()
+        .and_then(|len| tcp_from(buf.get(..len)?));
+    Ok(match states {
+        Some((established, time_wait, total)) => Connections {
+            tcp_established: Some(established),
+            tcp_time_wait: Some(time_wait),
+            tcp_total: Some(total),
+            udp: None,
+        },
+        None => Connections {
+            tcp_established: None,
+            tcp_time_wait: None,
+            tcp_total: super::sysctl_u64(c"net.inet.tcp.pcbcount"),
+            udp: None,
+        },
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Interfaces
+// ---------------------------------------------------------------------------
+
+/// The list `getifaddrs` returns, freed on drop.
+struct IfAddrs(*mut ffi::Ifaddrs);
+
+impl IfAddrs {
+    fn new(what: &'static str) -> Result<IfAddrs> {
+        let mut list: *mut ffi::Ifaddrs = core::ptr::null_mut();
+        // SAFETY: `list` is writable; on success the list is owned by the
+        // returned value.
+        let rc = unsafe { ffi::getifaddrs(&raw mut list) };
+        if rc != 0 {
+            return Err(os_error(what, "getifaddrs", last_errno()));
+        }
+        Ok(IfAddrs(list))
+    }
+
+    /// The entries, borrowed from the list.
+    fn entries(&self) -> impl Iterator<Item = &ffi::Ifaddrs> {
+        // SAFETY: the head is null or a live entry of the list `self` owns.
+        let head = unsafe { self.0.as_ref() };
+        core::iter::successors(head, |entry| {
+            // SAFETY: `next` is null or a live entry of the same list.
+            unsafe { entry.next.as_ref() }
+        })
+    }
+}
+
+impl Drop for IfAddrs {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: the list came from `getifaddrs` and is freed once.
+            unsafe { ffi::freeifaddrs(self.0) };
+        }
+    }
+}
+
+/// Copies a `sockaddr` the OS returned into `out`: its `sa_len` bytes (a
+/// netmask may be trimmed shorter than its type). The length copied.
+///
+/// # Safety
+///
+/// `sa` is null or points to at least `sa_len` readable bytes.
+unsafe fn copy_sockaddr(sa: *const ffi::Sockaddr, out: &mut [u8; 256]) -> usize {
+    if sa.is_null() {
+        return 0;
+    }
+    // SAFETY: the caller's contract: `sa` points to a `sockaddr`, whose first
+    // byte is `sa_len`.
+    let len = usize::from(unsafe { sa.cast::<u8>().read() });
+    // SAFETY: the caller's contract: `len` bytes are readable; `out` holds 256,
+    // more than any `u8` length.
+    unsafe { core::ptr::copy_nonoverlapping(sa.cast::<u8>(), out.as_mut_ptr(), len) };
+    len
+}
+
+/// Copies the `struct if_data` of an `AF_LINK` entry; `None` when there is
+/// none, or when it is shorter than the FreeBSD 11 layout read here.
+///
+/// # Safety
+///
+/// `data` is null or points to a `struct if_data` of its own `ifi_datalen`
+/// bytes, as `getifaddrs` gives it.
+unsafe fn copy_if_data(data: *const c_void) -> Option<ffi::IfData> {
+    if data.is_null() {
+        return None;
+    }
+    // SAFETY: the caller's contract: every `if_data` starts with these eight
+    // bytes, `ifi_datalen` last among them.
+    let head = unsafe { data.cast::<[u8; 8]>().read_unaligned() };
+    let len = usize::from(u16::from_ne_bytes([head[6], head[7]]));
+    if len < size_of::<ffi::IfData>() {
+        return None;
+    }
+    // SAFETY: the caller's contract, and `len` covers the whole struct, whose
+    // fields are integers only.
+    Some(unsafe { data.cast::<ffi::IfData>().read_unaligned() })
+}
+
+/// What one `getifaddrs` address is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sock {
+    Ip(IpAddr),
+    Link {
+        index: u16,
+        ftype: u8,
+        mac: Option<[u8; 6]>,
+    },
+}
+
+/// A `sockaddr_in`, `sockaddr_in6`, or `sockaddr_dl` from its bytes.
+fn parse_sockaddr(sa: &[u8]) -> Option<Sock> {
+    match *sa.get(offset_of!(ffi::Sockaddr, family))? {
+        ffi::AF_INET => {
+            let a: [u8; 4] = bytes_at(sa, offset_of!(ffi::SockaddrIn, addr))?;
+            Some(Sock::Ip(IpAddr::V4(Ipv4Addr::from(a))))
+        }
+        ffi::AF_INET6 => {
+            let a: [u8; 16] = bytes_at(sa, offset_of!(ffi::SockaddrIn6, addr))?;
+            Some(Sock::Ip(IpAddr::V6(Ipv6Addr::from(clear_embedded_scope(
+                a,
+            )))))
+        }
+        ffi::AF_LINK => {
+            let nlen = usize::from(*sa.get(offset_of!(ffi::SockaddrDl, nlen))?);
+            let alen = usize::from(*sa.get(offset_of!(ffi::SockaddrDl, alen))?);
+            let mac = if alen == 6 {
+                bytes_at::<6>(sa, offset_of!(ffi::SockaddrDl, data) + nlen)
+                    .filter(|m| m.iter().any(|&b| b != 0))
+            } else {
+                None
+            };
+            Some(Sock::Link {
+                index: u16_at(sa, offset_of!(ffi::SockaddrDl, index))?,
+                ftype: *sa.get(offset_of!(ffi::SockaddrDl, ftype))?,
+                mac,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The KAME stack keeps a link-local address's interface index in its second
+/// 16-bit word (`fe80:4::1`); a real link-local address has zeros there
+/// (RFC 4291), so clearing them gives the address as configured.
+fn clear_embedded_scope(mut a: [u8; 16]) -> [u8; 16] {
+    if a[0] == 0xfe && a[1] & 0xc0 == 0x80 {
+        a[2] = 0;
+        a[3] = 0;
+    }
+    a
+}
+
+/// The prefix length of a netmask's bytes for an address of `family`: the
+/// leading one bits. A trimmed mask's missing bytes are zero.
+fn prefix_len(mask: &[u8], family: u8) -> u8 {
+    let (start, bytes) = if family == ffi::AF_INET {
+        (offset_of!(ffi::SockaddrIn, addr), 4)
+    } else {
+        (offset_of!(ffi::SockaddrIn6, addr), 16)
+    };
+    let mut bits = 0u32;
+    for i in 0..bytes {
+        let byte = mask.get(start + i).copied().unwrap_or(0);
+        bits += byte.leading_ones();
+        if byte != 0xff {
+            break;
+        }
+    }
+    bits as u8
+}
+
+/// The kind from the interface type (`net/if_types.h`). FreeBSD's Wi-Fi
+/// interfaces (`wlan0`) report `IFT_ETHER`, as do `tap` and `epair`.
+fn kind_of(ftype: u8, loopback: bool) -> InterfaceKind {
+    if loopback {
+        return InterfaceKind::Loopback;
+    }
+    match ftype {
+        ffi::IFT_ETHER => InterfaceKind::Ethernet,
+        ffi::IFT_IEEE80211 => InterfaceKind::Wifi,
+        ffi::IFT_LOOP => InterfaceKind::Loopback,
+        ffi::IFT_GIF | ffi::IFT_STF | ffi::IFT_TUNNEL | ffi::IFT_PPP => InterfaceKind::Tunnel,
+        ffi::IFT_BRIDGE => InterfaceKind::Bridge,
+        ffi::IFT_L2VLAN | ffi::IFT_IEEE8023ADLAG | ffi::IFT_PROPVIRTUAL => InterfaceKind::Virtual,
+        _ => InterfaceKind::Other,
+    }
+}
+
+/// The driver and unit of an interface name, for its newbus node: `em0` is
+/// `dev.em.0`, `vtnet1` is `dev.vtnet.1`.
+fn device_node(name: &[u8]) -> Option<std::ffi::CString> {
+    let digits = name.iter().rev().take_while(|b| b.is_ascii_digit()).count();
+    let (driver, unit) = name.split_at(name.len() - digits);
+    let valid = !driver.is_empty()
+        && (1..=6).contains(&unit.len())
+        && driver
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+    if !valid {
+        return None;
+    }
+    let mut node = b"dev.".to_vec();
+    node.extend_from_slice(driver);
+    node.push(b'.');
+    node.extend_from_slice(unit);
+    std::ffi::CString::new(node).ok()
+}
+
+/// Whether a hardware driver attached the interface: such a driver has a
+/// newbus node under `dev`. A cloned interface (`tap`, `epair`, `bridge`,
+/// `wlan`, `vlan`) has none, even when it carries an Ethernet MAC, which on
+/// FreeBSD 13 and later is a stable address under the FreeBSD Foundation's
+/// OUI and would otherwise pass as a factory address.
+fn has_device_node(name: &[u8]) -> bool {
+    let Some(node) = device_node(name) else {
+        return false;
+    };
+    let mut mib = [0; 8];
+    super::name_to_mib(&node, &mut mib).is_ok()
+}
+
+/// Names, flags, addresses, MACs, and kinds from `getifaddrs`; with
+/// `details`, the MTU and link speed from the same `if_data`.
+pub(crate) fn interfaces(options: &InterfaceOptions) -> Result<Vec<Interface>> {
+    const WHAT: &str = "network interfaces";
+    let too_large = || Error::TooLarge {
+        what: WHAT,
+        limit: options.max_interfaces as u64,
+    };
+    // Addresses per interface are few; this bounds a list that is not.
+    let entry_budget = options.max_interfaces.saturating_mul(64).max(1024);
+    let list = IfAddrs::new(WHAT)?;
+    let mut out: Vec<Interface> = Vec::new();
+    let mut sa = [0u8; 256];
+    let mut mask = [0u8; 256];
+    for (n, entry) in list.entries().enumerate() {
+        if n >= entry_budget {
+            return Err(too_large());
+        }
+        if entry.name.is_null() {
+            continue;
+        }
+        // SAFETY: `ifa_name` is a NUL-terminated name inside the list.
+        let name = unsafe { CStr::from_ptr(entry.name) }.to_bytes();
+        // The entries of one interface come together: try the last one first.
+        let at = match out.last().filter(|i| i.name.as_bytes() == name) {
+            Some(_) => out.len() - 1,
+            None => match out.iter().position(|i| i.name.as_bytes() == name) {
+                Some(at) => at,
+                None => {
+                    if out.len() >= options.max_interfaces {
+                        return Err(too_large());
+                    }
+                    out.push(new_interface(name, entry.flags));
+                    out.len() - 1
+                }
+            },
+        };
+        let iface = &mut out[at];
+        // SAFETY: `ifa_addr` is null or an address of its own `sa_len` inside
+        // the list.
+        let len = unsafe { copy_sockaddr(entry.addr, &mut sa) };
+        match parse_sockaddr(&sa[..len]) {
+            Some(Sock::Ip(addr)) => {
+                // SAFETY: as above, for `ifa_netmask`.
+                let mask_len = unsafe { copy_sockaddr(entry.netmask, &mut mask) };
+                let family = sa[offset_of!(ffi::Sockaddr, family)];
+                iface.addresses.push(IpNet {
+                    addr,
+                    prefix: prefix_len(&mask[..mask_len], family),
+                });
+            }
+            Some(Sock::Link { index, ftype, mac }) => {
+                iface.index = u32::from(index);
+                iface.kind = kind_of(ftype, entry.flags & ffi::IFF_LOOPBACK != 0);
+                iface.mac = mac.map(Mac::from_bytes);
+                iface.is_physical = matches!(
+                    iface.kind,
+                    InterfaceKind::Ethernet | InterfaceKind::Wifi | InterfaceKind::Cellular
+                ) && iface.mac.is_some()
+                    && has_device_node(name);
+                if options.details {
+                    // SAFETY: `ifa_data` of an `AF_LINK` entry is null or its
+                    // `struct if_data`, inside the list.
+                    if let Some(data) = unsafe { copy_if_data(entry.data) } {
+                        iface.mtu = Some(data.mtu);
+                        iface.speed_mbps = Some(data.baudrate / 1_000_000).filter(|&s| s > 0);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    Ok(out)
+}
+
+fn new_interface(name: &[u8], flags: u32) -> Interface {
+    let loopback = flags & ffi::IFF_LOOPBACK != 0;
+    Interface {
+        name: crate::parse::lossy(name, 64),
+        index: 0,
+        description: None,
+        kind: if loopback {
+            InterfaceKind::Loopback
+        } else {
+            InterfaceKind::Other
+        },
+        mac: None,
+        addresses: Vec::new(),
+        up: flags & ffi::IFF_UP != 0,
+        running: flags & ffi::IFF_RUNNING != 0,
+        mtu: None,
+        speed_mbps: None,
+        is_physical: false,
+    }
+}
+
+/// An interface's counters from its `if_data`.
+fn counters_of(name: &[u8], d: &ffi::IfData) -> Counters {
+    Counters {
+        interface: crate::parse::lossy(name, 64),
+        received: Bytes::new(d.ibytes),
+        sent: Bytes::new(d.obytes),
+        packets_received: d.ipackets,
+        packets_sent: d.opackets,
+        errors_in: d.ierrors,
+        errors_out: d.oerrors,
+        dropped_in: d.iqdrops,
+        dropped_out: d.oqdrops,
+    }
+}
+
+/// Calls `f` with each interface's name, flags, and `if_data`: the
+/// `AF_LINK` entries of `getifaddrs`, at most `MAX_ENTRIES` of them.
+fn each_link(what: &'static str, mut f: impl FnMut(&[u8], u32, &ffi::IfData)) -> Result<()> {
+    const MAX_ENTRIES: usize = 1 << 16;
+    let list = IfAddrs::new(what)?;
+    for (n, entry) in list.entries().enumerate() {
+        if n >= MAX_ENTRIES {
+            return Err(Error::TooLarge {
+                what,
+                limit: MAX_ENTRIES as u64,
+            });
+        }
+        if entry.name.is_null() || entry.addr.is_null() {
+            continue;
+        }
+        // SAFETY: `ifa_addr` is a live `sockaddr` inside the list; its family
+        // is its second byte.
+        let family = unsafe { (*entry.addr).family };
+        if family != ffi::AF_LINK {
+            continue;
+        }
+        // SAFETY: `ifa_data` of an `AF_LINK` entry is null or its
+        // `struct if_data`, inside the list.
+        let Some(data) = (unsafe { copy_if_data(entry.data) }) else {
+            continue;
+        };
+        // SAFETY: `ifa_name` is a NUL-terminated name inside the list.
+        let name = unsafe { CStr::from_ptr(entry.name) }.to_bytes();
+        f(name, entry.flags, &data);
+    }
+    Ok(())
+}
+
+pub(crate) fn net_totals() -> Result<Totals> {
+    let mut t = Totals::default();
+    each_link("network counters", |_, flags, data| {
+        // An empty name allocates nothing: the totals stay allocation-free.
+        if flags & ffi::IFF_LOOPBACK == 0 {
+            t.add(&counters_of(b"", data));
+        }
+    })?;
+    Ok(t)
+}
+
+pub(crate) fn net_counters() -> Result<Vec<Counters>> {
+    let mut out = Vec::new();
+    each_link("network counters", |name, _, data| {
+        out.push(counters_of(name, data));
+    })?;
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `NET_RT_DUMP` message: `sockaddr`s as the kernel lays them out, each
+    /// rounded up to 8 bytes; `&[0]` is an empty one, which takes 8.
+    fn route(index: u16, flags: c_int, addrs: c_int, sockaddrs: &[&[u8]]) -> Vec<u8> {
+        let mut m = vec![0u8; size_of::<ffi::RtMsghdr>()];
+        m[offset_of!(ffi::RtMsghdr, version)] = ffi::RTM_VERSION;
+        m[offset_of!(ffi::RtMsghdr, mtype)] = ffi::RTM_GET;
+        let at = offset_of!(ffi::RtMsghdr, index);
+        m[at..at + 2].copy_from_slice(&index.to_ne_bytes());
+        let at = offset_of!(ffi::RtMsghdr, flags);
+        m[at..at + 4].copy_from_slice(&flags.to_ne_bytes());
+        let at = offset_of!(ffi::RtMsghdr, addrs);
+        m[at..at + 4].copy_from_slice(&addrs.to_ne_bytes());
+        for sa in sockaddrs {
+            let step = match sa.first() {
+                Some(0) | None => 8,
+                Some(_) => sa.len().next_multiple_of(8),
+            };
+            let start = m.len();
+            m.extend_from_slice(sa);
+            m.resize(start + step, 0);
+        }
+        let len = m.len() as u16;
+        m[..2].copy_from_slice(&len.to_ne_bytes());
+        m
+    }
+
+    fn v4(a: [u8; 4]) -> Vec<u8> {
+        let mut sa = vec![16, ffi::AF_INET, 0, 0];
+        sa.extend(a);
+        sa.resize(16, 0);
+        sa
+    }
+
+    const ADDRS: c_int = ffi::RTA_DST | ffi::RTA_GATEWAY | ffi::RTA_NETMASK;
+    const GATEWAY: c_int = 0x2;
+
+    /// `default via 192.168.1.1`: the netmask's `sa_len` is 0.
+    fn default_v4(index: u16, flags: c_int) -> Vec<u8> {
+        route(
+            index,
+            flags,
+            ADDRS,
+            &[&v4([0; 4]), &v4([192, 168, 1, 1]), &[0]],
+        )
+    }
+
+    #[test]
+    fn test_net_freebsd_sockaddr_stepping() {
+        let (sa, rest) = next_sockaddr(&[6, 2, 0, 0, 9, 9, 0, 0, 7]).unwrap();
+        assert_eq!((sa, rest), (&[6, 2, 0, 0, 9, 9][..], &[7][..]));
+        let (sa, rest) = next_sockaddr(&[0, 0, 0, 0, 0, 0, 0, 0, 7]).unwrap();
+        assert_eq!((sa, rest), (&[][..], &[7][..]), "an empty one takes a long");
+        let mut sixteen = v4([1, 2, 3, 4]);
+        sixteen.push(5);
+        assert_eq!(next_sockaddr(&sixteen).unwrap().1, &[5]);
+        assert_eq!(next_sockaddr(&[]), None);
+        assert_eq!(next_sockaddr(&[16, 2]), None);
+        assert_eq!(next_sockaddr(&[6, 2, 0, 0, 9, 9]), None);
+    }
+
+    #[test]
+    fn test_net_freebsd_default_route_found() {
+        let up_gw = ffi::RTF_UP | GATEWAY;
+        assert_eq!(default_route(&default_v4(2, up_gw)), Some(2));
+        let direct = route(
+            9,
+            ffi::RTF_UP,
+            ffi::RTA_DST | ffi::RTA_NETMASK,
+            &[&v4([0; 4]), &[0]],
+        );
+        assert_eq!(default_route(&direct), Some(9));
+        let mut v6 = vec![28, ffi::AF_INET6];
+        v6.resize(28, 0);
+        let ipv6 = route(
+            6,
+            ffi::RTF_UP,
+            ffi::RTA_DST | ffi::RTA_NETMASK,
+            &[&v6, &[0]],
+        );
+        assert_eq!(default_route(&ipv6), Some(6));
+    }
+
+    #[test]
+    fn test_net_freebsd_other_routes_are_not_default() {
+        assert_eq!(
+            default_route(&default_v4(4, ffi::RTF_UP | ffi::RTF_HOST)),
+            None
+        );
+        assert_eq!(default_route(&default_v4(4, 0)), None);
+        assert_eq!(default_route(&default_v4(0, ffi::RTF_UP)), None);
+        let net = route(
+            4,
+            ffi::RTF_UP,
+            ADDRS,
+            &[&v4([10, 0, 0, 0]), &v4([10, 0, 0, 1]), &[0]],
+        );
+        assert_eq!(default_route(&net), None);
+        let half = [5, 0, 0, 0, 0x80];
+        let vpn = route(
+            8,
+            ffi::RTF_UP,
+            ADDRS,
+            &[&v4([0; 4]), &v4([10, 8, 0, 1]), &half],
+        );
+        assert_eq!(default_route(&vpn), None);
+        let mut other = default_v4(4, ffi::RTF_UP);
+        other[offset_of!(ffi::RtMsghdr, version)] = 4;
+        assert_eq!(default_route(&other), None);
+        let full = default_v4(4, ffi::RTF_UP);
+        for cut in [0, 2, 40, size_of::<ffi::RtMsghdr>(), full.len() - 16] {
+            assert_eq!(default_route(&full[..cut]), None, "{cut}");
+        }
+    }
+
+    #[test]
+    fn test_net_freebsd_walks_to_the_default() {
+        let mut buf = route(
+            1,
+            ffi::RTF_UP,
+            ADDRS,
+            &[&v4([127, 0, 0, 0]), &v4([127, 0, 0, 1]), &[0]],
+        );
+        buf.extend(default_v4(4, ffi::RTF_UP));
+        buf.extend(default_v4(9, ffi::RTF_UP));
+        assert_eq!(walk_routes("test", &buf).unwrap(), Some(4));
+        assert_eq!(walk_routes("test", &[]).unwrap(), None);
+        let mut bad = default_v4(4, 0);
+        bad[..2].copy_from_slice(&0u16.to_ne_bytes());
+        assert!(matches!(
+            walk_routes("test", &bad),
+            Err(Error::Malformed { .. })
+        ));
+        bad[..2].copy_from_slice(&4000u16.to_ne_bytes());
+        assert!(walk_routes("test", &bad).is_err());
+        assert!(walk_routes("test", &[1]).is_err());
+    }
+
+    #[test]
+    fn test_net_freebsd_tcp_states() {
+        let mut data = Vec::new();
+        for n in 0..TCP_NSTATES as u64 {
+            data.extend((n + 1).to_ne_bytes());
+        }
+        assert_eq!(tcp_from(&data), Some((5, 11, 66)));
+        assert_eq!(tcp_from(&data[..80]), None);
+        assert_eq!(tcp_from(&[]), None);
+        let mut huge = data.clone();
+        huge[..8].copy_from_slice(&u64::MAX.to_ne_bytes());
+        assert_eq!(tcp_from(&huge).unwrap().2, u64::MAX);
+    }
+
+    #[test]
+    fn test_net_freebsd_dns_budget() {
+        let dns = dns_from(
+            "test",
+            resolv::parse(b"nameserver 1.1.1.1\nsearch a.example\n"),
+        )
+        .unwrap();
+        assert_eq!(dns.servers.len(), 1);
+        assert_eq!(dns.search, ["a.example"]);
+        let mut text = String::new();
+        for i in 0..=resolv::MAX_ENTRIES {
+            text.push_str(&format!("nameserver 10.0.0.{i}\n"));
+        }
+        assert!(matches!(
+            dns_from("test", resolv::parse(text.as_bytes())),
+            Err(Error::TooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn test_net_freebsd_parse_sockaddr_families() {
+        let mut v4 = vec![16, ffi::AF_INET, 0, 0, 192, 168, 1, 20];
+        v4.resize(16, 0);
+        assert_eq!(
+            parse_sockaddr(&v4),
+            Some(Sock::Ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20))))
+        );
+        let mut v6 = vec![28, ffi::AF_INET6, 0, 0, 0, 0, 0, 0];
+        v6.extend([0xfe, 0x80, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        v6.resize(28, 0);
+        assert_eq!(
+            parse_sockaddr(&v6),
+            Some(Sock::Ip(IpAddr::V6(Ipv6Addr::new(
+                0xfe80, 0, 0, 0, 0, 0, 0, 1
+            ))))
+        );
+        // `em0` with a MAC after the three name bytes.
+        let mut dl = vec![0u8, ffi::AF_LINK];
+        dl.extend(2u16.to_ne_bytes());
+        dl.extend([ffi::IFT_ETHER, 3, 6, 0]);
+        dl.extend(b"em0");
+        dl.extend([0x00, 0x1b, 0x21, 0xaa, 0xbb, 0x0c]);
+        dl[0] = dl.len() as u8;
+        assert_eq!(
+            parse_sockaddr(&dl),
+            Some(Sock::Link {
+                index: 2,
+                ftype: ffi::IFT_ETHER,
+                mac: Some([0x00, 0x1b, 0x21, 0xaa, 0xbb, 0x0c]),
+            })
+        );
+        assert_eq!(parse_sockaddr(&[16, 99]), None);
+        assert_eq!(parse_sockaddr(&[16, ffi::AF_INET, 0]), None);
+        assert_eq!(parse_sockaddr(&[]), None);
+    }
+
+    #[test]
+    fn test_net_freebsd_prefix_and_kind() {
+        let v4 = |m: [u8; 4]| {
+            let mut sa = vec![16, ffi::AF_INET, 0, 0];
+            sa.extend(m);
+            sa
+        };
+        assert_eq!(prefix_len(&v4([255, 255, 255, 0]), ffi::AF_INET), 24);
+        assert_eq!(prefix_len(&v4([255; 4]), ffi::AF_INET), 32);
+        assert_eq!(prefix_len(&[], ffi::AF_INET), 0);
+        assert_eq!(kind_of(ffi::IFT_ETHER, false), InterfaceKind::Ethernet);
+        assert_eq!(kind_of(ffi::IFT_ETHER, true), InterfaceKind::Loopback);
+        assert_eq!(kind_of(ffi::IFT_BRIDGE, false), InterfaceKind::Bridge);
+        assert_eq!(kind_of(ffi::IFT_PROPVIRTUAL, false), InterfaceKind::Virtual);
+        assert_eq!(kind_of(0x01, false), InterfaceKind::Other);
+    }
+
+    #[test]
+    fn test_net_freebsd_device_node_names() {
+        assert_eq!(device_node(b"em0").unwrap().as_c_str(), c"dev.em.0");
+        assert_eq!(device_node(b"vtnet12").unwrap().as_c_str(), c"dev.vtnet.12");
+        assert_eq!(device_node(b"mlx5en0").unwrap().as_c_str(), c"dev.mlx5en.0");
+        for name in [&b"lo"[..], b"0", b"", b"em", b"EM0", b"em.0", b"em1234567"] {
+            assert_eq!(device_node(name), None, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn test_net_freebsd_live_readings() {
+        let list = interfaces(&InterfaceOptions::default()).unwrap();
+        let lo0 = list.iter().find(|i| i.name == "lo0").unwrap();
+        assert_eq!(lo0.kind, InterfaceKind::Loopback);
+        assert!(lo0.index > 0 && lo0.mac.is_none() && !lo0.is_physical);
+        assert!(
+            lo0.addresses
+                .iter()
+                .any(|a| a.addr == IpAddr::V4(Ipv4Addr::LOCALHOST) && a.prefix == 8)
+        );
+        let tight = InterfaceOptions {
+            max_interfaces: 0,
+            ..InterfaceOptions::default()
+        };
+        assert!(matches!(interfaces(&tight), Err(Error::TooLarge { .. })));
+        let counters = net_counters().unwrap();
+        assert!(counters.iter().any(|c| c.interface == "lo0"));
+        let before = net_totals().unwrap();
+        let after = net_totals().unwrap();
+        assert!(after.received >= before.received && after.sent >= before.sent);
+        let c = connections().unwrap();
+        assert!(c.tcp_total.is_some());
+        if let Some(index) = primary_interface().unwrap() {
+            assert!(list.iter().any(|i| i.index == index), "{index}");
+        }
+        assert!(!has_device_node(b"lo0"));
+    }
+}

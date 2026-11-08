@@ -86,6 +86,7 @@ jobs:
           - i686-pc-windows-msvc
           - aarch64-linux-android
           - aarch64-apple-ios
+          - x86_64-unknown-freebsd
         rust: [stable, "1.89"]
     env:
       # blake3 (feature device-id) would build C and assembly for the target,
@@ -114,6 +115,56 @@ jobs:
         run: cargo clippy --target ${{ matrix.target }} --all-targets --all-features -- -D warnings
       - name: Clippy and layout oracles (no default features)
         run: cargo clippy --target ${{ matrix.target }} --all-targets --no-default-features -- -D warnings
+
+  # The FreeBSD backend's readings run against a real kernel: the cross job
+  # above checks the layouts, this one runs the whole test suite inside a
+  # FreeBSD virtual machine, as an unprivileged user (dev/PLAN.md, D-098).
+  freebsd:
+    name: FreeBSD 14 VM (${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [stable, "1.89"]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Clippy and tests in FreeBSD
+        uses: vmactions/freebsd-vm@v1.5.9
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.rust }}
+          CI: "true"
+        with:
+          release: "14"
+          envs: "RUST_TOOLCHAIN CI"
+          copyback: false
+          run: |
+            set -eu
+            freebsd-version -ku
+            sysctl kern.vm_guest hw.ncpu hw.physmem kern.timecounter.hardware
+            pw useradd -n ci -m -s /bin/sh
+            chown -R ci .
+            cat > /tmp/ci.sh <<'EOS'
+            set -eu
+            fetch -q -o /tmp/rustup-init.sh https://sh.rustup.rs
+            sh /tmp/rustup-init.sh -y -q --profile minimal --default-toolchain "$1" -c clippy
+            . "$HOME/.cargo/env"
+            cd "$2"
+            export CI=true CARGO_TERM_COLOR=always RUSTFLAGS="-D warnings"
+            rustc --version
+            cargo clippy --all-targets -- -D warnings
+            cargo clippy --all-targets --all-features -- -D warnings
+            cargo clippy --all-targets --no-default-features -- -D warnings
+            cargo test
+            # A crash in a test thread loses its output: on failure, run the
+            # unit tests one at a time, uncaptured, so the log names the test.
+            if ! cargo test --all-features; then
+              cargo test --lib --all-features -- --test-threads=1 --nocapture
+              exit 1
+            fi
+            cargo test --no-default-features
+            EOS
+            su -l ci -c "sh /tmp/ci.sh '$RUST_TOOLCHAIN' '$PWD'"
 
   container:
     name: Container limits (cgroup v2)

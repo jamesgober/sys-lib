@@ -36,7 +36,12 @@ fn need(program: &str, args: &[&str]) -> Option<String> {
 }
 
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos", windows)),
+    not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        windows
+    )),
     allow(dead_code)
 )]
 fn number(text: &str) -> usize {
@@ -904,4 +909,82 @@ fn test_live_linux_detection_matches_the_tools() {
             .sum::<usize>(),
         cpu::logical()
     );
+}
+
+#[cfg(target_os = "freebsd")]
+#[test]
+fn test_live_freebsd_matches_sysctl_and_the_tools() {
+    use sys_lib::{disk, mem, net};
+    let sysctl = |name: &str| need("sysctl", &["-n", name]);
+    if let Some(n) = sysctl("hw.ncpu") {
+        assert_eq!(cpu::logical(), number(&n));
+        assert_eq!(cpu::online(), number(&n));
+    }
+    if let Some(model) = sysctl("hw.model") {
+        assert_eq!(cpu::raw_name(), Some(model.as_str()));
+    }
+    if let Some(release) = sysctl("kern.osrelease") {
+        assert_eq!(os::kernel(), release);
+    }
+    if let Some(v) = need("freebsd-version", &["-u"]) {
+        // The userland version names the release; os-release says the same.
+        assert!(
+            os::name().contains(v.split("-p").next().unwrap()),
+            "{} vs {v}",
+            os::name()
+        );
+    }
+    assert_eq!(os::distro_id(), "freebsd");
+    assert_eq!(os::kind(), os::Kind::FreeBsd);
+    if let Some(n) = sysctl("hw.physmem") {
+        assert_eq!(mem::host_total().unwrap().raw(), n.parse::<u64>().unwrap());
+    }
+    if let Some(df) = need("df", &["-k", "/"]) {
+        let blocks: u64 = df
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let s = disk::space("/").unwrap();
+        assert!(
+            close(s.total.raw(), blocks * 1024, 16 * MIB),
+            "{} vs {}",
+            s.total,
+            blocks * 1024
+        );
+    }
+    if let Some(b) = sysctl("kern.boottime") {
+        // "{ sec = 1700000000, usec = 123456 } Tue Nov 14 ..."
+        let sec: u64 = b
+            .split("sec = ")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let boot = host::boot_time()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(boot.abs_diff(sec) <= 2, "{boot} vs {sec}");
+    }
+    // `route -n get default` names the default route's interface.
+    if let Some(route) = tool("route", &["-n", "get", "default"]) {
+        let name = route
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("interface:"))
+            .map(str::trim);
+        if let Some(name) = name {
+            let primary = net::primary().unwrap();
+            assert_eq!(primary.map(|i| i.name.clone()).as_deref(), Some(name));
+        }
+    }
 }

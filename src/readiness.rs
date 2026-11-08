@@ -439,7 +439,22 @@ mod fixes {
     pub(super) const SWAP: &str = "System Properties > Advanced > Performance > Virtual memory";
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(target_os = "freebsd")]
+mod fixes {
+    pub(super) const NOFILE: &str =
+        "openfiles in /etc/login.conf (then cap_mkdb /etc/login.conf), within kern.maxfilesperproc";
+    pub(super) const MEMLOCK: &str =
+        "memorylocked=unlimited in /etc/login.conf (then cap_mkdb /etc/login.conf)";
+    pub(super) const BACKLOG: &str = "sysctl kern.ipc.soacceptqueue=4096, and in /etc/sysctl.conf";
+    pub(super) const PORTS: &str =
+        "sysctl net.inet.ip.portrange.first=10000 net.inet.ip.portrange.last=65535";
+    pub(super) const GOVERNOR: &str = "";
+    pub(super) const CLOCK: &str =
+        "sysrc ntpd_enable=YES ntpd_sync_on_start=YES, then service ntpd start";
+    pub(super) const SWAP: &str = "add a swap partition or file: swapon(8) and /etc/fstab";
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "freebsd", windows)))]
 mod fixes {
     pub(super) const NOFILE: &str =
         "LimitNOFILE=65536 in the systemd unit, or nofile in /etc/security/limits.conf";
@@ -974,7 +989,9 @@ fn data_dir_checks(out: &mut Vec<Check>, profile: Profile, dir: &DataDir) {
 const RECOMMENDED_FS: &str = "local APFS";
 #[cfg(windows)]
 const RECOMMENDED_FS: &str = "local NTFS or ReFS";
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(target_os = "freebsd")]
+const RECOMMENDED_FS: &str = "local ZFS or UFS";
+#[cfg(not(any(target_os = "macos", target_os = "freebsd", windows)))]
 const RECOMMENDED_FS: &str = "local ext4 or xfs";
 
 /// The filesystems a database profile passes, lowercase.
