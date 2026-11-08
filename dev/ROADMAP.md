@@ -53,7 +53,7 @@ Exit: tower's memory watermark and load shedding and metrics-lib's system collec
 - [x] Memory with E-28 to E-35; attack tests T5, T6, T7, T8 (`src/linux/hostile.rs`, which found an uptime panic, fixed).
 - [x] Fixtures recaptured with `capture.sh` v3 (the live-reading files); fuzz target `procfs` for the new parsers.
 
-## v0.5.0 - Detection and identity (DONE, 2026-11-02)
+## v0.5.0 - Detection and identity (DONE, 2026-11-07; 0.5.1 docs.rs fix the same day)
 API: OS-08 to OS-13 · CPU-13, CPU-40 to CPU-44 · MEM-12 · DSK-04, DSK-05 · NET-06, NET-10 · HST-05 to HST-08, HST-11 to HST-13 · VRT-01 to VRT-05 · PWR-01 to PWR-04 · PRC-24, PRC-25 · DEV-01 to DEV-07 · ROOT-06.
 Exit: every item above implemented and tested on Linux, macOS, Windows; `docs/SOURCES.md`, `docs/PLATFORM-NOTES.md`, `docs/ARCHITECTURE.md` complete for everything shipped so far.
 - Moved to 0.6 (D-062): `ubuntu-24.04-desktop-amd`, which still needs a bare-metal Linux desktop.
