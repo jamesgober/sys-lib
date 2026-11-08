@@ -332,9 +332,17 @@ pub(crate) const IFF_LOOPBACK: c_uint = 0x8;
 pub(crate) const IFF_RUNNING: c_uint = 0x40;
 
 /// `O_NOFOLLOW` (fcntl.h): its value differs between architectures.
-#[cfg(any(target_arch = "aarch64", target_arch = "arm", target_arch = "powerpc64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "powerpc64"
+))]
 pub(crate) const O_NOFOLLOW: c_int = 0o100_000;
-#[cfg(not(any(target_arch = "aarch64", target_arch = "arm", target_arch = "powerpc64")))]
+#[cfg(not(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "powerpc64"
+)))]
 pub(crate) const O_NOFOLLOW: c_int = 0o400_000;
 /// `ERANGE` (errno.h): a buffer was too small.
 pub(crate) const ERANGE: c_int = 34;
@@ -440,8 +448,7 @@ mod tests {
     use libc::{dirent as dirent_t, rlimit as rlimit_t, statfs as statfs_t, statvfs as statvfs_t};
     #[cfg(target_pointer_width = "32")]
     use libc::{
-        dirent64 as dirent_t, rlimit64 as rlimit_t, statfs64 as statfs_t,
-        statvfs64 as statvfs_t,
+        dirent64 as dirent_t, rlimit64 as rlimit_t, statfs64 as statfs_t, statvfs64 as statvfs_t,
     };
 
     same_layout!(Statvfs, statvfs_t,
