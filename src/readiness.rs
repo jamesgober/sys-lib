@@ -191,20 +191,29 @@ impl Report {
 /// did not pass, its fix.
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Each column as wide as its longest entry, so long values never run
+        // into the next column; the found column is capped (a long value then
+        // only pushes its own row).
+        let width = |col: fn(&Check) -> usize, cap: usize| {
+            self.checks.iter().map(col).max().unwrap_or(0).min(cap)
+        };
+        let id = width(|c| c.id.len(), 32);
+        let title = width(|c| c.title.chars().count(), 40);
+        let found = width(|c| c.found.chars().count(), 32);
         for (i, c) in self.checks.iter().enumerate() {
             if i > 0 {
                 f.write_char('\n')?;
             }
             write!(
                 f,
-                "{:<8}{:<20}{:<34}{:<24}{}",
+                "{:<7} {:<id$}  {:<title$}  {:<found$}  {}",
                 c.status.name(),
                 c.id,
                 c.title,
                 c.found,
                 c.recommended
             )?;
-            if c.status != Status::Pass {
+            if c.status != Status::Pass && !c.fix.is_empty() {
                 write!(f, "\n        {}", c.fix)?;
             }
         }
@@ -252,7 +261,7 @@ impl<T> Fact<T> {
         }
     }
 
-    fn map<U>(self, f: impl FnOnce(T) -> U) -> Fact<U> {
+    pub(crate) fn map<U>(self, f: impl FnOnce(T) -> U) -> Fact<U> {
         match self {
             Fact::Skip => Fact::Skip,
             Fact::Value(v) => Fact::Value(f(v)),
@@ -680,7 +689,12 @@ pub(crate) fn evaluate(profile: Profile, inputs: &Inputs) -> Report {
                 Some(n) => {
                     let mut found = n.to_string();
                     if let Fact::Value(max) = t.files_system {
-                        found.push_str(&format!(", system {max}"));
+                        // Kernels default fs.file-max to LONG_MAX.
+                        if max >= 1 << 62 {
+                            found.push_str(", system unlimited");
+                        } else {
+                            found.push_str(&format!(", system {max}"));
+                        }
                     }
                     let status = if n >= want {
                         Status::Pass
@@ -1282,7 +1296,7 @@ mod tests {
         t.swappiness = Fact::Value(60);
         let r = evaluate(Profile::Database, &inputs(t));
         let text = r.to_string();
-        assert!(text.contains("WARN    linux.swappiness"));
+        assert!(text.contains("WARN    linux.swappiness  "), "{text}");
         assert!(text.contains("\n        sysctl -w vm.swappiness=1"));
         let mut kv = String::new();
         r.write_kv(&mut kv).unwrap();

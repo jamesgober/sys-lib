@@ -4,7 +4,7 @@
 use core::time::Duration;
 use std::time::Instant;
 
-use crate::{Error, Percent, Result};
+use crate::{Error, Percent, Result, origin::Origin};
 
 /// The interval [`usage`] measures over: 100 ms.
 pub const DEFAULT_WINDOW: Duration = Duration::from_millis(100);
@@ -222,6 +222,7 @@ pub struct Sampler {
     cores: Vec<Times>,
     scratch: Vec<Times>,
     cores_at: Instant,
+    origin: Origin,
 }
 
 impl Sampler {
@@ -231,9 +232,14 @@ impl Sampler {
     ///
     /// As [`times`].
     pub fn new() -> Result<Sampler> {
-        let total = times()?;
+        Self::from(Origin::local())
+    }
+
+    /// [`new`](Sampler::new), reading from `origin`.
+    pub(crate) fn from(origin: Origin) -> Result<Sampler> {
+        let total = origin.cpu_times()?;
         let mut cores = vec![Times::default(); super::logical()];
-        let (cores_total, n) = match read_cores(&mut cores) {
+        let (cores_total, n) = match read_cores(&origin, &mut cores) {
             Ok(r) => r,
             // No per-core counters here (Windows past 64 processors): the
             // total still works; the per-core calls say Unsupported.
@@ -249,6 +255,7 @@ impl Sampler {
             scratch: vec![Times::default(); cores.len()],
             cores,
             cores_at: now,
+            origin,
         })
     }
 
@@ -263,6 +270,7 @@ impl Sampler {
             cores: Vec::new(),
             scratch: Vec::new(),
             cores_at: now,
+            origin: Origin::local(),
         })
     }
 
@@ -274,7 +282,7 @@ impl Sampler {
     /// sample (about 10 ms on Linux: E-21), or when they went backwards, which
     /// re-bases the sampler (E-20). Never a meaningless 0% or 100%.
     pub fn sample(&mut self) -> Result<Usage> {
-        let now = times()?;
+        let now = self.origin.cpu_times()?;
         let at = Instant::now();
         let usage = between(&now, &self.total, at.duration_since(self.at));
         self.total = now;
@@ -309,7 +317,7 @@ impl Sampler {
     /// [`sample`](Sampler::sample); `Unsupported` per core on Windows with
     /// more than 64 logical processors or more than one processor group.
     pub fn sample_per_core_into(&mut self, out: &mut [Percent]) -> Result<Usage> {
-        let (total, n) = read_cores(&mut self.scratch)?;
+        let (total, n) = read_cores(&self.origin, &mut self.scratch)?;
         let at = Instant::now();
         if out.len() < n {
             return Err(Error::TooLarge {
@@ -350,11 +358,11 @@ fn between(now: &Times, then: &Times, interval: Duration) -> Result<Usage> {
 /// The total and per-core counters, into `buf`. When more cores report than
 /// `buf` holds (hot-plug, E-22), it grows once and reads again: the only
 /// allocation in a sampler's steady state.
-fn read_cores(buf: &mut Vec<Times>) -> Result<(Times, usize)> {
-    let (total, n) = match crate::sys::cpu_times_per_core(buf) {
+fn read_cores(origin: &Origin, buf: &mut Vec<Times>) -> Result<(Times, usize)> {
+    let (total, n) = match origin.cpu_times_per_core(buf) {
         Err(Error::TooLarge { .. }) => {
             buf.resize(buf.len() * 2 + super::logical(), Times::default());
-            crate::sys::cpu_times_per_core(buf)?
+            origin.cpu_times_per_core(buf)?
         }
         r => r?,
     };

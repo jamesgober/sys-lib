@@ -26,6 +26,7 @@ pub(crate) mod net;
 pub(crate) mod os;
 pub(crate) mod power;
 pub(crate) mod process;
+pub(crate) mod report;
 pub(crate) mod stat;
 pub(crate) mod topology;
 pub(crate) mod virt;
@@ -293,6 +294,33 @@ impl Root {
                 .and_then(|p| p.to_str().map(str::to_owned)),
             Some(_) => self.text(&format!("{abs}.link")),
         }
+    }
+
+    /// How many entries of a directory `keep` accepts, without collecting
+    /// them; `TooLarge` past `max`.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // the probe
+    pub(crate) fn count_entries(
+        &self,
+        abs: &str,
+        max: u64,
+        keep: impl Fn(&str) -> bool,
+    ) -> Result<u64> {
+        let entries = std::fs::read_dir(self.resolve(abs))
+            .map_err(|e| Error::io("process count", "/proc", e))?;
+        let mut n = 0u64;
+        for entry in entries {
+            let entry = entry.map_err(|e| Error::io("process count", "/proc", e))?;
+            if entry.file_name().to_str().is_some_and(&keep) {
+                n += 1;
+                if n > max {
+                    return Err(Error::TooLarge {
+                        what: "process count",
+                        limit: max,
+                    });
+                }
+            }
+        }
+        Ok(n)
     }
 
     /// The names in a directory, at most `max`, sorted.

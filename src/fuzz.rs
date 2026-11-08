@@ -239,3 +239,20 @@ pub fn fingerprint(data: &[u8]) {
         );
     }
 }
+
+pub fn pci_ids(data: &[u8]) {
+    use crate::parse::pci_ids;
+
+    // The ids come from the first four bytes, so the fuzzer can aim at entries.
+    let id = |i: usize| {
+        u16::from_le_bytes([
+            data.get(i).copied().unwrap_or(0),
+            data.get(i + 1).copied().unwrap_or(0),
+        ])
+    };
+    let (vendor, device) = pci_ids::find(data, id(0), id(2));
+    for name in [vendor, device].into_iter().flatten() {
+        assert!(!name.is_empty() && name.len() <= 256 * 3);
+        assert!(!name.contains('\n'));
+    }
+}

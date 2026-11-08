@@ -152,3 +152,10 @@ path = "fuzz_targets/fingerprint.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "pci_ids"
+path = "fuzz_targets/pci_ids.rs"
+test = false
+doc = false
+bench = false

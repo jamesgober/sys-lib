@@ -91,6 +91,7 @@ pub(crate) const RLIMIT_STACK: c_int = 3;
 pub(crate) const RLIMIT_CORE: c_int = 4;
 pub(crate) const RLIMIT_NPROC: c_int = 6;
 pub(crate) const RLIMIT_NOFILE: c_int = 7;
+pub(crate) const RLIMIT_MEMLOCK: c_int = 8;
 pub(crate) const RLIMIT_AS: c_int = 9;
 
 /// `struct timeval`.
@@ -431,6 +432,7 @@ mod tests {
         assert!(RLIMIT_STACK == libc::RLIMIT_STACK as c_int);
         assert!(RLIMIT_CORE == libc::RLIMIT_CORE as c_int);
         assert!(RLIMIT_NPROC == libc::RLIMIT_NPROC as c_int);
+        assert!(RLIMIT_MEMLOCK == libc::RLIMIT_MEMLOCK as c_int);
         assert!(RLIMIT_NOFILE == libc::RLIMIT_NOFILE as c_int);
         assert!(RLIMIT_AS == libc::RLIMIT_AS as c_int);
         assert!(RUSAGE_SELF == libc::RUSAGE_SELF);

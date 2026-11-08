@@ -32,6 +32,14 @@ impl Tree {
         fs::write(path, content).unwrap();
     }
 
+    pub(crate) fn file(&self, abs: &str, content: &str) {
+        self.put(abs, content.as_bytes());
+    }
+
+    pub(crate) fn bytes(&self, abs: &str, content: &[u8]) {
+        self.put(abs, content);
+    }
+
     pub(crate) fn mkdir(&self, abs: &str) {
         fs::create_dir_all(self.0.join(abs.trim_start_matches('/'))).unwrap();
     }

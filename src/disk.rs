@@ -15,7 +15,7 @@ use std::{
     time::Instant,
 };
 
-use crate::{Bytes, Error, Percent, Pressure, Rate, Result};
+use crate::{Bytes, Error, Percent, Pressure, Rate, Result, origin::Origin};
 
 /// The space on one filesystem.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -449,6 +449,7 @@ pub struct IoSampler {
     at: Instant,
     devices: Vec<(String, DiskRaw)>,
     devices_at: Instant,
+    origin: Origin,
 }
 
 impl IoSampler {
@@ -458,12 +459,18 @@ impl IoSampler {
     ///
     /// As [`io_totals`].
     pub fn new() -> Result<IoSampler> {
+        Self::from(Origin::local())
+    }
+
+    /// [`new`](IoSampler::new), reading from `origin`.
+    pub(crate) fn from(origin: Origin) -> Result<IoSampler> {
         let now = Instant::now();
         Ok(IoSampler {
-            total: crate::sys::disk_io_totals()?,
+            total: origin.disk_io_totals()?,
             at: now,
-            devices: crate::sys::disk_io_counters()?,
+            devices: origin.disk_io_counters()?,
             devices_at: now,
+            origin,
         })
     }
 
@@ -474,6 +481,7 @@ impl IoSampler {
             at: now,
             devices: Vec::new(),
             devices_at: now,
+            origin: Origin::local(),
         })
     }
 
@@ -485,7 +493,7 @@ impl IoSampler {
     ///
     /// `TooSoon` when no time passed since the previous sample.
     pub fn sample(&mut self) -> Result<DiskIo> {
-        let now = crate::sys::disk_io_totals()?;
+        let now = self.origin.disk_io_totals()?;
         let at = Instant::now();
         let interval = at.duration_since(self.at);
         if interval.is_zero() {
@@ -504,7 +512,7 @@ impl IoSampler {
     ///
     /// `TooSoon` when no time passed since the previous sample.
     pub fn sample_per_disk(&mut self) -> Result<Vec<DeviceIo>> {
-        let now = crate::sys::disk_io_counters()?;
+        let now = self.origin.disk_io_counters()?;
         let at = Instant::now();
         let interval = at.duration_since(self.devices_at);
         if interval.is_zero() {

@@ -101,6 +101,9 @@ pub mod mem;
 pub mod net;
 pub mod os;
 pub mod power;
+#[cfg(target_os = "linux")]
+#[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
+pub mod probe;
 pub mod process;
 pub mod readiness;
 pub mod security;
@@ -119,6 +122,7 @@ pub mod __fuzz {
 mod fuzz;
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 mod linux;
+mod origin;
 mod parse;
 mod pressure;
 mod summary;

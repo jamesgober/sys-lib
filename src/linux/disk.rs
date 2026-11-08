@@ -80,6 +80,24 @@ pub(crate) struct MountEntry {
     pub(crate) network: bool,
     /// `major:minor`, for deduplication.
     dev: Vec<u8>,
+    /// The per-mount options (`rw,noatime`).
+    options: String,
+}
+
+impl MountEntry {
+    /// The device number, `major:minor`.
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "android", test)),
+        allow(dead_code)
+    )]
+    pub(crate) fn dev(&self) -> &str {
+        core::str::from_utf8(&self.dev).unwrap_or("")
+    }
+
+    /// The per-mount options.
+    pub(crate) fn options(&self) -> &str {
+        &self.options
+    }
 }
 
 fn is_ro(options: &[u8]) -> bool {
@@ -140,13 +158,18 @@ pub(crate) fn holding(path: &std::path::Path, entries: Vec<MountEntry>) -> Optio
 /// The filesystems `options` selects, each once (by device number) unless
 /// `include_duplicates`, at their shortest mount point.
 pub(crate) fn mounts(root: &Root, options: &ListOptions) -> Result<Vec<MountEntry>> {
+    mounts_at(root, "/proc/self/mountinfo", options)
+}
+
+/// [`mounts`] from another `mountinfo` (a host's process 1, for a probe).
+pub(crate) fn mounts_at(root: &Root, path: &str, options: &ListOptions) -> Result<Vec<MountEntry>> {
     let mut out: Vec<MountEntry> = Vec::new();
     let mut seen = 0usize;
     let mut too_many = false;
     // T7: the budget bounds the bytes read as well as the entries kept.
     let byte_budget = options.max_mounts.saturating_mul(4096).max(1 << 16);
     root.for_each_line(
-        "/proc/self/mountinfo",
+        path,
         byte_budget,
         "disk list",
         "/proc/self/mountinfo",
@@ -192,6 +215,7 @@ pub(crate) fn mounts(root: &Root, options: &ListOptions) -> Result<Vec<MountEntr
                 removable,
                 network,
                 dev: m.device.to_vec(),
+                options: lossy(m.options, 4096),
             };
             let duplicate = if options.include_duplicates || network {
                 None
