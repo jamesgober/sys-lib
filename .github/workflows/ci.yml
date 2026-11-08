@@ -158,14 +158,17 @@ jobs:
             cargo clippy --all-targets -- -D warnings
             cargo clippy --all-targets --all-features -- -D warnings
             cargo clippy --all-targets --no-default-features -- -D warnings
-            cargo test
+            # Every mode runs to the end, so one log shows every failure.
+            status=0
+            cargo test --no-fail-fast || status=1
             # A crash in a test thread loses its output: on failure, run the
             # unit tests one at a time, uncaptured, so the log names the test.
-            if ! cargo test --all-features; then
-              cargo test --lib --all-features -- --test-threads=1 --nocapture
-              exit 1
+            if ! cargo test --no-fail-fast --all-features; then
+              status=1
+              cargo test --lib --all-features -- --test-threads=1 --nocapture || true
             fi
-            cargo test --no-default-features
+            cargo test --no-fail-fast --no-default-features || status=1
+            exit "$status"
             EOS
             su -l ci -c "sh /tmp/ci.sh '$RUST_TOOLCHAIN' '$PWD'"
 

@@ -115,8 +115,12 @@ pub(crate) fn process_memory() -> Result<Bytes> {
     ))
 }
 
+/// `ru_maxrss`, at least the resident size now: the kernel updates the peak
+/// on statistics-clock ticks, so a process that just grew can read a peak
+/// below its current size.
 pub(crate) fn peak_memory() -> Result<Bytes> {
-    Ok(Bytes::new(peak_bytes(&rusage(MEMORY)?)))
+    let peak = peak_bytes(&rusage(MEMORY)?);
+    Ok(Bytes::new(peak.max(process_memory()?.raw())))
 }
 
 /// Resident and virtual size from `kern.proc.pid`, the peak from
@@ -281,7 +285,7 @@ mod tests {
         assert!(rss.raw() > 0);
         let d = memory_detail().unwrap();
         assert!(d.peak_resident >= d.resident && d.virtual_size >= d.resident);
-        assert!(peak_memory().unwrap().raw() > 0);
+        assert!(peak_memory().unwrap() >= rss);
         assert!(parent_id().is_some());
         assert!(threads().unwrap() >= 1);
         let before = open_files().unwrap();
