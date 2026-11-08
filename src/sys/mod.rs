@@ -66,12 +66,15 @@ macro_rules! same_layout {
 // The readings, answered `Unsupported` until a platform defines its own (see
 // the module's documentation).
 mod detection;
+mod environment;
 mod pending;
 
 // CPUID: shared by the x86 backends.
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
 mod x86;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub(crate) use x86::invariant_tsc as x86_invariant_tsc;
 
 // Linux and Android on 64-bit targets. Struct layouts are verified for LP64
 // (glibc, musl, bionic); a 32-bit Linux target has no verified layout yet and

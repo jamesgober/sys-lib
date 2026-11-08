@@ -20,6 +20,7 @@ mod mem;
 mod net;
 mod power;
 mod process;
+mod report;
 mod topology;
 
 use std::{
@@ -33,7 +34,8 @@ use std::{fs::OpenOptions, path::Path};
 #[cfg(feature = "device-id")]
 pub(crate) use self::device::*;
 pub(crate) use self::{
-    cpu::*, detect::*, disk::*, host::*, mem::*, net::*, power::*, process::*, topology::*,
+    cpu::*, detect::*, disk::*, host::*, mem::*, net::*, power::*, process::*, report::*,
+    topology::*,
 };
 use crate::{
     Error, Result,

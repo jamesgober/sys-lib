@@ -11,8 +11,17 @@ mod mem;
 mod net;
 mod power;
 mod process;
+mod report;
 mod session;
 mod topology;
+
+use std::{
+    ffi::c_void,
+    mem::{MaybeUninit, size_of, size_of_val},
+    time::{Duration, SystemTime},
+};
+#[cfg(feature = "guard")]
+use std::{fs::OpenOptions, path::Path};
 
 pub(crate) use cpu::*;
 pub(crate) use detect::*;
@@ -25,14 +34,8 @@ pub(crate) use mem::*;
 pub(crate) use net::*;
 pub(crate) use power::*;
 pub(crate) use process::*;
+pub(crate) use report::*;
 pub(crate) use session::*;
-use std::{
-    ffi::c_void,
-    mem::{MaybeUninit, size_of, size_of_val},
-    time::{Duration, SystemTime},
-};
-#[cfg(feature = "guard")]
-use std::{fs::OpenOptions, path::Path};
 pub(crate) use topology::*;
 
 use crate::{Error, Result, os::Source, process::User, sys::OsFacts};

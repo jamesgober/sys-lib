@@ -85,12 +85,14 @@
 /// Crate version string, populated by Cargo at build time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod bench;
 pub mod build;
 pub mod cpu;
 #[cfg(feature = "device-id")]
 #[cfg_attr(docsrs, doc(cfg(feature = "device-id")))]
 pub mod device;
 pub mod disk;
+pub mod gpu;
 pub mod host;
 #[cfg(feature = "instance")]
 #[cfg_attr(docsrs, doc(cfg(feature = "instance")))]
@@ -100,6 +102,9 @@ pub mod net;
 pub mod os;
 pub mod power;
 pub mod process;
+pub mod readiness;
+pub mod security;
+pub mod sensors;
 pub mod virt;
 
 mod error;

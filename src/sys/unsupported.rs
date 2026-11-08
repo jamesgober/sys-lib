@@ -4,6 +4,8 @@
 #[cfg(feature = "guard")]
 use std::{fs::OpenOptions, path::Path};
 
+// The live readings: unknown on these platforms.
+pub(crate) use super::{detection::*, environment::*, pending::*};
 use crate::{
     Error, Result,
     cpu::Vendor,
@@ -13,9 +15,6 @@ use crate::{
 };
 #[cfg(feature = "guard")]
 use crate::{process::Limit, sys::FsKind};
-
-// The live readings: unknown on these platforms.
-pub(crate) use super::{detection::*, pending::*};
 
 fn unsupported(what: &'static str) -> Error {
     Error::Unsupported {

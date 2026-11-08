@@ -65,3 +65,17 @@ pub(crate) fn is_hyperv_root() -> bool {
 pub(crate) fn signature() -> u32 {
     if cpuid(0).eax < 1 { 0 } else { cpuid(1).eax }
 }
+
+/// The extended leaf with the power-management flags.
+const POWER_LEAF: u32 = 0x8000_0007;
+/// `InvariantTSC`: bit 8 of EDX in the power leaf (Intel SDM, AMD APM).
+const INVARIANT_TSC: u32 = 1 << 8;
+
+/// Whether the time-stamp counter runs at a constant rate through frequency
+/// changes and idle states; `None` when the processor has no power leaf.
+pub(crate) fn invariant_tsc() -> Option<bool> {
+    if cpuid(0x8000_0000).eax < POWER_LEAF {
+        return None;
+    }
+    Some(cpuid(POWER_LEAF).edx & INVARIANT_TSC != 0)
+}
