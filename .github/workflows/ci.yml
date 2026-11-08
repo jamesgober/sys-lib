@@ -146,8 +146,11 @@ jobs:
             chown -R ci .
             cat > /tmp/ci.sh <<'EOS'
             set -eu
-            fetch -q -o /tmp/rustup-init.sh https://sh.rustup.rs
-            sh /tmp/rustup-init.sh -y -q --profile minimal --default-toolchain "$1" -c clippy
+            # rustup-init itself: the sh.rustup.rs script needs curl or wget,
+            # which the base system lacks; fetch(1) is in base.
+            fetch -q -o /tmp/rustup-init https://static.rust-lang.org/rustup/dist/x86_64-unknown-freebsd/rustup-init
+            chmod +x /tmp/rustup-init
+            /tmp/rustup-init -y -q --profile minimal --default-toolchain "$1" -c clippy
             . "$HOME/.cargo/env"
             cd "$2"
             export CI=true CARGO_TERM_COLOR=always RUSTFLAGS="-D warnings"
