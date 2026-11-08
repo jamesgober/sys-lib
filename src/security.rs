@@ -130,7 +130,7 @@ pub enum VulnStatus {
 
 impl VulnStatus {
     /// The status of a Linux `/sys/devices/system/cpu/vulnerabilities/*` text.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
+    #[allow(dead_code)] // INTERIM until the Linux backend reads it
     pub(crate) fn of(detail: &str) -> VulnStatus {
         if detail.starts_with("Not affected") {
             Self::NotAffected

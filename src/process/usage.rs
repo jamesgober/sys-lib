@@ -276,16 +276,24 @@ impl Sub for ProcessIo {
 /// use std::time::Duration;
 /// use sys_lib::{self as sys, Rate};
 ///
-/// let before = sys::process::io()?;
-/// // ... work ...
-/// let d = sys::process::io()? - before;
-/// println!("wrote {} ({})", d.written, Rate::per(d.written, Duration::from_secs(1)));
+/// match sys::process::io() {
+///     Ok(before) => {
+///         // ... work ...
+///         let d = sys::process::io()? - before;
+///         println!("wrote {} ({})", d.written, Rate::per(d.written, Duration::from_secs(1)));
+///     }
+///     // FreeBSD and iOS do not count this process's bytes.
+///     Err(e) if e.is_unavailable() => {}
+///     Err(e) => return Err(e),
+/// }
 /// # Ok::<(), sys_lib::Error>(())
 /// ```
 ///
 /// # Errors
 ///
-/// `NotFound` or `PermissionDenied` when `/proc/self/io` is hidden; `Os`.
+/// `NotFound` or `PermissionDenied` when `/proc/self/io` is hidden;
+/// `Unsupported` on FreeBSD (it counts block operations, not bytes) and iOS;
+/// `Os`.
 pub fn io() -> Result<ProcessIo> {
     crate::sys::process_io()
 }
@@ -387,8 +395,11 @@ mod tests {
         assert!(started <= SystemTime::now());
         let info = info().unwrap();
         assert_eq!(info.id, super::super::id());
-        let io = io().unwrap();
-        assert_eq!((io - io).read, Bytes::ZERO);
+        // FreeBSD and iOS do not count the bytes.
+        match io() {
+            Ok(io) => assert_eq!((io - io).read, Bytes::ZERO),
+            Err(e) => assert!(e.is_unavailable(), "{e}"),
+        }
     }
 
     #[test]

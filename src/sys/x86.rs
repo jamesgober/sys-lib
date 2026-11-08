@@ -12,6 +12,7 @@
             any(target_os = "macos", target_os = "ios"),
             target_pointer_width = "64"
         ),
+        all(target_os = "freebsd", target_pointer_width = "64"),
         windows
     )),
     allow(dead_code)
@@ -58,6 +59,18 @@ pub(crate) fn is_hyperv_root() -> bool {
     hypervisor_signature().as_ref() == Some(b"Microsoft Hv")
         && cpuid(HYPERVISOR_LEAF).eax >= HYPERV_FEATURES_LEAF
         && cpuid(HYPERV_FEATURES_LEAF).ebx & CREATE_PARTITIONS != 0
+}
+
+/// The vendor string of CPUID leaf 0 (`GenuineIntel`, `AuthenticAMD`), for a
+/// backend whose OS does not report it.
+#[cfg_attr(not(target_os = "freebsd"), allow(dead_code))]
+pub(crate) fn vendor_id() -> [u8; 12] {
+    let r = cpuid(0);
+    let mut out = [0u8; 12];
+    out[..4].copy_from_slice(&r.ebx.to_le_bytes());
+    out[4..8].copy_from_slice(&r.edx.to_le_bytes());
+    out[8..12].copy_from_slice(&r.ecx.to_le_bytes());
+    out
 }
 
 /// The processor's family, model, and stepping: CPUID leaf 1 EAX.

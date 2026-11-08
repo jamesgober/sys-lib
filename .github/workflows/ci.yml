@@ -88,6 +88,7 @@ jobs:
           - i686-pc-windows-msvc
           - aarch64-linux-android
           - aarch64-apple-ios
+          - x86_64-unknown-freebsd
         rust: [stable, "1.89"]
     env:
       # blake3 (feature device-id) would build C and assembly for the target,
@@ -157,6 +158,62 @@ jobs:
         run: cargo test --target ${{ matrix.target }} --all-features
       - name: Test (no default features)
         run: cargo test --target ${{ matrix.target }} --no-default-features
+
+  # The FreeBSD backend's readings run against a real kernel: the cross job
+  # above checks the layouts, this one runs the whole test suite inside a
+  # FreeBSD virtual machine, as an unprivileged user (dev/PLAN.md, D-098).
+  freebsd:
+    name: FreeBSD 14 VM (${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [stable, "1.89"]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Clippy and tests in FreeBSD
+        uses: vmactions/freebsd-vm@v1.5.9
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.rust }}
+          CI: "true"
+        with:
+          release: "14"
+          envs: "RUST_TOOLCHAIN CI"
+          copyback: false
+          run: |
+            set -eu
+            freebsd-version -ku
+            sysctl kern.vm_guest hw.ncpu hw.physmem kern.timecounter.hardware
+            pw useradd -n ci -m -s /bin/sh
+            chown -R ci .
+            cat > /tmp/ci.sh <<'EOS'
+            set -eu
+            # rustup-init itself: the sh.rustup.rs script needs curl or wget,
+            # which the base system lacks; fetch(1) is in base.
+            fetch -q -o /tmp/rustup-init https://static.rust-lang.org/rustup/dist/x86_64-unknown-freebsd/rustup-init
+            chmod +x /tmp/rustup-init
+            /tmp/rustup-init -y -q --profile minimal --default-toolchain "$1" -c clippy
+            . "$HOME/.cargo/env"
+            cd "$2"
+            export CI=true CARGO_TERM_COLOR=always RUSTFLAGS="-D warnings"
+            rustc --version
+            cargo clippy --all-targets -- -D warnings
+            cargo clippy --all-targets --all-features -- -D warnings
+            cargo clippy --all-targets --no-default-features -- -D warnings
+            # Every mode runs to the end, so one log shows every failure.
+            status=0
+            cargo test --no-fail-fast || status=1
+            # A crash in a test thread loses its output: on failure, run the
+            # unit tests one at a time, uncaptured, so the log names the test.
+            if ! cargo test --no-fail-fast --all-features; then
+              status=1
+              cargo test --lib --all-features -- --test-threads=1 --nocapture || true
+            fi
+            cargo test --no-fail-fast --no-default-features || status=1
+            exit "$status"
+            EOS
+            su -l ci -c "sh /tmp/ci.sh '$RUST_TOOLCHAIN' '$PWD'"
 
   container:
     name: Container limits (cgroup v2)

@@ -528,7 +528,10 @@ pub(crate) const fn form_from_chassis(chassis: u8) -> Option<FormFactor> {
 }
 
 /// The form an ACPI preferred power-management profile names.
-#[cfg_attr(any(target_vendor = "apple", target_os = "android"), allow(dead_code))]
+#[cfg_attr(
+    any(target_vendor = "apple", target_os = "android", target_os = "freebsd"),
+    allow(dead_code)
+)]
 pub(crate) const fn form_from_pm_profile(profile: u8) -> Option<FormFactor> {
     Some(match profile {
         1 | 3 | 6 => FormFactor::Desktop,
