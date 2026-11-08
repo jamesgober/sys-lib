@@ -65,17 +65,17 @@ Exit: every item above implemented and tested on Linux, macOS, Windows; `docs/SO
 - [x] Android and iOS best-effort paths, documented in `docs/PLATFORM-NOTES.md`. `os_proc_available_memory()` for `mem::free()` on iOS was not added: it needs a device to check, and moves to 0.6 (D-062).
 - [x] Fuzz targets `smbios`, `uevent`, `resolv`, `utmp`, `windows_zones`, `fingerprint`; a Nano Server job in CI (D-055).
 
-## v0.6.0 - Environment and reports (feature complete)
+## v0.6.0 - Environment and reports (feature complete) (DONE, 2026-11-08)
 API: RDY-01 to RDY-04 · BEN-01 to BEN-03 · SEC-01 to SEC-05 · SNS-01 · GPU-01 · PRB-01.
 Exit: every item in `docs/API.md` implemented and tested; FreeBSD and 32-bit Linux implemented; nothing left for 1.x.
-- [ ] Fixture moved from 0.5 (D-062): `ubuntu-24.04-desktop-amd`, captured with `tests/fixtures/capture.sh` on a bare-metal Linux desktop.
-- [ ] iOS `os_proc_available_memory()` for `mem::free()` (D-062).
-- [ ] Server readiness report for the General, Database, WebServer, and Benchmark profiles, every check with its why and fix, read-only (D-030).
-- [ ] Benchmark environment report, with `is_reproducible()`.
-- [ ] Security posture report (Secure Boot, TPM, disk encryption, SELinux/AppArmor, ASLR, lockdown, code integrity, firewall, CPU vulnerabilities).
-- [ ] Temperatures (Linux hwmon and thermal zones; NVMe on Windows), GPU adapters, `probe::Probe::with_root`.
-- [ ] FreeBSD backend, with a FreeBSD VM job in CI; 32-bit Linux (i686, armv7) layouts verified against `libc` and implemented (D-031).
-- [ ] Every [verify] in `docs/SOURCES.md` confirmed or replaced.
+- [ ] Fixture moved from 0.5 (D-062): `ubuntu-24.04-desktop-amd`, captured with `tests/fixtures/capture.sh` on a bare-metal Linux desktop. **Carried** (see Carried items): it needs a bare-metal Linux desktop, which no build machine is.
+- [x] iOS `os_proc_available_memory()` for `mem::free()` (D-062, D-087).
+- [x] Server readiness report for the General, Database, WebServer, and Benchmark profiles, every check with its why and fix, read-only (D-030, D-064).
+- [x] Benchmark environment report, with `is_reproducible()`.
+- [x] Security posture report (Secure Boot, TPM, disk encryption, SELinux/AppArmor, ASLR, lockdown, code integrity, firewall, CPU vulnerabilities).
+- [x] Temperatures (Linux hwmon and thermal zones; drives on Windows; FreeBSD), GPU adapters, `probe::Probe::with_root` (D-065).
+- [x] FreeBSD backend, with a FreeBSD VM job in CI (D-090 to D-099); 32-bit Linux (i686, armv7) layouts verified against `libc` and implemented, with a test job (D-031, D-063).
+- [x] Every [verify] in `docs/SOURCES.md` confirmed or replaced.
 
 ## v0.7.0 - Optimisation
 Exit: every target in `PLAN.md` section 18 measured and published; at least 20% faster than the best competitor for each reading at equal correctness, or a recorded, reviewed reason.
@@ -110,4 +110,4 @@ Exit: the audit passes; the definition of done in `DIRECTIVES.md` and the 1.0 ch
 - [ ] Full audit recorded in `docs/STABILITY-1.0.md`; API frozen until 2.0; an MSRV raise is a major change; the device id derivation `sys-lib/device/v1` frozen for 1.x.
 
 ## Carried items
-None.
+- **The `ubuntu-24.04-desktop-amd` fixture** (from 0.5 through 0.6, D-062): it must be captured on a bare-metal Linux desktop, and none is reachable from the build machines. The desktop paths it would cover (DMI chassis type, hwmon, cpufreq, a real battery) are tested with hand-built trees meanwhile. James can capture it with `tests/fixtures/capture.sh` on any Linux desktop; it lands in the first version after.

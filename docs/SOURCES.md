@@ -18,7 +18,7 @@
 
 Where every value comes from. For each reading and each operating system: the file, system call, or API sys-lib reads, the unit it arrives in, the privilege it needs, and the quirks that shaped the code. Every reading is a file read or a system call; sys-lib never runs another program to get a value.
 
-First version, written at the `0.2.0` design lock; it grows with each version and is complete at `0.5.0`. A source marked [verify] is planned but not yet confirmed on a real machine or in CI; the version that ships the reading confirms it or changes it, and this file changes with it.
+First version, written at the `0.2.0` design lock; it grew with each version and is complete at `0.6.0`, when every [verify] mark was confirmed on a real machine or in CI, or replaced. A source marked [verify] is planned but not yet confirmed on a real machine or in CI; the version that ships the reading confirms it or changes it, and this file changes with it.
 
 <sub>Copyright &copy; 2026 <strong>James Gober</strong>.</sub>
 
@@ -66,13 +66,13 @@ First version, written at the `0.2.0` design lock; it grows with each version an
 | `os::distro()`, `distro_id()` | os-release `NAME` and `ID` from `/etc/os-release`, then `/usr/lib/os-release`; then the legacy files `/etc/lsb-release` (`DISTRIB_ID`, `DISTRIB_DESCRIPTION`), `/etc/redhat-release` and its CentOS, Fedora, Rocky, AlmaLinux variants, `/etc/SuSE-release`, `/etc/alpine-release`, `/etc/arch-release`, `/etc/gentoo-release`, `/etc/slackware-version`, `/etc/debian_version`; then `"Linux"` / `linux`. Ids are lowered (openEuler ships `ID=openEuler`), and `DISTRIB_ID`s spelled unlike the os-release id are mapped (`ManjaroLinux` to `manjaro`, `VMware Photon OS` to `photon`, D-036) | `"macOS"` / `macos` (iOS: `"iOS"` / `ios`) | `"Windows"` / `windows` |
 | `os::os_release()`, `is_like()` | os-release `ID`, `ID_LIKE`, `NAME`, `PRETTY_NAME`, `VERSION`, `VERSION_ID`, `VERSION_CODENAME`, `VARIANT_ID`, `BUILD_ID` | `None`; `is_like` matches `macos` | `None`; `is_like` matches `windows` |
 | `os::edition()` | os-release `VARIANT_ID` | `None` | `EditionID` ("Professional", "ServerDatacenter") |
-| `os::is_64bit()` | compile target, or the kernel's machine (`/proc/sys/kernel/arch` [verify]) for a 32-bit process | `hw.optional.x86_64` / `hw.optional.arm64` | `IsWow64Process2` native machine |
+| `os::is_64bit()` | compile target, or the kernel's machine (`/proc/sys/kernel/arch`, confirmed on kernel 6.6 for an i686 build) for a 32-bit process | `hw.optional.x86_64` / `hw.optional.arm64` | `IsWow64Process2` native machine |
 
 Quirks:
 
 - Windows' registry `ProductName` says "Windows 10" on Windows 11; the build number is the truth.
 - `GetVersionEx` reports the version the executable's manifest declares, not the real one; it is never used.
-- macOS `SystemVersion.plist` reports 10.16 to processes with `SYSTEM_VERSION_COMPAT=1`; the sysctl is unaffected [verify on CI].
+- macOS `kern.osproductversion` answers `kern.osproductversioncompat` ("10.16") to a process with system-version compatibility on (`SYSTEM_VERSION_COMPAT=1`, or `kern.system_version_compat` set); macOS 26 has no compat string; `kern.osrelease` is unaffected. Checked on CI; sys-lib reports what the launcher asked to see (D-088).
 - `/etc/os-release` is often a symlink to `/usr/lib/os-release`; both are fixed paths.
 
 ## Form factor
@@ -151,7 +151,7 @@ Quirks: zram devices count as swap, zswap is invisible to these counters; ZFS AR
 | swap | `memory.swap.max` | `memory.memsw.limit_in_bytes` minus the memory limit (the file exists only with swap accounting on; no fixture has it yet, so the arithmetic is unit-tested only) | none |
 | memory used | `memory.current - inactive_file` (`memory.stat`) | `memory.usage_in_bytes - total_inactive_file` | a per-process limit: this process's `PrivateUsage`; a job limit: the host's usage capped at the limit (no reliable current job usage) |
 | CPU quota | `cpu.max` (`max 100000` or `150000 100000`), minimum over ancestors | `cpu.cfs_quota_us` and `cpu.cfs_period_us` (`-1` is none) | `JobObjectCpuRateControlInformation` |
-| CPU set | `cpuset.cpus.effective` | `cpuset.cpus` | job group affinity [verify] |
+| CPU set | `cpuset.cpus.effective` | `cpuset.cpus` | the process's group affinity (`GetProcessGroupAffinity`, `GetProcessAffinityMask`), which a job object's affinity narrows, and the job's CPU rate cap |
 
 LXCFS: a `fuse.lxcfs` mount over `/proc/meminfo`, `/proc/stat`, or `/proc/cpuinfo` (seen in mountinfo) already shows container values; the cgroup limit is not applied a second time. Nested job objects: a query with a null handle reads the job the process is directly in; an enclosing job with a tighter limit is not seen (Windows has no call that walks up the chain), documented on `mem::limit()`. macOS has no equivalent: `mem::limit()` is `Ok(None)`.
 
@@ -219,12 +219,12 @@ Interface names from the OS are validated before they are used in a `/sys` path:
 | Step | Linux | macOS | Windows |
 |---|---|---|---|
 | lock directory | path-lib's runtime directory (or `lock_dir`); `lstat` for symlinks and mode | same | path-lib; `GetFileAttributesW` for reparse points |
-| filesystem type | `statfs` `f_type` magic (NFS `0x6969`, SMB `0x517B`, CIFS `0xFF534D42`, SMB2 `0xFE534D42`, FUSE `0x65735546`, 9p `0x01021997`, drvfs/WSL [verify]) | `statfs` `f_fstypename` | `GetVolumeInformationW` file system name; `GetDriveTypeW` `DRIVE_REMOTE` |
+| filesystem type | `statfs` `f_type` magic (NFS `0x6969`, SMB `0x517B`, CIFS `0xFF534D42`, SMB2 `0xFE534D42`, FUSE `0x65735546`, 9p `0x01021997`, which is also WSL 2's drvfs: `/mnt/c` is 9p with `aname=drvfs`, confirmed) | `statfs` `f_fstypename` | `GetVolumeInformationW` file system name; `GetDriveTypeW` `DRIVE_REMOTE` |
 | lock | `open(O_NOFOLLOW)` through `OpenOptionsExt::custom_flags`, `File::try_lock` (std, `flock`) | same | `FILE_FLAG_OPEN_REPARSE_POINT`, `File::try_lock` (std, `LockFileEx`) |
 | pid file | `path_lib::write_atomic` | same | same |
 | umask | `umask` | `umask` | not applicable |
 | open-file limit | `getrlimit`/`setrlimit(RLIMIT_NOFILE)` | same, capped at `kern.maxfilesperproc` | not applicable |
-| threads check | `Threads` in `/proc/self/status` | `proc_pidinfo(PROC_PIDTASKINFO)` | toolhelp snapshot [verify cost] |
+| threads check | `Threads` in `/proc/self/status` | `proc_pidinfo(PROC_PIDTASKINFO)` | this process's entry in a toolhelp process snapshot (`cntThreads`): tens of milliseconds on a host with many processes (66 ms measured on a loaded 32-thread machine; a thread snapshot took 250 ms there) |
 
 ## Virtualization
 
@@ -266,7 +266,7 @@ PSI files need kernel 4.20 or later; without them the readings are `Ok(None)`. c
 
 | Reading | Linux | macOS | Windows |
 |---|---|---|---|
-| `disk::io()`, `IoSampler`, `io_totals()`, `io_counters()` | `/proc/diskstats` fields 4 to 14 (reads, sectors read, read ms, writes, sectors written, write ms, in flight, io ms, weighted ms); whole disks only, from `/sys/block/*` minus `loop`, `ram`, `zram`, `dm-*`, `md*`; sectors are 512 bytes | IOKit `IOBlockStorageDriver` `Statistics` dictionary (`Bytes (Read)`, `Bytes (Write)`, `Operations (Read)`, `Operations (Write)`, `Total Time (Read)`, `Total Time (Write)`) | `IOCTL_DISK_PERFORMANCE` (`DISK_PERFORMANCE`: `BytesRead`, `BytesWritten`, `ReadCount`, `WriteCount`, `IdleTime`, `QueryTime`) on `\\.\PhysicalDriveN` opened with no access rights [verify unprivileged] |
+| `disk::io()`, `IoSampler`, `io_totals()`, `io_counters()` | `/proc/diskstats` fields 4 to 14 (reads, sectors read, read ms, writes, sectors written, write ms, in flight, io ms, weighted ms); whole disks only, from `/sys/block/*` minus `loop`, `ram`, `zram`, `dm-*`, `md*`; sectors are 512 bytes | IOKit `IOBlockStorageDriver` `Statistics` dictionary (`Bytes (Read)`, `Bytes (Write)`, `Operations (Read)`, `Operations (Write)`, `Total Time (Read)`, `Total Time (Write)`) | `IOCTL_DISK_PERFORMANCE` (`DISK_PERFORMANCE`: `BytesRead`, `BytesWritten`, `ReadCount`, `WriteCount`, `IdleTime`, `QueryTime`) on `\\.\PhysicalDriveN` opened with no access rights (confirmed unprivileged) |
 | `process::io()` | `/proc/self/io` (`read_bytes`, `write_bytes`, `syscr`, `syscw`) | `proc_pid_rusage(RUSAGE_INFO_V2)` `ri_diskio_bytesread`, `ri_diskio_byteswritten` | `GetProcessIoCounters` (all I/O) |
 
 ## System-wide counts, firmware, clock, sessions, DNS
@@ -299,14 +299,15 @@ Environment variables are weak evidence: any parent can set them.
 | Reading | Linux | macOS | Windows |
 |---|---|---|---|
 | `sensors::temperatures()` | `/sys/class/hwmon/hwmon*/{name,temp*_input,temp*_label,temp*_max,temp*_crit}`; `/sys/class/thermal/thermal_zone*/{type,temp}` | `Unsupported` (no documented API) | NVMe drives: `IOCTL_STORAGE_QUERY_PROPERTY` `StorageDeviceTemperatureProperty`; CPU `Unsupported` (no unprivileged documented API) |
-| `gpu::list()` | `/sys/class/drm/card*/device/{vendor,device,uevent,mem_info_vram_total}`; names from `pci.ids` when installed | IOKit `IOPCIDevice` (display class), `AGXAccelerator` [verify] | `EnumDisplayDevicesW`; the adapter's registry key [verify] |
+| `gpu::list()` | `/sys/class/drm/card*/device/{vendor,device,uevent,mem_info_vram_total}`; names from `pci.ids` when installed | IOKit `IOPCIDevice` with a display `class-code` (`model`, `vendor-id`, `device-id`, `VRAM,totalMB`); without one, the `IOAccelerator` services (`AGXAccelerator*`: `model`, `CFBundleIdentifier`) | `EnumDisplayDevicesW` (user32, loaded at run time); the adapter's `DeviceKey`: `HardwareInformation.qwMemorySize`, else `HardwareInformation.MemorySize`, `DriverVersion`, `Video\Service`, `MatchingDeviceId` |
 
 ## Readiness, benchmark environment, security posture
 
 The full per-check source tables are in [`API.md`](./API.md#readiness-server-readiness-report). The files and calls they add to the lists above:
 
 - Linux: `/sys/kernel/mm/transparent_hugepage/{enabled,defrag}`; `/proc/sys/vm/{swappiness,overcommit_memory,overcommit_ratio,max_map_count,dirty_ratio,dirty_background_ratio,dirty_bytes,dirty_background_bytes,zone_reclaim_mode}`; `/proc/sys/kernel/{numa_balancing,randomize_va_space}`; `/proc/sys/fs/{file-max,nr_open}`; `/proc/sys/net/core/somaxconn`; `/proc/sys/net/ipv4/{tcp_max_syn_backlog,ip_local_port_range}`; `/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor`; `/sys/devices/system/cpu/intel_pstate/no_turbo`, `cpufreq/boost`; `/sys/devices/system/cpu/smt/active`; `/sys/devices/system/cpu/{isolated,nohz_full}`; `/sys/devices/system/cpu/cpu*/thermal_throttle/*_throttle_count`; `/sys/devices/system/clocksource/clocksource0/current_clocksource`; `/sys/block/*/queue/scheduler`; `/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c`; `/sys/class/tpm/tpm*/tpm_version_major`; `/sys/dev/block/<major:minor>/dm/uuid`; `/sys/fs/selinux/enforce`; `/sys/module/apparmor/parameters/enabled`; `/sys/kernel/security/lockdown`; `/sys/devices/system/cpu/vulnerabilities/*`; `getrlimit(RLIMIT_MEMLOCK)`; CPUID leaf 0x80000007.
-- macOS: `kern.maxfiles`, `kern.maxfilesperproc`, `kern.ipc.somaxconn`, `net.inet.ip.portrange.first`, `net.inet.ip.portrange.last`; `csr_get_active_config` [verify].
+- macOS: `kern.maxfiles`, `kern.maxfilesperproc`, `kern.ipc.somaxconn`, `net.inet.ip.portrange.first`, `net.inet.ip.portrange.last`; `getrlimit(RLIMIT_MEMLOCK)`; `statfs` `f_flags` (`MNT_NOATIME`, `MNT_STRICTATIME`) and `f_fstypename`. `csr_get_active_config` is not used: its header `sys/csr.h` is private to XNU (D-085).
+- FreeBSD: `kern.maxfiles`, `kern.maxfilesperproc`, `kern.ipc.soacceptqueue`, `net.inet.ip.portrange.first`/`last`, `kern.timecounter.hardware`, `kern.securelevel`, `kern.elf64.aslr.enable`, `getrlimit(RLIMIT_MEMLOCK)`; `dev.cpu.N.temperature`, `hw.acpi.thermal.tzN.temperature`.
 - Windows: `PowerGetActiveScheme`, `PowerReadFriendlyName` (powrprof); `CallNtPowerInformation(ProcessorInformation)` `MhzLimit`; `GetTokenInformation` privileges (`SeLockMemoryPrivilege`); `GetProcessMitigationPolicy`; `Tbsi_GetDeviceInfo` (tbs.dll); registry: `SYSTEM\CurrentControlSet\Control\SecureBoot\State`, `SYSTEM\CurrentControlSet\Control\DeviceGuard`, `SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy`, `SYSTEM\CurrentControlSet\Services\Tcpip\Parameters` (dynamic ports).
 
 ## Device identity anchors
@@ -332,4 +333,4 @@ At build time only, in the application's build script: `git -C $CARGO_MANIFEST_D
 
 ## Android and iOS
 
-Best effort, build-checked in CI. Android uses the Linux paths where SELinux allows them (`/proc`, `/sys`), plus `__system_property_get` for `ro.build.version.release` and `ro.build.characteristics`; denied reads are `PermissionDenied`. iOS uses the Apple sysctls that exist on iOS (`kern.osproductversion`, `kern.osrelease`, `hw.memsize`, `hw.logicalcpu_max`, `hw.physicalcpu_max`, `machdep.cpu.brand_string` [verify]) and `uname`; everything that needs IOKit power sources, `getfsstat` outside the sandbox, or UIKit is `Unsupported`. `os_proc_available_memory()` (iOS 13 and later) gives `mem::free()` on iOS from 0.5.
+Best effort, build-checked in CI. Android uses the Linux paths where SELinux allows them (`/proc`, `/sys`), plus `__system_property_get` for `ro.build.version.release` and `ro.build.characteristics`; denied reads are `PermissionDenied`. iOS uses the Apple sysctls that exist on iOS (`kern.osproductversion`, `kern.osrelease`, `hw.memsize`, `hw.logicalcpu_max`, `hw.physicalcpu_max`, `machdep.cpu.brand_string`: on arm64 XNU the device tree's `product-soc-name`, else "Apple processor") and `uname`; everything that needs IOKit power sources, `getfsstat` outside the sandbox, or UIKit is `Unsupported`. `os_proc_available_memory()` (iOS 13 and later), found at run time with `dlsym`, gives `mem::free()` on iOS from 0.6 (D-062, D-087).

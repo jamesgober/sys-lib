@@ -10,7 +10,7 @@
 //!
 //! ## Tier 1
 //!
-//! Add it with Cargo's rename, `sys = { package = "sys-lib", version = "0.5" }`,
+//! Add it with Cargo's rename, `sys = { package = "sys-lib", version = "0.6" }`,
 //! and every file writes `sys::`; without the rename, `use sys_lib as sys;`
 //! does the same (the examples use that form so they compile either way).
 //! One plain call per fact; static facts are read once and cached:
