@@ -411,6 +411,197 @@ pub(crate) struct DeviceSeekPenaltyDescriptor {
 }
 layout!(DeviceSeekPenaltyDescriptor, size = 12, align = 4);
 
+/// `STORAGE_PROPERTY_ID::StorageDeviceProperty` (winioctl.h).
+pub(crate) const STORAGE_DEVICE_PROPERTY: i32 = 0;
+/// `STORAGE_PROPERTY_ID::StorageDeviceTemperatureProperty` (winioctl.h).
+pub(crate) const STORAGE_DEVICE_TEMPERATURE_PROPERTY: i32 = 52;
+/// `STORAGE_TEMPERATURE_VALUE_NOT_REPORTED` (winioctl.h), as the `SHORT` the
+/// descriptor holds.
+pub(crate) const STORAGE_TEMPERATURE_VALUE_NOT_REPORTED: i16 = 0x8000_u16 as i16;
+
+/// `STORAGE_DEVICE_DESCRIPTOR` (winioctl.h): the fixed part. The vendor and
+/// product strings follow it at the offsets it gives, so the answer is parsed
+/// from bytes with [`sdd`].
+#[repr(C)]
+pub(crate) struct StorageDeviceDescriptor {
+    pub(crate) version: u32,
+    pub(crate) size: u32,
+    pub(crate) device_type: u8,
+    pub(crate) device_type_modifier: u8,
+    /// `BOOLEAN`.
+    pub(crate) removable_media: u8,
+    /// `BOOLEAN`.
+    pub(crate) command_queueing: u8,
+    pub(crate) vendor_id_offset: u32,
+    pub(crate) product_id_offset: u32,
+    pub(crate) product_revision_offset: u32,
+    pub(crate) serial_number_offset: u32,
+    /// `STORAGE_BUS_TYPE`.
+    pub(crate) bus_type: i32,
+    pub(crate) raw_properties_length: u32,
+    pub(crate) raw_device_properties: [u8; 1],
+}
+layout!(StorageDeviceDescriptor, size = 40, align = 4);
+
+/// Byte offsets into a `STORAGE_DEVICE_DESCRIPTOR` answer.
+pub(crate) mod sdd {
+    pub(crate) const VENDOR_ID_OFFSET: usize = 12;
+    pub(crate) const PRODUCT_ID_OFFSET: usize = 16;
+    pub(crate) const BUS_TYPE: usize = 28;
+}
+
+/// `STORAGE_TEMPERATURE_INFO` (winioctl.h): one sensor, in degrees Celsius.
+#[repr(C)]
+pub(crate) struct StorageTemperatureInfo {
+    pub(crate) index: u16,
+    pub(crate) temperature: i16,
+    pub(crate) over_threshold: i16,
+    pub(crate) under_threshold: i16,
+    /// `BOOLEAN`.
+    pub(crate) over_threshold_changable: u8,
+    /// `BOOLEAN`.
+    pub(crate) under_threshold_changable: u8,
+    /// `BOOLEAN`.
+    pub(crate) event_generated: u8,
+    pub(crate) reserved0: u8,
+    pub(crate) reserved1: u32,
+}
+layout!(StorageTemperatureInfo, size = 16, align = 4);
+
+/// `STORAGE_TEMPERATURE_DATA_DESCRIPTOR` (winioctl.h), with its first sensor.
+/// `info_count` sensors follow from `temperature_info`, so the answer is
+/// parsed from bytes with [`temperature`].
+#[repr(C)]
+pub(crate) struct StorageTemperatureDataDescriptor {
+    pub(crate) version: u32,
+    pub(crate) size: u32,
+    pub(crate) critical_temperature: i16,
+    pub(crate) warning_temperature: i16,
+    pub(crate) info_count: u16,
+    pub(crate) reserved0: [u8; 2],
+    pub(crate) reserved1: [u32; 2],
+    pub(crate) temperature_info: [StorageTemperatureInfo; 1],
+}
+layout!(StorageTemperatureDataDescriptor, size = 40, align = 4);
+
+/// Byte offsets into a `STORAGE_TEMPERATURE_DATA_DESCRIPTOR` answer.
+pub(crate) mod temperature {
+    pub(crate) const CRITICAL: usize = 8;
+    pub(crate) const WARNING: usize = 10;
+    pub(crate) const INFO_COUNT: usize = 12;
+    pub(crate) const INFO: usize = 24;
+    /// One `STORAGE_TEMPERATURE_INFO`.
+    pub(crate) const INFO_ENTRY: usize = 16;
+    /// `Index` within an entry.
+    pub(crate) const INFO_INDEX: usize = 0;
+    /// `Temperature` within an entry.
+    pub(crate) const INFO_TEMPERATURE: usize = 2;
+}
+
+/// `DISPLAY_DEVICEW` (wingdi.h).
+#[repr(C)]
+pub(crate) struct DisplayDeviceW {
+    pub(crate) cb: u32,
+    pub(crate) device_name: [u16; 32],
+    pub(crate) device_string: [u16; 128],
+    pub(crate) state_flags: u32,
+    pub(crate) device_id: [u16; 128],
+    pub(crate) device_key: [u16; 128],
+}
+layout!(DisplayDeviceW, size = 840, align = 4);
+
+// DISPLAY_DEVICE state flags (wingdi.h).
+pub(crate) const DISPLAY_DEVICE_MIRRORING_DRIVER: u32 = 0x0000_0008;
+
+/// `TPM_DEVICE_INFO` (tbs.h).
+#[derive(Default)]
+#[repr(C)]
+pub(crate) struct TpmDeviceInfo {
+    pub(crate) struct_version: u32,
+    pub(crate) tpm_version: u32,
+    pub(crate) tpm_interface_type: u32,
+    pub(crate) tpm_imp_revision: u32,
+}
+layout!(TpmDeviceInfo, size = 16, align = 4);
+
+// tbs.h.
+pub(crate) const TBS_SUCCESS: u32 = 0;
+pub(crate) const TPM_VERSION_12: u32 = 1;
+pub(crate) const TPM_VERSION_20: u32 = 2;
+
+/// `LUID` (winnt.h).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C)]
+pub(crate) struct Luid {
+    pub(crate) low_part: u32,
+    pub(crate) high_part: i32,
+}
+layout!(Luid, size = 8, align = 4);
+
+/// `LUID_AND_ATTRIBUTES` (winnt.h).
+#[repr(C)]
+pub(crate) struct LuidAndAttributes {
+    pub(crate) luid: Luid,
+    pub(crate) attributes: u32,
+}
+layout!(LuidAndAttributes, size = 12, align = 4);
+
+/// Byte offsets into a `TOKEN_PRIVILEGES` answer: a count, then that many
+/// `LUID_AND_ATTRIBUTES`.
+pub(crate) mod tp {
+    pub(crate) const COUNT: usize = 0;
+    pub(crate) const PRIVILEGES: usize = 4;
+    pub(crate) const ENTRY: usize = 12;
+    pub(crate) const LUID_LOW: usize = 0;
+    pub(crate) const LUID_HIGH: usize = 4;
+    pub(crate) const ATTRIBUTES: usize = 8;
+}
+
+/// `TOKEN_INFORMATION_CLASS::TokenPrivileges` (winnt.h).
+pub(crate) const TOKEN_PRIVILEGES_CLASS: i32 = 3;
+/// `SE_PRIVILEGE_REMOVED` (winnt.h).
+pub(crate) const SE_PRIVILEGE_REMOVED: u32 = 0x0000_0004;
+
+/// `PROCESS_MITIGATION_ASLR_POLICY` (winnt.h): a `DWORD` of flags.
+#[derive(Default)]
+#[repr(C)]
+pub(crate) struct ProcessMitigationAslrPolicy {
+    pub(crate) flags: u32,
+}
+layout!(ProcessMitigationAslrPolicy, size = 4, align = 4);
+
+/// `PROCESS_MITIGATION_POLICY::ProcessASLRPolicy` (winnt.h).
+pub(crate) const PROCESS_ASLR_POLICY: i32 = 1;
+// PROCESS_MITIGATION_ASLR_POLICY bits (winnt.h).
+pub(crate) const ASLR_ENABLE_BOTTOM_UP_RANDOMIZATION: u32 = 0x1;
+pub(crate) const ASLR_ENABLE_FORCE_RELOCATE_IMAGES: u32 = 0x2;
+pub(crate) const ASLR_ENABLE_HIGH_ENTROPY: u32 = 0x4;
+
+// Power schemes and settings (winnt.h).
+/// `GUID_MAX_POWER_SAVINGS`: the Power saver plan.
+pub(crate) const GUID_MAX_POWER_SAVINGS: Guid =
+    Guid::from_u128(0xa184_1308_3541_4fab_bc81_f715_56f2_0b4a);
+/// `GUID_MIN_POWER_SAVINGS`: the High performance plan.
+pub(crate) const GUID_MIN_POWER_SAVINGS: Guid =
+    Guid::from_u128(0x8c5e_7fda_e8bf_4a96_9a85_a6e2_3a8c_635c);
+/// `GUID_TYPICAL_POWER_SAVINGS`: the Balanced plan.
+pub(crate) const GUID_TYPICAL_POWER_SAVINGS: Guid =
+    Guid::from_u128(0x381b_4222_f694_41f0_9685_ff5b_b260_df2e);
+/// The Ultimate Performance plan (not in the headers; `powercfg /list` names
+/// it, and `powercfg -duplicatescheme` copies it under a new GUID).
+pub(crate) const GUID_ULTIMATE_PERFORMANCE: Guid =
+    Guid::from_u128(0xe9a4_2b02_d5df_448d_aa00_03f1_4749_eb61);
+pub(crate) const NO_SUBGROUP_GUID: Guid =
+    Guid::from_u128(0xfea3_413e_7e05_4911_9a71_7003_31f1_c294);
+pub(crate) const GUID_POWERSCHEME_PERSONALITY: Guid =
+    Guid::from_u128(0x245d_8541_3943_4422_b025_13a7_84f6_79b7);
+pub(crate) const GUID_PROCESSOR_SETTINGS_SUBGROUP: Guid =
+    Guid::from_u128(0x5453_3251_82be_4824_96c1_47b6_0b74_0d00);
+pub(crate) const GUID_PROCESSOR_PERF_BOOST_MODE: Guid =
+    Guid::from_u128(0xbe33_7238_0d82_4146_a960_4f37_49d4_70c7);
+pub(crate) const GUID_PROCESSOR_THROTTLE_MAXIMUM: Guid =
+    Guid::from_u128(0xbc50_38f7_23e0_4960_96da_33ab_af59_35ec);
+
 /// `DISK_PERFORMANCE` (winioctl.h): one disk's cumulative counters. Times are
 /// in 100 ns units; `query_time` is the system time of the query.
 #[derive(Default)]
@@ -533,7 +724,7 @@ pub(crate) mod lpi {
 }
 
 /// `GUID` (guiddef.h).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(C)]
 pub(crate) struct Guid {
     pub(crate) data1: u32,
@@ -542,6 +733,19 @@ pub(crate) struct Guid {
     pub(crate) data4: [u8; 8],
 }
 layout!(Guid, size = 16, align = 4);
+
+impl Guid {
+    /// The GUID written as one number, `0x381b4222_f694_41f0_9685_ff5bb260df2e`
+    /// for `{381b4222-f694-41f0-9685-ff5bb260df2e}`.
+    pub(crate) const fn from_u128(v: u128) -> Guid {
+        Guid {
+            data1: (v >> 96) as u32,
+            data2: (v >> 80) as u16,
+            data3: (v >> 64) as u16,
+            data4: (v as u64).to_be_bytes(),
+        }
+    }
+}
 
 /// `SOCKADDR` (ws2def.h).
 #[repr(C)]
@@ -855,7 +1059,9 @@ pub(crate) const HKEY_LOCAL_MACHINE: Hkey =
 pub(crate) const KEY_QUERY_VALUE: u32 = 0x0001;
 pub(crate) const KEY_WOW64_64KEY: u32 = 0x0100;
 pub(crate) const REG_SZ: u32 = 1;
+pub(crate) const REG_BINARY: u32 = 3;
 pub(crate) const REG_DWORD: u32 = 4;
+pub(crate) const REG_QWORD: u32 = 11;
 
 // Drives and volumes (fileapi.h, winbase.h).
 pub(crate) const DRIVE_UNKNOWN: u32 = 0;
@@ -1021,6 +1227,15 @@ dll!("kernel32.dll" {
     pub(crate) fn Process32NextW(snapshot: Handle, entry: *mut ProcessEntry32W) -> Bool;
     pub(crate) fn Thread32First(snapshot: Handle, entry: *mut ThreadEntry32) -> Bool;
     pub(crate) fn Thread32Next(snapshot: Handle, entry: *mut ThreadEntry32) -> Bool;
+    // winbase.h: frees what PowerGetActiveScheme allocated.
+    pub(crate) fn LocalFree(memory: *mut c_void) -> *mut c_void;
+    // processthreadsapi.h
+    pub(crate) fn GetProcessMitigationPolicy(
+        process: Handle,
+        policy: i32,
+        buffer: *mut c_void,
+        length: usize,
+    ) -> Bool;
 });
 
 dll!("advapi32.dll" {
@@ -1046,6 +1261,7 @@ dll!("advapi32.dll" {
     ) -> Bool;
     // winbase.h
     pub(crate) fn GetUserNameW(buffer: *mut u16, size: *mut u32) -> Bool;
+    pub(crate) fn LookupPrivilegeValueW(system: *const u16, name: *const u16, luid: *mut Luid) -> Bool;
 });
 
 dll!("iphlpapi.dll" {
@@ -1099,6 +1315,41 @@ pub(crate) type WtsQuerySessionInformationW = unsafe extern "system" fn(
 /// `WTSFreeMemory`.
 pub(crate) type WtsFreeMemory = unsafe extern "system" fn(memory: *mut c_void);
 
+// user32.dll, tbs.dll, and the powrprof calls added in 0.6 are loaded at run
+// time for the same reason: Nano Server and Server Core images may lack them
+// (D-070).
+
+/// `EnumDisplayDevicesW` (winuser.h).
+pub(crate) type EnumDisplayDevicesW = unsafe extern "system" fn(
+    device: *const u16,
+    index: u32,
+    display_device: *mut DisplayDeviceW,
+    flags: u32,
+) -> Bool;
+/// `Tbsi_GetDeviceInfo` (tbs.h).
+pub(crate) type TbsiGetDeviceInfo = unsafe extern "system" fn(size: u32, info: *mut c_void) -> u32;
+/// `PowerGetActiveScheme` (powersetting.h): the GUID is allocated by the call
+/// and freed with `LocalFree`.
+pub(crate) type PowerGetActiveScheme =
+    unsafe extern "system" fn(user_root_power_key: Hkey, active_policy_guid: *mut *mut Guid) -> u32;
+/// `PowerReadFriendlyName` (powrprof.h): `buffer` gets UTF-16, `size` is in bytes.
+pub(crate) type PowerReadFriendlyName = unsafe extern "system" fn(
+    root_power_key: Hkey,
+    scheme: *const Guid,
+    subgroup: *const Guid,
+    setting: *const Guid,
+    buffer: *mut u8,
+    buffer_size: *mut u32,
+) -> u32;
+/// `PowerReadACValueIndex` and `PowerReadDCValueIndex` (powersetting.h).
+pub(crate) type PowerReadValueIndex = unsafe extern "system" fn(
+    root_power_key: Hkey,
+    scheme: *const Guid,
+    subgroup: *const Guid,
+    setting: *const Guid,
+    value_index: *mut u32,
+) -> u32;
+
 /// `LOAD_LIBRARY_SEARCH_SYSTEM32` (libloaderapi.h): only System32, so nothing
 /// planted beside the program is picked up.
 pub(crate) const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
@@ -1122,13 +1373,14 @@ mod tests {
 
     use windows_sys::{
         Win32::{
-            Foundation as f, NetworkManagement::IpHelper as ip, NetworkManagement::Ndis as nd,
-            Networking::WinSock as ws, Security as sec, Storage::FileSystem as fs,
-            System::Diagnostics::Debug as dbg, System::Diagnostics::ToolHelp as th,
-            System::Ioctl as io, System::JobObjects as job, System::Memory as mem,
-            System::Power as pw, System::ProcessStatus as ps, System::RemoteDesktop as wts,
-            System::SystemInformation as si, System::SystemServices as ss,
-            System::Threading as thr, System::Time as tm, System::WindowsProgramming as wp,
+            Foundation as f, Graphics::Gdi as gdi, NetworkManagement::IpHelper as ip,
+            NetworkManagement::Ndis as nd, Networking::WinSock as ws, Security as sec,
+            Storage::FileSystem as fs, System::Diagnostics::Debug as dbg,
+            System::Diagnostics::ToolHelp as th, System::Ioctl as io, System::JobObjects as job,
+            System::Memory as mem, System::Power as pw, System::ProcessStatus as ps,
+            System::Registry as reg, System::RemoteDesktop as wts, System::SystemInformation as si,
+            System::SystemServices as ss, System::Threading as thr, System::Time as tm,
+            System::TpmBaseServices as tbs, System::WindowsProgramming as wp,
         },
         core::GUID,
     };
@@ -1211,6 +1463,34 @@ mod tests {
         additional_parameters => AdditionalParameters);
     same_layout!(DeviceSeekPenaltyDescriptor, io::DEVICE_SEEK_PENALTY_DESCRIPTOR,
         version => Version, size => Size, incurs_seek_penalty => IncursSeekPenalty);
+    same_layout!(StorageDeviceDescriptor, io::STORAGE_DEVICE_DESCRIPTOR,
+        version => Version, size => Size, device_type => DeviceType,
+        device_type_modifier => DeviceTypeModifier, removable_media => RemovableMedia,
+        command_queueing => CommandQueueing, vendor_id_offset => VendorIdOffset,
+        product_id_offset => ProductIdOffset, product_revision_offset => ProductRevisionOffset,
+        serial_number_offset => SerialNumberOffset, bus_type => BusType,
+        raw_properties_length => RawPropertiesLength,
+        raw_device_properties => RawDeviceProperties);
+    same_layout!(StorageTemperatureInfo, io::STORAGE_TEMPERATURE_INFO,
+        index => Index, temperature => Temperature, over_threshold => OverThreshold,
+        under_threshold => UnderThreshold, over_threshold_changable => OverThresholdChangable,
+        under_threshold_changable => UnderThresholdChangable,
+        event_generated => EventGenerated, reserved0 => Reserved0, reserved1 => Reserved1);
+    same_layout!(StorageTemperatureDataDescriptor, io::STORAGE_TEMPERATURE_DATA_DESCRIPTOR,
+        version => Version, size => Size, critical_temperature => CriticalTemperature,
+        warning_temperature => WarningTemperature, info_count => InfoCount,
+        reserved0 => Reserved0, reserved1 => Reserved1, temperature_info => TemperatureInfo);
+    same_layout!(DisplayDeviceW, gdi::DISPLAY_DEVICEW,
+        cb => cb, device_name => DeviceName, device_string => DeviceString,
+        state_flags => StateFlags, device_id => DeviceID, device_key => DeviceKey);
+    same_layout!(TpmDeviceInfo, tbs::TPM_DEVICE_INFO,
+        struct_version => structVersion, tpm_version => tpmVersion,
+        tpm_interface_type => tpmInterfaceType, tpm_imp_revision => tpmImpRevision);
+    same_layout!(Luid, f::LUID, low_part => LowPart, high_part => HighPart);
+    same_layout!(LuidAndAttributes, sec::LUID_AND_ATTRIBUTES,
+        luid => Luid, attributes => Attributes);
+    same_layout!(ProcessMitigationAslrPolicy, ss::PROCESS_MITIGATION_ASLR_POLICY,
+        flags => Anonymous);
     same_layout!(GroupAffinity, si::GROUP_AFFINITY, mask => Mask, group => Group);
     same_layout!(Guid, GUID, data1 => data1, data2 => data2, data3 => data3, data4 => data4);
     same_layout!(Sockaddr, ws::SOCKADDR, family => sa_family, data => sa_data);
@@ -1326,8 +1606,110 @@ mod tests {
         assert!(size_of::<G>() == lpi::AFFINITY_ENTRY);
     };
 
+    // The byte offsets used to parse the storage and token answers.
+    const _: () = {
+        use core::mem::{offset_of, size_of};
+        type D = io::STORAGE_DEVICE_DESCRIPTOR;
+        assert!(offset_of!(D, VendorIdOffset) == sdd::VENDOR_ID_OFFSET);
+        assert!(offset_of!(D, ProductIdOffset) == sdd::PRODUCT_ID_OFFSET);
+        assert!(offset_of!(D, BusType) == sdd::BUS_TYPE);
+        type T = io::STORAGE_TEMPERATURE_DATA_DESCRIPTOR;
+        assert!(offset_of!(T, CriticalTemperature) == temperature::CRITICAL);
+        assert!(offset_of!(T, WarningTemperature) == temperature::WARNING);
+        assert!(offset_of!(T, InfoCount) == temperature::INFO_COUNT);
+        assert!(offset_of!(T, TemperatureInfo) == temperature::INFO);
+        type I = io::STORAGE_TEMPERATURE_INFO;
+        assert!(size_of::<I>() == temperature::INFO_ENTRY);
+        assert!(offset_of!(I, Index) == temperature::INFO_INDEX);
+        assert!(offset_of!(I, Temperature) == temperature::INFO_TEMPERATURE);
+        type P = sec::TOKEN_PRIVILEGES;
+        assert!(offset_of!(P, PrivilegeCount) == tp::COUNT);
+        assert!(offset_of!(P, Privileges) == tp::PRIVILEGES);
+        type L = sec::LUID_AND_ATTRIBUTES;
+        assert!(size_of::<L>() == tp::ENTRY);
+        assert!(offset_of!(L, Luid) + offset_of!(f::LUID, LowPart) == tp::LUID_LOW);
+        assert!(offset_of!(L, Luid) + offset_of!(f::LUID, HighPart) == tp::LUID_HIGH);
+        assert!(offset_of!(L, Attributes) == tp::ATTRIBUTES);
+    };
+
+    /// A windows-sys GUID as ours.
+    const fn guid(g: GUID) -> Guid {
+        Guid {
+            data1: g.data1,
+            data2: g.data2,
+            data3: g.data3,
+            data4: g.data4,
+        }
+    }
+
+    const fn same_guid(a: Guid, b: Guid) -> bool {
+        let (x, y) = (a.data4, b.data4);
+        let mut i = 0;
+        while i < 8 {
+            if x[i] != y[i] {
+                return false;
+            }
+            i += 1;
+        }
+        a.data1 == b.data1 && a.data2 == b.data2 && a.data3 == b.data3
+    }
+
+    // The power GUIDs, and `from_u128` against windows-sys's own.
+    const _: () = {
+        assert!(same_guid(
+            GUID_MAX_POWER_SAVINGS,
+            guid(ss::GUID_MAX_POWER_SAVINGS)
+        ));
+        assert!(same_guid(
+            GUID_MIN_POWER_SAVINGS,
+            guid(ss::GUID_MIN_POWER_SAVINGS)
+        ));
+        assert!(same_guid(
+            GUID_TYPICAL_POWER_SAVINGS,
+            guid(ss::GUID_TYPICAL_POWER_SAVINGS)
+        ));
+        assert!(same_guid(NO_SUBGROUP_GUID, guid(ss::NO_SUBGROUP_GUID)));
+        assert!(same_guid(
+            GUID_POWERSCHEME_PERSONALITY,
+            guid(ss::GUID_POWERSCHEME_PERSONALITY)
+        ));
+        assert!(same_guid(
+            GUID_PROCESSOR_SETTINGS_SUBGROUP,
+            guid(ss::GUID_PROCESSOR_SETTINGS_SUBGROUP)
+        ));
+        assert!(same_guid(
+            GUID_PROCESSOR_PERF_BOOST_MODE,
+            guid(ss::GUID_PROCESSOR_PERF_BOOST_MODE)
+        ));
+        assert!(same_guid(
+            GUID_PROCESSOR_THROTTLE_MAXIMUM,
+            guid(ss::GUID_PROCESSOR_THROTTLE_MAXIMUM)
+        ));
+        assert!(same_guid(
+            GUID_ULTIMATE_PERFORMANCE,
+            guid(GUID::from_u128(0xe9a42b02_d5df_448d_aa00_03f14749eb61))
+        ));
+    };
+
     // Constants that windows-sys also defines.
     const _: () = {
+        assert!(STORAGE_DEVICE_PROPERTY == io::StorageDeviceProperty);
+        assert!(STORAGE_DEVICE_TEMPERATURE_PROPERTY == io::StorageDeviceTemperatureProperty);
+        assert!(
+            STORAGE_TEMPERATURE_VALUE_NOT_REPORTED as u16 as u32
+                == io::STORAGE_TEMPERATURE_VALUE_NOT_REPORTED
+        );
+        assert!(DISPLAY_DEVICE_MIRRORING_DRIVER == gdi::DISPLAY_DEVICE_MIRRORING_DRIVER);
+        assert!(TBS_SUCCESS == tbs::TBS_SUCCESS);
+        assert!(TPM_VERSION_12 == tbs::TPM_VERSION_12);
+        assert!(TPM_VERSION_20 == tbs::TPM_VERSION_20);
+        assert!(TOKEN_PRIVILEGES_CLASS == sec::TokenPrivileges);
+        assert!(SE_PRIVILEGE_REMOVED == sec::SE_PRIVILEGE_REMOVED);
+        assert!(PROCESS_ASLR_POLICY == thr::ProcessASLRPolicy);
+        assert!(REG_SZ == reg::REG_SZ);
+        assert!(REG_BINARY == reg::REG_BINARY);
+        assert!(REG_DWORD == reg::REG_DWORD);
+        assert!(REG_QWORD == reg::REG_QWORD);
         assert!(JOB_OBJECT_EXTENDED_LIMIT_INFORMATION == job::JobObjectExtendedLimitInformation);
         assert!(JOB_OBJECT_CPU_RATE_CONTROL_INFORMATION == job::JobObjectCpuRateControlInformation);
         assert!(JOB_OBJECT_LIMIT_PROCESS_MEMORY == job::JOB_OBJECT_LIMIT_PROCESS_MEMORY);

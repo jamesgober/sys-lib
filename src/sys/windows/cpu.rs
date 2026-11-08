@@ -231,7 +231,7 @@ fn mean_current_mhz(cpus: &[ffi::ProcessorPowerInformation]) -> Option<u32> {
 /// Calls `f` with one `PROCESSOR_POWER_INFORMATION` per processor. Up to 64
 /// processors the buffer is on the stack; past that, or when the OS asks for
 /// more, it is allocated (at most 3 tries).
-fn power_info<T>(f: impl FnOnce(&[ffi::ProcessorPowerInformation]) -> T) -> Result<T> {
+pub(super) fn power_info<T>(f: impl FnOnce(&[ffi::ProcessorPowerInformation]) -> T) -> Result<T> {
     let count =
         (ffi::GetActiveProcessorCount(ffi::ALL_PROCESSOR_GROUPS) as usize).clamp(1, MAX_CPUS);
     let mut stack = [ffi::ProcessorPowerInformation::default(); GROUP];
