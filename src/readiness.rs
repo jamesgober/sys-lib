@@ -433,6 +433,8 @@ mod fixes {
         "sysctl -w net.inet.ip.portrange.first=10000 net.inet.ip.portrange.last=65535";
     pub(super) const GOVERNOR: &str = "";
     pub(super) const CLOCK: &str = "enable Set time automatically in System Settings";
+    pub(super) const CLOCK_SOURCE: &str = "";
+    pub(super) const TURBO: &str = "";
     pub(super) const SWAP: &str = "macOS manages swap itself";
 }
 
@@ -445,6 +447,8 @@ mod fixes {
     pub(super) const PORTS: &str = "netsh int ipv4 set dynamicport tcp start=10000 num=55535";
     pub(super) const GOVERNOR: &str = "powercfg /setactive SCHEME_MIN";
     pub(super) const CLOCK: &str = "w32tm /resync, and check the Windows Time service";
+    pub(super) const CLOCK_SOURCE: &str = "";
+    pub(super) const TURBO: &str = "powercfg /setacvalueindex SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE 0, then powercfg /setactive SCHEME_CURRENT";
     pub(super) const SWAP: &str = "System Properties > Advanced > Performance > Virtual memory";
 }
 
@@ -460,6 +464,8 @@ mod fixes {
     pub(super) const GOVERNOR: &str = "";
     pub(super) const CLOCK: &str =
         "sysrc ntpd_enable=YES ntpd_sync_on_start=YES, then service ntpd start";
+    pub(super) const CLOCK_SOURCE: &str = "sysctl kern.timecounter.hardware=TSC-low";
+    pub(super) const TURBO: &str = "";
     pub(super) const SWAP: &str = "add a swap partition or file: swapon(8) and /etc/fstab";
 }
 
@@ -474,6 +480,9 @@ mod fixes {
     pub(super) const PORTS: &str = "sysctl -w net.ipv4.ip_local_port_range=\"10000 65535\"";
     pub(super) const GOVERNOR: &str = "cpupower frequency-set -g performance";
     pub(super) const CLOCK: &str = "enable chrony or systemd-timesyncd: timedatectl set-ntp true";
+    pub(super) const CLOCK_SOURCE: &str =
+        "echo tsc > /sys/devices/system/clocksource/clocksource0/current_clocksource";
+    pub(super) const TURBO: &str = "echo 1 > /sys/devices/system/cpu/intel_pstate/no_turbo, or echo 0 > /sys/devices/system/cpu/cpufreq/boost";
     pub(super) const SWAP: &str = "add a small swap file or zram: swapon, or zram-generator";
 }
 
@@ -808,7 +817,7 @@ pub(crate) fn evaluate(profile: Profile, inputs: &Inputs) -> Report {
                 "Kernel clock source",
                 "tsc",
                 "Reading hpet or acpi_pm costs microseconds, which every timestamp and timeout pays.",
-                "echo tsc > /sys/devices/system/clocksource/clocksource0/current_clocksource",
+                fixes::CLOCK_SOURCE,
             ),
             |s| (pass_if(!crate::bench::slow_clock(s)), s.clone()),
         );
@@ -1022,7 +1031,7 @@ fn bench_checks(out: &mut Vec<Check>, env: &crate::bench::Environment) {
             if turbo { "enabled" } else { "disabled" },
             "disabled",
             "Turbo frequency depends on temperature and on what other cores do, so runs differ.",
-            "echo 1 > /sys/devices/system/cpu/intel_pstate/no_turbo, or echo 0 > /sys/devices/system/cpu/cpufreq/boost",
+            fixes::TURBO,
         ));
     }
     if let Some(throttled) = env.throttled {
