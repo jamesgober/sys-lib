@@ -705,7 +705,14 @@ fn test_live_windows_disks_match_cim() {
     let windows = disk::of(format!("{root}Windows")).unwrap();
     assert_eq!(windows.mount_point.to_str(), Some(root.as_str()));
     assert!(windows.device.eq_ignore_ascii_case(&drive));
-    assert!(disk::list().unwrap().contains(&windows));
+    // The same volume in the list; its free space can change between the two
+    // reads while other work writes to the disk.
+    assert!(disk::list().unwrap().iter().any(|d| {
+        d.mount_point == windows.mount_point
+            && d.device == windows.device
+            && d.filesystem == windows.filesystem
+            && d.kind == windows.kind
+    }));
     match v[0].as_str() {
         "SSD" => assert_eq!(windows.kind, DiskKind::Ssd),
         "HDD" => assert_eq!(windows.kind, DiskKind::Hdd),
@@ -823,19 +830,29 @@ fn test_live_windows_device_sources_are_read() {
 #[test]
 fn test_live_samplers_measure_real_activity() {
     use std::time::Duration;
-    // This process burns CPU for 100 ms: its sampler sees most of one core.
+    // This process burns 100 ms of CPU time: its sampler sees it. The loop
+    // runs until the OS has counted the time, not for 100 ms of wall time: on
+    // a loaded machine the thread waits for a core, and Windows counts CPU
+    // time in 15.6 ms ticks, so a wall-clock loop can show one tick.
+    let used = || process::cpu_time().unwrap().total();
     let mut cpu = process::CpuSampler::new().unwrap();
-    let start = std::time::Instant::now();
+    let (start, base) = (std::time::Instant::now(), used());
     let mut x = 1u64;
-    while start.elapsed() < Duration::from_millis(100) {
-        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    while used().saturating_sub(base) < Duration::from_millis(100)
+        && start.elapsed() < Duration::from_secs(20)
+    {
+        for _ in 0..10_000 {
+            x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        }
     }
     std::hint::black_box(x);
     let u = cpu.sample().unwrap();
+    let busy = u.of_one_core / 100.0 * u.interval.as_secs_f32();
     assert!(
-        u.of_one_core > 30.0,
-        "a busy loop used {:.1}% of a core",
-        u.of_one_core
+        busy >= 0.08,
+        "100 ms of CPU time sampled as {busy:.3} s ({:.1}% of a core over {:?})",
+        u.of_one_core,
+        u.interval
     );
     // Writing and syncing a file shows up as this process's storage writes
     // where the OS counts them per process.
