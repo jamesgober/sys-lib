@@ -83,6 +83,12 @@ pub(crate) const MNT_RDONLY: u32 = 0x0000_0001;
 pub(crate) const MNT_REMOVABLE: u32 = 0x0000_0200;
 pub(crate) const MNT_LOCAL: u32 = 0x0000_1000;
 pub(crate) const MNT_DONTBROWSE: u32 = 0x0010_0000;
+/// Access times are not updated.
+pub(crate) const MNT_NOATIME: u32 = 0x1000_0000;
+/// Access times are updated on every read. Without it (and without
+/// `MNT_NOATIME`) APFS updates one only when it is older than the
+/// modification time. `libc` does not define it.
+pub(crate) const MNT_STRICTATIME: u32 = 0x8000_0000;
 pub(crate) const MNT_NOWAIT: c_int = 2;
 
 /// `struct timeval`; `usec` is 32-bit (`suseconds_t`).
@@ -144,6 +150,7 @@ pub(crate) const RLIM_INFINITY: u64 = (1 << 63) - 1;
 pub(crate) const RLIMIT_STACK: c_int = 3;
 pub(crate) const RLIMIT_CORE: c_int = 4;
 pub(crate) const RLIMIT_AS: c_int = 5;
+pub(crate) const RLIMIT_MEMLOCK: c_int = 6;
 pub(crate) const RLIMIT_NPROC: c_int = 7;
 pub(crate) const RLIMIT_NOFILE: c_int = 8;
 
@@ -718,6 +725,21 @@ pub(crate) const CF_NUMBER_SINT64_TYPE: CfIndex = 4;
 #[cfg(target_os = "macos")]
 pub(crate) const IO_MAIN_PORT_DEFAULT: MachPort = 0;
 
+/// `io_name_t` (IOKit/IOTypes.h): a class or entry name, NUL-terminated.
+#[cfg(target_os = "macos")]
+pub(crate) type IoName = [c_char; 128];
+
+/// `RTLD_DEFAULT` (dlfcn.h): `dlsym` searches every image loaded.
+#[cfg(target_os = "ios")]
+pub(crate) const RTLD_DEFAULT: *mut c_void = core::ptr::without_provenance_mut(usize::MAX - 1);
+
+/// `os_proc_available_memory` (os/proc.h, iOS 13 and later): the bytes this
+/// app may still allocate before it reaches its memory limit; 0 when the
+/// process is not an app under a limit, or is already over it. Found with
+/// `dlsym`, not linked, so a binary built for an older iOS still loads there.
+#[cfg(target_os = "ios")]
+pub(crate) type OsProcAvailableMemory = unsafe extern "C" fn() -> usize;
+
 // ---------------------------------------------------------------------------
 // Functions
 // ---------------------------------------------------------------------------
@@ -840,6 +862,8 @@ unsafe extern "C" {
 unsafe extern "C" {
     // sys/utsname.h
     pub(crate) fn uname(name: *mut Utsname) -> c_int;
+    // dlfcn.h
+    pub(crate) fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -911,6 +935,7 @@ unsafe extern "C" {
         child: *mut IoObject,
     ) -> KernReturn;
     pub(crate) fn IOObjectRelease(object: IoObject) -> KernReturn;
+    pub(crate) fn IOObjectGetClass(object: IoObject, class_name: *mut c_char) -> KernReturn;
     // IOKit/ps/IOPowerSources.h
     pub(crate) fn IOPSCopyPowerSourcesInfo() -> CfRef;
     pub(crate) fn IOPSCopyPowerSourcesList(blob: CfRef) -> CfRef;
@@ -1075,7 +1100,11 @@ mod tests {
         assert!(RLIMIT_STACK == libc::RLIMIT_STACK);
         assert!(RLIMIT_CORE == libc::RLIMIT_CORE);
         assert!(RLIMIT_AS == libc::RLIMIT_AS);
+        assert!(RLIMIT_MEMLOCK == libc::RLIMIT_MEMLOCK);
         assert!(RLIMIT_NPROC == libc::RLIMIT_NPROC);
+        assert!(MNT_NOATIME as i64 == libc::MNT_NOATIME as i64);
+        // MNT_STRICTATIME, which `libc` lacks, is the bit above MNT_SNAPSHOT.
+        assert!(MNT_STRICTATIME as i64 == 2 * libc::MNT_SNAPSHOT as i64);
         assert!(RLIMIT_NOFILE == libc::RLIMIT_NOFILE);
         assert!(AF_INET as c_int == libc::AF_INET);
         assert!(AF_INET6 as c_int == libc::AF_INET6);
@@ -1127,6 +1156,15 @@ mod tests {
         assert!(MNT_REMOVABLE as i64 * 2 == libc::MNT_QUARANTINE as i64);
         assert!(MNT_DONTBROWSE as i64 == libc::MNT_DONTBROWSE as i64);
     };
+
+    #[cfg(target_os = "macos")]
+    const _: () = assert!(core::mem::size_of::<IoName>() == 128);
+
+    #[cfg(target_os = "ios")]
+    #[test]
+    fn test_ffi_apple_rtld_default_matches_libc() {
+        assert_eq!(RTLD_DEFAULT, libc::RTLD_DEFAULT);
+    }
 
     #[test]
     fn test_ffi_apple_layouts_match_libc() {

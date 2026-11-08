@@ -8,7 +8,7 @@ use core::{
 };
 
 use super::{ffi, kern_error};
-use crate::Result;
+use crate::{Error, Result};
 
 /// A CoreFoundation object this code owns (one reference), released on drop.
 pub(super) struct Cf(ffi::CfRef);
@@ -257,6 +257,66 @@ impl Io {
         Cf::new(unsafe {
             ffi::IORegistryEntryCreateCFProperty(self.0, key.raw(), core::ptr::null(), 0)
         })
+    }
+
+    /// Calls `f` with each service of an IOKit class (its subclasses
+    /// included), at most `max` of them; more is `TooLarge`.
+    pub(super) fn for_each(
+        class: &CStr,
+        max: usize,
+        what: &'static str,
+        mut f: impl FnMut(&Io) -> Result<()>,
+    ) -> Result<()> {
+        // SAFETY: the class name is NUL-terminated. The dictionary returned
+        // carries one reference, consumed below.
+        let matching = unsafe { ffi::IOServiceMatching(class.as_ptr()) };
+        if matching.is_null() {
+            return Err(kern_error(what, "IOServiceMatching", 0));
+        }
+        let mut iterator: ffi::IoObject = 0;
+        // SAFETY: `matching` is a dictionary with one reference, which the
+        // call consumes on every path; `iterator` is writable.
+        let kr = unsafe {
+            ffi::IOServiceGetMatchingServices(
+                ffi::IO_MAIN_PORT_DEFAULT,
+                matching,
+                &raw mut iterator,
+            )
+        };
+        if kr != ffi::KERN_SUCCESS {
+            return Err(kern_error(what, "IOServiceGetMatchingServices", kr));
+        }
+        let Some(iterator) = Io::new(iterator) else {
+            return Ok(());
+        };
+        for n in 0..=max {
+            // SAFETY: `iterator` is a live iterator this function owns; the
+            // object returned, if any, is owned by `service`.
+            let Some(service) = Io::new(unsafe { ffi::IOIteratorNext(iterator.0) }) else {
+                return Ok(());
+            };
+            if n == max {
+                break;
+            }
+            f(&service)?;
+        }
+        Err(Error::TooLarge {
+            what,
+            limit: max as u64,
+        })
+    }
+
+    /// The name of this object's class (`AGXAcceleratorG13X`), up to its NUL.
+    pub(super) fn class(&self) -> Option<Vec<u8>> {
+        let mut name: ffi::IoName = [0; 128];
+        // SAFETY: `self.0` is a live object and `name` the 128 writable bytes
+        // of an `io_name_t`, which the call fills NUL-terminated.
+        let kr = unsafe { ffi::IOObjectGetClass(self.0, name.as_mut_ptr()) };
+        if kr != ffi::KERN_SUCCESS {
+            return None;
+        }
+        let bytes = super::c_array_bytes(&name);
+        (!bytes.is_empty()).then_some(bytes)
     }
 
     /// This entry's first parent in the service plane.
