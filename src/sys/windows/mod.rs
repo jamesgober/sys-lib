@@ -11,8 +11,17 @@ mod mem;
 mod net;
 mod power;
 mod process;
+mod report;
 mod session;
 mod topology;
+
+use std::{
+    ffi::c_void,
+    mem::{MaybeUninit, size_of, size_of_val},
+    time::{Duration, SystemTime},
+};
+#[cfg(feature = "guard")]
+use std::{fs::OpenOptions, path::Path};
 
 pub(crate) use cpu::*;
 pub(crate) use detect::*;
@@ -25,14 +34,8 @@ pub(crate) use mem::*;
 pub(crate) use net::*;
 pub(crate) use power::*;
 pub(crate) use process::*;
+pub(crate) use report::*;
 pub(crate) use session::*;
-use std::{
-    ffi::c_void,
-    mem::{MaybeUninit, size_of, size_of_val},
-    time::{Duration, SystemTime},
-};
-#[cfg(feature = "guard")]
-use std::{fs::OpenOptions, path::Path};
 pub(crate) use topology::*;
 
 use crate::{Error, Result, os::Source, process::User, sys::OsFacts};
@@ -99,6 +102,18 @@ fn filetime_to_system(ft: u64) -> Option<SystemTime> {
 struct Key(ffi::Hkey);
 
 impl Key {
+    /// Opens a key named the kernel's way, `\Registry\Machine\<path>` (as
+    /// `EnumDisplayDevicesW` gives an adapter's key), for reading. Only keys
+    /// under `HKLM` are accepted.
+    fn kernel_path(path: &str) -> Option<Key> {
+        const MACHINE: &str = "\\registry\\machine\\";
+        let head = path.get(..MACHINE.len())?;
+        if !head.eq_ignore_ascii_case(MACHINE) {
+            return None;
+        }
+        Key::local_machine(&path[MACHINE.len()..])
+    }
+
     /// Opens `HKLM\<path>` for reading, in the 64-bit view (E-74).
     fn local_machine(path: &str) -> Option<Key> {
         let path = wide(path);
@@ -151,22 +166,50 @@ impl Key {
 
     /// A `REG_DWORD` value.
     fn dword(&self, name: &str) -> Option<u32> {
+        let mut value = [0u8; 4];
+        match self.raw(name, &mut value)? {
+            (ffi::REG_DWORD, 4) => Some(u32::from_le_bytes(value)),
+            _ => None,
+        }
+    }
+
+    /// A 32-bit number stored as `REG_DWORD`, or as 4 bytes of `REG_BINARY`
+    /// (older display drivers write `HardwareInformation.MemorySize` so).
+    fn dword_or_binary(&self, name: &str) -> Option<u32> {
+        let mut value = [0u8; 4];
+        match self.raw(name, &mut value)? {
+            (ffi::REG_DWORD | ffi::REG_BINARY, 4) => Some(u32::from_le_bytes(value)),
+            _ => None,
+        }
+    }
+
+    /// A `REG_QWORD` value.
+    fn qword(&self, name: &str) -> Option<u64> {
+        let mut value = [0u8; 8];
+        match self.raw(name, &mut value)? {
+            (ffi::REG_QWORD, 8) => Some(u64::from_le_bytes(value)),
+            _ => None,
+        }
+    }
+
+    /// A value of any type into `buf`: its type and length in bytes. `None`
+    /// when it is missing or longer than `buf`.
+    fn raw(&self, name: &str, buf: &mut [u8]) -> Option<(u32, usize)> {
         let name = wide(name);
-        let mut value = 0u32;
         let mut kind = 0u32;
-        let mut len = 4u32;
-        // SAFETY: `name` is NUL-terminated; `value` is 4 writable bytes.
+        let mut len = u32::try_from(buf.len()).ok()?;
+        // SAFETY: `name` is NUL-terminated; `buf` is `len` writable bytes.
         let rc = unsafe {
             ffi::RegQueryValueExW(
                 self.0,
                 name.as_ptr(),
                 std::ptr::null_mut(),
                 &raw mut kind,
-                (&raw mut value).cast::<u8>(),
+                buf.as_mut_ptr(),
                 &raw mut len,
             )
         };
-        (rc == 0 && kind == ffi::REG_DWORD && len == 4).then_some(value)
+        (rc == 0).then_some((kind, (len as usize).min(buf.len())))
     }
 }
 
@@ -175,6 +218,30 @@ impl Drop for Key {
         // SAFETY: the key was opened by RegOpenKeyExW and is closed once.
         unsafe { ffi::RegCloseKey(self.0) };
     }
+}
+
+/// A system DLL, loaded from System32 only and kept for the life of the
+/// process (D-055); `None` where this Windows has none (Nano Server lacks
+/// several). Loading one already in the process only takes a reference.
+fn system_library(name: &str) -> Option<ffi::Handle> {
+    let name = wide(name);
+    // SAFETY: `name` is NUL-terminated and outlives the call; no file handle
+    // is passed, and the flag restricts the search to System32.
+    let module = unsafe {
+        ffi::LoadLibraryExW(
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            ffi::LOAD_LIBRARY_SEARCH_SYSTEM32,
+        )
+    };
+    (!module.is_null()).then_some(module)
+}
+
+/// A named export of `module`.
+fn export(module: ffi::Handle, name: &std::ffi::CStr) -> Option<*mut c_void> {
+    // SAFETY: `module` is a loaded module and `name` is NUL-terminated.
+    let address = unsafe { ffi::GetProcAddress(module, name.as_ptr()) };
+    (!address.is_null()).then_some(address)
 }
 
 /// A handle closed on drop.

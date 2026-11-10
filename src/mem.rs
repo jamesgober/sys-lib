@@ -664,7 +664,7 @@ pub fn modules() -> Result<Vec<MemoryModule>> {
 }
 
 /// A raw SMBIOS memory device as a public value.
-#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+#[cfg_attr(any(target_vendor = "apple", target_os = "freebsd"), allow(dead_code))]
 pub(crate) fn module_from(d: crate::parse::smbios::MemoryDevice) -> MemoryModule {
     MemoryModule {
         size: Bytes::new(d.bytes),

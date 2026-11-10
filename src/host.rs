@@ -160,7 +160,7 @@ pub fn locale() -> Option<&'static Locale> {
 
 /// `LC_ALL`, `LC_MESSAGES`, then `LANG`: the first that is set decides, as
 /// POSIX has it. For the Unix backends.
-#[cfg_attr(windows, allow(dead_code))]
+#[allow(dead_code)] // unused on Windows and targets without a backend
 pub(crate) fn posix_locale() -> Option<(String, String)> {
     let raw = ["LC_ALL", "LC_MESSAGES", "LANG"]
         .iter()

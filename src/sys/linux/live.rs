@@ -41,7 +41,7 @@ fn mem_paths() -> Option<&'static MemPaths> {
 }
 
 /// `USER_HZ`, the unit of `/proc/stat` (normally 100).
-fn clk_tck() -> u64 {
+pub(crate) fn clk_tck() -> u64 {
     static TCK: OnceLock<u64> = OnceLock::new();
     *TCK.get_or_init(|| {
         u64::try_from(ffi::sysconf(ffi::SC_CLK_TCK))
@@ -188,7 +188,11 @@ fn statvfs(path: &Path) -> Result<ffi::Statvfs> {
 }
 
 fn space_of(st: &ffi::Statvfs) -> Space {
-    let unit = st.frsize;
+    #[allow(
+        clippy::useless_conversion,
+        reason = "c_ulong is u32 on 32-bit targets"
+    )]
+    let unit = u64::from(st.frsize);
     Space::new(
         st.blocks.saturating_mul(unit),
         st.bfree.saturating_mul(unit),
@@ -559,7 +563,7 @@ pub(crate) fn open_files() -> Result<usize> {
     Ok(usize::try_from(n.saturating_sub(1)).unwrap_or(usize::MAX))
 }
 
-fn rlimit(resource: core::ffi::c_int) -> Result<Limit> {
+pub(super) fn rlimit(resource: core::ffi::c_int) -> Result<Limit> {
     let mut lim = ffi::Rlimit::default();
     // SAFETY: `lim` is a writable `rlimit`.
     if unsafe { ffi::getrlimit(resource, &raw mut lim) } != 0 {

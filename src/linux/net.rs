@@ -31,9 +31,14 @@ fn counters_of(l: &procfs::NetDevLine<'_>) -> Counters {
 
 /// Every interface but loopback, summed, through the stack (no allocation).
 pub(crate) fn totals(root: &Root) -> Result<Totals> {
+    totals_at(root, "/proc/net/dev")
+}
+
+/// [`totals`] from another `net/dev` file (a host's process 1, for a probe).
+pub(crate) fn totals_at(root: &Root, path: &str) -> Result<Totals> {
     let mut t = Totals::default();
     root.for_each_line(
-        "/proc/net/dev",
+        path,
         super::FILE_LIMIT,
         "network counters",
         "/proc/net/dev",
@@ -62,9 +67,14 @@ pub(crate) fn totals(root: &Root) -> Result<Totals> {
 
 /// Each interface's counters, loopback included, at most `max`.
 pub(crate) fn counters(root: &Root, max: usize) -> Result<Vec<Counters>> {
+    counters_at(root, "/proc/net/dev", max)
+}
+
+/// [`counters`] from another `net/dev` file.
+pub(crate) fn counters_at(root: &Root, path: &str, max: usize) -> Result<Vec<Counters>> {
     let mut out = Vec::new();
     root.for_each_line(
-        "/proc/net/dev",
+        path,
         super::FILE_LIMIT,
         "network counters",
         "/proc/net/dev",

@@ -12,6 +12,7 @@
             any(target_os = "macos", target_os = "ios"),
             target_pointer_width = "64"
         ),
+        all(target_os = "freebsd", target_pointer_width = "64"),
         windows
     )),
     allow(dead_code)
@@ -60,8 +61,34 @@ pub(crate) fn is_hyperv_root() -> bool {
         && cpuid(HYPERV_FEATURES_LEAF).ebx & CREATE_PARTITIONS != 0
 }
 
+/// The vendor string of CPUID leaf 0 (`GenuineIntel`, `AuthenticAMD`), for a
+/// backend whose OS does not report it.
+#[cfg_attr(not(target_os = "freebsd"), allow(dead_code))]
+pub(crate) fn vendor_id() -> [u8; 12] {
+    let r = cpuid(0);
+    let mut out = [0u8; 12];
+    out[..4].copy_from_slice(&r.ebx.to_le_bytes());
+    out[4..8].copy_from_slice(&r.edx.to_le_bytes());
+    out[8..12].copy_from_slice(&r.ecx.to_le_bytes());
+    out
+}
+
 /// The processor's family, model, and stepping: CPUID leaf 1 EAX.
 #[cfg_attr(not(feature = "device-id"), allow(dead_code))]
 pub(crate) fn signature() -> u32 {
     if cpuid(0).eax < 1 { 0 } else { cpuid(1).eax }
+}
+
+/// The extended leaf with the power-management flags.
+const POWER_LEAF: u32 = 0x8000_0007;
+/// `InvariantTSC`: bit 8 of EDX in the power leaf (Intel SDM, AMD APM).
+const INVARIANT_TSC: u32 = 1 << 8;
+
+/// Whether the time-stamp counter runs at a constant rate through frequency
+/// changes and idle states; `None` when the processor has no power leaf.
+pub(crate) fn invariant_tsc() -> Option<bool> {
+    if cpuid(0x8000_0000).eax < POWER_LEAF {
+        return None;
+    }
+    Some(cpuid(POWER_LEAF).edx & INVARIANT_TSC != 0)
 }

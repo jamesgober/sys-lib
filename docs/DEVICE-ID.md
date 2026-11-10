@@ -33,14 +33,16 @@ Basis tags: `Install` 1, `Hardware` 2; a fingerprint entry uses 0, so ids and en
 
 ## Anchors
 
-| Anchor | Linux | macOS | Windows | Survives reinstall | Privilege |
-|---|---|---|---|---|---|
-| `InstallId` | `/etc/machine-id`, then `/var/lib/dbus/machine-id` | none | `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` (64-bit view) | no | none |
-| `PlatformUuid` | `/sys/class/dmi/id/product_uuid` (0400) | `IOPlatformUUID` | SMBIOS type 1 UUID | yes | Linux: root |
-| `BoardSerial` | `/sys/class/dmi/id/board_serial` (0400) | `IOPlatformSerialNumber` | SMBIOS type 2 serial | yes | Linux: root |
-| `ProductSerial` | `/sys/class/dmi/id/product_serial` (0400) | not used twice | SMBIOS type 1 serial | yes | Linux: root |
-| `CpuSignature` | vendor, CPUID signature, brand | same | same | yes | none; **not unique** |
-| `PermanentMac` | lowest factory MAC of a physical interface | same | same | yes | none |
+| Anchor | Linux | macOS | Windows | FreeBSD | Survives reinstall | Privilege |
+|---|---|---|---|---|---|---|
+| `InstallId` | `/etc/machine-id`, then `/var/lib/dbus/machine-id` | none | `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` (64-bit view) | `kern.hostuuid` (from `/etc/hostid`) | no | none |
+| `PlatformUuid` | `/sys/class/dmi/id/product_uuid` (0400) | `IOPlatformUUID` | SMBIOS type 1 UUID | `kenv smbios.system.uuid` | yes | Linux: root |
+| `BoardSerial` | `/sys/class/dmi/id/board_serial` (0400) | `IOPlatformSerialNumber` | SMBIOS type 2 serial | `kenv smbios.planar.serial` | yes | Linux: root |
+| `ProductSerial` | `/sys/class/dmi/id/product_serial` (0400) | not used twice | SMBIOS type 1 serial | `kenv smbios.system.serial` | yes | Linux: root |
+| `CpuSignature` | vendor, CPUID signature, brand | same | same | same | yes | none; **not unique** |
+| `PermanentMac` | lowest factory MAC of a physical interface | same | same | same, from interfaces a hardware driver attached (D-094) | yes | none |
+
+On FreeBSD `kern.hostuuid` is all zeros, a placeholder, until `/etc/hostid` exists; it often equals the SMBIOS UUID, but the two hash under different anchor tags, so their ids differ (D-096).
 
 `Basis::Install` uses `InstallId`; macOS has none, so it uses the platform UUID. `Basis::Hardware` uses `PlatformUuid`, then `BoardSerial`.
 

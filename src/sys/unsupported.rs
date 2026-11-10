@@ -1,9 +1,12 @@
-//! Platforms without an implementation yet (FreeBSD and 32-bit Linux arrive in
-//! 0.6, D-031): answers std can give honestly, and `Unsupported` for the rest.
+//! Platforms without an implementation yet (32-bit Linux arrives in 0.6,
+//! D-031; OpenBSD, NetBSD, and 32-bit FreeBSD have none planned): answers std
+//! can give honestly, and `Unsupported` for the rest.
 
 #[cfg(feature = "guard")]
 use std::{fs::OpenOptions, path::Path};
 
+// The live readings: unknown on these platforms.
+pub(crate) use super::{detection::*, environment::*, pending::*};
 use crate::{
     Error, Result,
     cpu::Vendor,
@@ -13,9 +16,6 @@ use crate::{
 };
 #[cfg(feature = "guard")]
 use crate::{process::Limit, sys::FsKind};
-
-// The live readings: unknown on these platforms.
-pub(crate) use super::{detection::*, pending::*};
 
 fn unsupported(what: &'static str) -> Error {
     Error::Unsupported {

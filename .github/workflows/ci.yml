@@ -83,9 +83,12 @@ jobs:
       matrix:
         target:
           - x86_64-unknown-linux-musl
+          # 32-bit musl has no verified layouts: it builds the honest fallback.
+          - i686-unknown-linux-musl
           - i686-pc-windows-msvc
           - aarch64-linux-android
           - aarch64-apple-ios
+          - x86_64-unknown-freebsd
         rust: [stable, "1.89"]
     env:
       # blake3 (feature device-id) would build C and assembly for the target,
@@ -114,6 +117,107 @@ jobs:
         run: cargo clippy --target ${{ matrix.target }} --all-targets --all-features -- -D warnings
       - name: Clippy and layout oracles (no default features)
         run: cargo clippy --target ${{ matrix.target }} --all-targets --no-default-features -- -D warnings
+
+  # 32-bit glibc Linux (D-063): the layout oracles compile for each target and
+  # the whole suite runs, i686 natively with multilib, armv7 under qemu-user
+  # (registered with binfmt, so programs the tests start run too).
+  linux32:
+    name: Test (${{ matrix.target }} / ${{ matrix.rust }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [i686-unknown-linux-gnu, armv7-unknown-linux-gnueabihf]
+        rust: [stable, "1.89"]
+    env:
+      CARGO_FEATURE_PURE: "1"
+      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUNNER: qemu-arm
+      # Tests start Arm programs of their own (the T16 fakes): binfmt runs them
+      # through qemu too, and this prefix finds the Arm libraries for both.
+      QEMU_LD_PREFIX: /usr/arm-linux-gnueabihf
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          targets: ${{ matrix.target }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install the target's C toolchain
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.target }}" = i686-unknown-linux-gnu ]; then
+            sudo apt-get install -y gcc-multilib
+          else
+            sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user qemu-user-binfmt
+          fi
+      - name: Clippy and layout oracles (all features)
+        run: cargo clippy --target ${{ matrix.target }} --all-targets --all-features -- -D warnings
+      - name: Clippy and layout oracles (no default features)
+        run: cargo clippy --target ${{ matrix.target }} --all-targets --no-default-features -- -D warnings
+      - name: Test (all features)
+        run: cargo test --target ${{ matrix.target }} --all-features
+      - name: Test (no default features)
+        run: cargo test --target ${{ matrix.target }} --no-default-features
+
+  # The FreeBSD backend's readings run against a real kernel: the cross job
+  # above checks the layouts, this one runs the whole test suite inside a
+  # FreeBSD virtual machine, as an unprivileged user (dev/PLAN.md, D-098).
+  freebsd:
+    name: FreeBSD 14 VM (${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [stable, "1.89"]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Clippy and tests in FreeBSD
+        uses: vmactions/freebsd-vm@v1.5.9
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.rust }}
+          CI: "true"
+        with:
+          release: "14"
+          envs: "RUST_TOOLCHAIN CI"
+          copyback: false
+          run: |
+            set -eu
+            freebsd-version -ku
+            sysctl kern.vm_guest hw.ncpu hw.physmem kern.timecounter.hardware
+            pw useradd -n ci -m -s /bin/sh
+            chown -R ci .
+            cat > /tmp/ci.sh <<'EOS'
+            set -eu
+            # rustup-init itself: the sh.rustup.rs script needs curl or wget,
+            # which the base system lacks; fetch(1) is in base.
+            fetch -q -o /tmp/rustup-init https://static.rust-lang.org/rustup/dist/x86_64-unknown-freebsd/rustup-init
+            chmod +x /tmp/rustup-init
+            /tmp/rustup-init -y -q --profile minimal --default-toolchain "$1" -c clippy
+            . "$HOME/.cargo/env"
+            cd "$2"
+            export CI=true CARGO_TERM_COLOR=always RUSTFLAGS="-D warnings"
+            rustc --version
+            cargo clippy --all-targets -- -D warnings
+            cargo clippy --all-targets --all-features -- -D warnings
+            cargo clippy --all-targets --no-default-features -- -D warnings
+            # Every mode runs to the end, so one log shows every failure.
+            status=0
+            cargo test --no-fail-fast || status=1
+            # A crash in a test thread loses its output: on failure, run the
+            # unit tests one at a time, uncaptured, so the log names the test.
+            if ! cargo test --no-fail-fast --all-features; then
+              status=1
+              cargo test --lib --all-features -- --test-threads=1 --nocapture || true
+            fi
+            cargo test --no-fail-fast --no-default-features || status=1
+            exit "$status"
+            EOS
+            su -l ci -c "sh /tmp/ci.sh '$RUST_TOOLCHAIN' '$PWD'"
 
   container:
     name: Container limits (cgroup v2)

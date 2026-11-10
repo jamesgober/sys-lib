@@ -21,7 +21,47 @@ pub(crate) fn memory(want: MemWant) -> Result<MemRaw> {
     let total = super::sysctl_int(c"hw.memsize").map_err(|e| e.into_error(WHAT, c"hw.memsize"))?;
     let vm = vm_statistics(WHAT)?;
     let swap = if want.swap { Some(swap()?) } else { None };
-    Ok(raw_from(total, &vm, kernel_page_size(), swap))
+    let raw = raw_from(total, &vm, kernel_page_size(), swap);
+    #[cfg(target_os = "ios")]
+    let raw = with_app_budget(raw, app_available());
+    Ok(raw)
+}
+
+/// iOS: an app may allocate what `os_proc_available_memory()` says before the
+/// system ends it, which is neither the free nor the inactive pages (the
+/// system reclaims other apps' memory first): that figure is what is
+/// available. 0 (not an app under a limit, or already over it) and a missing
+/// call (before iOS 13) keep the host's figure (D-087).
+#[cfg(any(target_os = "ios", test))]
+fn with_app_budget(mut raw: MemRaw, available: Option<u64>) -> MemRaw {
+    if let Some(bytes) = available.filter(|&n| n > 0) {
+        raw.host_available = bytes.min(raw.host_total);
+    }
+    raw
+}
+
+/// `os_proc_available_memory()`, when this iOS has it. Looked up once with
+/// `dlsym` instead of linked, so the binary still loads on iOS 12 and older.
+#[cfg(target_os = "ios")]
+fn app_available() -> Option<u64> {
+    static CALL: OnceLock<Option<ffi::OsProcAvailableMemory>> = OnceLock::new();
+    let call = CALL.get_or_init(|| {
+        // SAFETY: the handle is the documented `RTLD_DEFAULT` and the name is
+        // NUL-terminated.
+        let symbol = unsafe { ffi::dlsym(ffi::RTLD_DEFAULT, c"os_proc_available_memory".as_ptr()) };
+        if symbol.is_null() {
+            return None;
+        }
+        // SAFETY: the symbol is libSystem's `os_proc_available_memory`, which
+        // os/proc.h declares as `size_t (void)`, the type converted to.
+        Some(unsafe {
+            core::mem::transmute::<*mut core::ffi::c_void, ffi::OsProcAvailableMemory>(symbol)
+        })
+    });
+    let call = (*call)?;
+    // SAFETY: a function that takes nothing and returns a size.
+    let bytes = unsafe { call() };
+    u64::try_from(bytes).ok()
 }
 
 /// The public raw reading from the VM counters, in pages of `page` bytes.
@@ -188,6 +228,25 @@ mod tests {
             ..ffi::VmStatistics64::default()
         };
         assert_eq!(raw_from(GIB, &vm, 4096, None).host_unused, Some(0));
+    }
+
+    #[test]
+    fn test_mem_apple_app_budget_replaces_available() {
+        let vm = ffi::VmStatistics64 {
+            free_count: 1000,
+            inactive_count: 1000,
+            ..ffi::VmStatistics64::default()
+        };
+        let raw = raw_from(4 * GIB, &vm, 16_384, None);
+        let host = raw.host_available;
+        assert_eq!(with_app_budget(raw, Some(GIB)).host_available, GIB);
+        // Above the host's free pages: the system reclaims for the app.
+        assert_eq!(with_app_budget(raw, Some(2 * GIB)).host_available, 2 * GIB);
+        assert_eq!(with_app_budget(raw, Some(8 * GIB)).host_available, 4 * GIB);
+        assert_eq!(with_app_budget(raw, Some(0)).host_available, host);
+        assert_eq!(with_app_budget(raw, None).host_available, host);
+        let memory = crate::mem::from_raw(with_app_budget(raw, Some(GIB)));
+        assert_eq!(memory.free.raw(), GIB);
     }
 
     #[test]

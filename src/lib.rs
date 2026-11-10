@@ -10,7 +10,7 @@
 //!
 //! ## Tier 1
 //!
-//! Add it with Cargo's rename, `sys = { package = "sys-lib", version = "0.5" }`,
+//! Add it with Cargo's rename, `sys = { package = "sys-lib", version = "0.6" }`,
 //! and every file writes `sys::`; without the rename, `use sys_lib as sys;`
 //! does the same (the examples use that form so they compile either way).
 //! One plain call per fact; static facts are read once and cached:
@@ -85,12 +85,14 @@
 /// Crate version string, populated by Cargo at build time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod bench;
 pub mod build;
 pub mod cpu;
 #[cfg(feature = "device-id")]
 #[cfg_attr(docsrs, doc(cfg(feature = "device-id")))]
 pub mod device;
 pub mod disk;
+pub mod gpu;
 pub mod host;
 #[cfg(feature = "instance")]
 #[cfg_attr(docsrs, doc(cfg(feature = "instance")))]
@@ -99,7 +101,13 @@ pub mod mem;
 pub mod net;
 pub mod os;
 pub mod power;
+#[cfg(target_os = "linux")]
+#[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
+pub mod probe;
 pub mod process;
+pub mod readiness;
+pub mod security;
+pub mod sensors;
 pub mod virt;
 
 mod error;
@@ -114,6 +122,7 @@ pub mod __fuzz {
 mod fuzz;
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 mod linux;
+mod origin;
 mod parse;
 mod pressure;
 mod summary;

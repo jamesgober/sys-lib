@@ -13,6 +13,62 @@
 
 ---
 
+## [0.6.0] - 2026-11-08
+
+Environment and reports: feature complete. The settings that decide whether a
+server performs, whether a benchmark can be trusted, and how the machine is
+secured; temperatures and graphics adapters; and two more platforms.
+
+### Added
+
+- `readiness`: `report(profile)` and `report_for(profile, data_dir)` for the
+  General, Database, WebServer, and Benchmark profiles. Every check says what
+  it found, what the profile wants, why, and the command that changes it; it is
+  left out where it does not apply and `Unknown` with the reason where it cannot
+  be read. Read-only. `Report` prints as a table, key-value lines, or JSON.
+- `bench::environment()`: governor or power plan, turbo, SMT, invariant TSC,
+  clock source, throttling, isolated CPUs, ASLR, power source, load, and
+  whether it is a VM, with the warnings that make results noisy and
+  `is_reproducible()`.
+- `security::posture()`: Secure Boot, TPM, disk encryption, SELinux or
+  AppArmor, ASLR, kernel lockdown or VBS, code integrity, firewall, and the
+  kernel's CPU vulnerability list.
+- `sensors::temperatures()`: Linux hwmon and thermal zones, Windows drives,
+  FreeBSD CPU and ACPI zones.
+- `gpu::list()`: Linux DRM adapters named from `pci.ids`, macOS PCI display
+  controllers and Apple silicon, Windows display adapters with their memory and
+  driver version.
+- `probe::Probe::with_root` (Linux): a monitoring agent reads a host mounted
+  elsewhere through the same samplers, given in code, never through the
+  environment.
+- A FreeBSD backend (64-bit, FreeBSD 12 and later) for every reading FreeBSD
+  answers without privileges, with a CI job that runs the suite in a FreeBSD 14
+  virtual machine.
+- 32-bit Linux on glibc (i686, armv7): verified layouts and a CI job that runs
+  the suite on both.
+- iOS `mem::free()` from `os_proc_available_memory()`.
+- Example `reports`; a fuzz target for the `pci.ids` parser.
+
+### Changed
+
+- Windows `process::threads()` reads a process snapshot instead of a thread
+  snapshot: about four times faster on a busy machine.
+- Every `[verify]` mark in `docs/SOURCES.md` confirmed or replaced, among them
+  macOS `kern.osproductversion`, which does answer 10.16 in compatibility mode.
+
+### Fixed
+
+- `cpu::Sampler`'s per-core reading grew its buffer once when the OS listed
+  more CPUs than expected (CPUs brought online since it was made) and then
+  failed with `TooLarge`; it now grows to the 16 384 CPU budget.
+
+### Known gaps
+
+- The bare-metal Linux desktop fixture is still to be captured (it needs a
+  bare-metal Linux desktop).
+
+---
+
 ## [0.5.1] - 2026-11-07
 
 ### Fixed
@@ -274,7 +330,8 @@ The scaffold and the plan. No functional code yet.
   `dev/ROADMAP.md`.
 - `tests/fixtures/` and `fuzz/` skeletons.
 
-[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/jamesgober/sys-lib/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/jamesgober/sys-lib/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jamesgober/sys-lib/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jamesgober/sys-lib/compare/v0.3.0...v0.4.0

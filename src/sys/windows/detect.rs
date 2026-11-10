@@ -114,7 +114,7 @@ pub(crate) fn form_factor() -> Detection<FormFactor> {
 }
 
 /// `GetFirmwareType`; `None` when the call fails.
-fn firmware_kind() -> Option<FirmwareKind> {
+pub(super) fn firmware_kind() -> Option<FirmwareKind> {
     let mut kind = 0u32;
     // SAFETY: `kind` is a writable FIRMWARE_TYPE.
     let ok = unsafe { ffi::GetFirmwareType(&raw mut kind) };

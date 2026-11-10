@@ -3,9 +3,12 @@
 //!
 //! Everything a file under `/proc` or `/sys` can answer is read from the file
 //! instead, so this list stays short. The structs are declared for LP64
-//! targets, where glibc, musl, and bionic agree on them; each has a size and
-//! alignment assertion, and the tests at the bottom compare them with `libc`
-//! field by field on every target CI builds.
+//! targets, where glibc, musl, and bionic agree on them, and for 32-bit glibc
+//! on x86 and Arm (D-063), where sys-lib calls the 64-bit-offset functions
+//! (`statvfs64`, `statfs64`, `getrlimit64`, `setrlimit64`, `readdir64`) so
+//! that block counts, limits, and inode numbers keep their 64-bit range. Each
+//! struct has a size and alignment assertion per target, and the tests at the
+//! bottom compare them with `libc` field by field on every target CI builds.
 
 #![cfg_attr(not(feature = "guard"), allow(dead_code))]
 
@@ -15,8 +18,9 @@ use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 pub(crate) type Uid = u32;
 /// `mode_t`.
 pub(crate) type Mode = u32;
-/// `time_t` (64-bit on every LP64 target).
-pub(crate) type Time = i64;
+/// `time_t`: 64-bit on LP64 targets; 32-bit glibc keeps a 32-bit `time_t`
+/// for its default symbols, which sys-lib calls (D-063).
+pub(crate) type Time = c_long;
 /// `clockid_t`.
 pub(crate) type ClockId = c_int;
 
@@ -36,11 +40,19 @@ pub(crate) struct Statvfs {
     pub(crate) ffree: u64,
     pub(crate) favail: u64,
     pub(crate) fsid: c_ulong,
+    /// 32-bit glibc pads the `fsid` of `struct statvfs64`.
+    #[cfg(target_pointer_width = "32")]
+    pub(crate) unused: c_int,
     pub(crate) flag: c_ulong,
     pub(crate) namemax: c_ulong,
     pub(crate) spare: [c_int; 6],
 }
+#[cfg(target_pointer_width = "64")]
 layout!(Statvfs, size = 112, align = 8);
+#[cfg(all(target_pointer_width = "32", target_arch = "x86"))]
+layout!(Statvfs, size = 96, align = 4);
+#[cfg(all(target_pointer_width = "32", target_arch = "arm"))]
+layout!(Statvfs, size = 96, align = 8);
 
 /// `ST_RDONLY` in `Statvfs::flag`.
 pub(crate) const ST_RDONLY: c_ulong = 1;
@@ -61,7 +73,12 @@ pub(crate) struct Statfs {
     pub(crate) flags: c_long,
     pub(crate) spare: [c_long; 4],
 }
+#[cfg(target_pointer_width = "64")]
 layout!(Statfs, size = 120, align = 8);
+#[cfg(all(target_pointer_width = "32", target_arch = "x86"))]
+layout!(Statfs, size = 84, align = 4);
+#[cfg(all(target_pointer_width = "32", target_arch = "arm"))]
+layout!(Statfs, size = 88, align = 8);
 
 // Filesystem magic numbers (linux/magic.h, fs/smb/client), as `Statfs::ftype`
 // reports them, for the process guard's network-filesystem check.
@@ -75,14 +92,17 @@ pub(crate) const CODA_SUPER_MAGIC: u32 = 0x7375_7245;
 pub(crate) const AFS_SUPER_MAGIC: u32 = 0x5346_414F;
 pub(crate) const CEPH_SUPER_MAGIC: u32 = 0x00C3_6400;
 
-/// `struct rlimit` (sys/resource.h).
+/// `struct rlimit` (sys/resource.h); `struct rlimit64` on 32-bit glibc.
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub(crate) struct Rlimit {
     pub(crate) cur: u64,
     pub(crate) max: u64,
 }
+#[cfg(not(all(target_pointer_width = "32", target_arch = "x86")))]
 layout!(Rlimit, size = 16, align = 8);
+#[cfg(all(target_pointer_width = "32", target_arch = "x86"))]
+layout!(Rlimit, size = 16, align = 4);
 
 /// `RLIM_INFINITY`.
 pub(crate) const RLIM_INFINITY: u64 = u64::MAX;
@@ -91,6 +111,7 @@ pub(crate) const RLIMIT_STACK: c_int = 3;
 pub(crate) const RLIMIT_CORE: c_int = 4;
 pub(crate) const RLIMIT_NPROC: c_int = 6;
 pub(crate) const RLIMIT_NOFILE: c_int = 7;
+pub(crate) const RLIMIT_MEMLOCK: c_int = 8;
 pub(crate) const RLIMIT_AS: c_int = 9;
 
 /// `struct timeval`.
@@ -100,7 +121,10 @@ pub(crate) struct Timeval {
     pub(crate) sec: Time,
     pub(crate) usec: c_long,
 }
+#[cfg(target_pointer_width = "64")]
 layout!(Timeval, size = 16, align = 8);
+#[cfg(target_pointer_width = "32")]
+layout!(Timeval, size = 8, align = 4);
 
 /// `struct timespec`.
 #[derive(Clone, Copy, Default)]
@@ -109,7 +133,10 @@ pub(crate) struct Timespec {
     pub(crate) sec: Time,
     pub(crate) nsec: c_long,
 }
+#[cfg(target_pointer_width = "64")]
 layout!(Timespec, size = 16, align = 8);
+#[cfg(target_pointer_width = "32")]
+layout!(Timespec, size = 8, align = 4);
 
 /// `struct rusage` (sys/resource.h). `maxrss` is in KiB on Linux.
 #[repr(C)]
@@ -134,8 +161,10 @@ pub(crate) struct Rusage {
     #[cfg(target_env = "musl")]
     pub(crate) reserved: [c_long; 16],
 }
-#[cfg(not(target_env = "musl"))]
+#[cfg(all(target_pointer_width = "64", not(target_env = "musl")))]
 layout!(Rusage, size = 144, align = 8);
+#[cfg(target_pointer_width = "32")]
+layout!(Rusage, size = 72, align = 4);
 #[cfg(target_env = "musl")]
 layout!(Rusage, size = 272, align = 8);
 
@@ -153,7 +182,10 @@ pub(crate) struct Passwd {
     pub(crate) dir: *mut c_char,
     pub(crate) shell: *mut c_char,
 }
+#[cfg(target_pointer_width = "64")]
 layout!(Passwd, size = 48, align = 8);
+#[cfg(target_pointer_width = "32")]
+layout!(Passwd, size = 28, align = 4);
 
 /// `struct tm` (time.h), with the BSD fields glibc, musl, and bionic all carry.
 #[repr(C)]
@@ -170,7 +202,10 @@ pub(crate) struct Tm {
     pub(crate) gmtoff: c_long,
     pub(crate) zone: *const c_char,
 }
+#[cfg(target_pointer_width = "64")]
 layout!(Tm, size = 56, align = 8);
+#[cfg(target_pointer_width = "32")]
+layout!(Tm, size = 44, align = 4);
 
 /// `struct sockaddr` (sys/socket.h).
 #[repr(C)]
@@ -181,7 +216,8 @@ pub(crate) struct Sockaddr {
 layout!(Sockaddr, size = 16, align = 2);
 
 /// `struct timex` (sys/timex.h): the whole kernel structure, 208 bytes on
-/// every 64-bit Linux, of which sys-lib reads four fields.
+/// every 64-bit Linux and 128 on 32-bit glibc, of which sys-lib reads four
+/// fields.
 #[cfg(not(target_os = "android"))]
 #[repr(C)]
 pub(crate) struct Timex {
@@ -191,10 +227,15 @@ pub(crate) struct Timex {
     pub(crate) maxerror: c_long,
     pub(crate) esterror: c_long,
     pub(crate) status: c_int,
+    #[cfg(target_pointer_width = "64")]
     pub(crate) rest: [c_long; 20],
+    #[cfg(target_pointer_width = "32")]
+    pub(crate) rest: [c_long; 26],
 }
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), target_pointer_width = "64"))]
 layout!(Timex, size = 208, align = 8);
+#[cfg(target_pointer_width = "32")]
+layout!(Timex, size = 128, align = 4);
 
 /// `TIME_ERROR` from `adjtimex` (sys/timex.h).
 #[cfg(not(target_os = "android"))]
@@ -238,7 +279,10 @@ pub(crate) struct Ifaddrs {
     pub(crate) ifu: *mut Sockaddr,
     pub(crate) data: *mut c_void,
 }
+#[cfg(target_pointer_width = "64")]
 layout!(Ifaddrs, size = 56, align = 8);
+#[cfg(target_pointer_width = "32")]
+layout!(Ifaddrs, size = 28, align = 4);
 
 /// `struct sockaddr_ll` (linux/if_packet.h): the `AF_PACKET` entry
 /// `getifaddrs` returns for every interface, with its index, hardware type,
@@ -257,7 +301,7 @@ pub(crate) struct SockaddrLl {
 layout!(SockaddrLl, size = 20, align = 4);
 
 /// `struct dirent` (dirent.h), the 64-bit layout glibc, musl, and bionic share
-/// on LP64 targets.
+/// on LP64 targets; `struct dirent64` from `readdir64` on 32-bit glibc.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Dirent {
@@ -267,7 +311,10 @@ pub(crate) struct Dirent {
     pub(crate) dtype: u8,
     pub(crate) name: [c_char; 256],
 }
+#[cfg(not(all(target_pointer_width = "32", target_arch = "x86")))]
 layout!(Dirent, size = 280, align = 8);
+#[cfg(all(target_pointer_width = "32", target_arch = "x86"))]
+layout!(Dirent, size = 276, align = 4);
 
 /// `DIR` (dirent.h), opaque.
 #[repr(C)]
@@ -285,9 +332,17 @@ pub(crate) const IFF_LOOPBACK: c_uint = 0x8;
 pub(crate) const IFF_RUNNING: c_uint = 0x40;
 
 /// `O_NOFOLLOW` (fcntl.h): its value differs between architectures.
-#[cfg(any(target_arch = "aarch64", target_arch = "powerpc64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "powerpc64"
+))]
 pub(crate) const O_NOFOLLOW: c_int = 0o100_000;
-#[cfg(not(any(target_arch = "aarch64", target_arch = "powerpc64")))]
+#[cfg(not(any(
+    target_arch = "aarch64",
+    target_arch = "arm",
+    target_arch = "powerpc64"
+)))]
 pub(crate) const O_NOFOLLOW: c_int = 0o400_000;
 /// `ERANGE` (errno.h): a buffer was too small.
 pub(crate) const ERANGE: c_int = 34;
@@ -327,10 +382,14 @@ unsafe extern "C" {
     // sys/stat.h
     pub(crate) safe fn umask(mask: Mode) -> Mode;
     // sys/statvfs.h, sys/statfs.h
+    #[cfg_attr(target_pointer_width = "32", link_name = "statvfs64")]
     pub(crate) fn statvfs(path: *const c_char, buf: *mut Statvfs) -> c_int;
+    #[cfg_attr(target_pointer_width = "32", link_name = "statfs64")]
     pub(crate) fn statfs(path: *const c_char, buf: *mut Statfs) -> c_int;
     // sys/resource.h
+    #[cfg_attr(target_pointer_width = "32", link_name = "getrlimit64")]
     pub(crate) fn getrlimit(resource: c_int, rlim: *mut Rlimit) -> c_int;
+    #[cfg_attr(target_pointer_width = "32", link_name = "setrlimit64")]
     pub(crate) fn setrlimit(resource: c_int, rlim: *const Rlimit) -> c_int;
     pub(crate) fn getrusage(who: c_int, usage: *mut Rusage) -> c_int;
     // pwd.h
@@ -352,6 +411,7 @@ unsafe extern "C" {
     pub(crate) fn freeifaddrs(ifa: *mut Ifaddrs);
     // dirent.h
     pub(crate) fn opendir(name: *const c_char) -> *mut Dir;
+    #[cfg_attr(target_pointer_width = "32", link_name = "readdir64")]
     pub(crate) fn readdir(dir: *mut Dir) -> *mut Dirent;
     pub(crate) fn closedir(dir: *mut Dir) -> c_int;
 }
@@ -384,15 +444,22 @@ mod tests {
         assert!(STA_UNSYNC == libc::STA_UNSYNC);
     };
 
-    same_layout!(Statvfs, libc::statvfs,
+    #[cfg(target_pointer_width = "64")]
+    use libc::{dirent as dirent_t, rlimit as rlimit_t, statfs as statfs_t, statvfs as statvfs_t};
+    #[cfg(target_pointer_width = "32")]
+    use libc::{
+        dirent64 as dirent_t, rlimit64 as rlimit_t, statfs64 as statfs_t, statvfs64 as statvfs_t,
+    };
+
+    same_layout!(Statvfs, statvfs_t,
         bsize => f_bsize, frsize => f_frsize, blocks => f_blocks, bfree => f_bfree,
         bavail => f_bavail, files => f_files, ffree => f_ffree, favail => f_favail,
         fsid => f_fsid, flag => f_flag, namemax => f_namemax);
-    same_layout!(Statfs, libc::statfs,
+    same_layout!(Statfs, statfs_t,
         ftype => f_type, bsize => f_bsize, blocks => f_blocks, bfree => f_bfree,
         bavail => f_bavail, files => f_files, ffree => f_ffree, fsid => f_fsid,
         namelen => f_namelen, frsize => f_frsize);
-    same_layout!(Rlimit, libc::rlimit, cur => rlim_cur, max => rlim_max);
+    same_layout!(Rlimit, rlimit_t, cur => rlim_cur, max => rlim_max);
     same_layout!(Timeval, libc::timeval, sec => tv_sec, usec => tv_usec);
     same_layout!(Timespec, libc::timespec, sec => tv_sec, nsec => tv_nsec);
     same_layout!(Rusage, libc::rusage,
@@ -415,7 +482,7 @@ mod tests {
     same_layout!(SockaddrLl, libc::sockaddr_ll,
         family => sll_family, protocol => sll_protocol, ifindex => sll_ifindex,
         hatype => sll_hatype, pkttype => sll_pkttype, halen => sll_halen, addr => sll_addr);
-    same_layout!(Dirent, libc::dirent,
+    same_layout!(Dirent, dirent_t,
         ino => d_ino, off => d_off, reclen => d_reclen, dtype => d_type, name => d_name);
     same_layout!(Ifaddrs, libc::ifaddrs,
         next => ifa_next, name => ifa_name, flags => ifa_flags, addr => ifa_addr,
@@ -427,10 +494,14 @@ mod tests {
     )]
     const _: () = {
         assert!(ST_RDONLY == libc::ST_RDONLY as c_ulong);
+        #[cfg(target_pointer_width = "64")]
         assert!(RLIM_INFINITY == libc::RLIM_INFINITY as u64);
+        #[cfg(target_pointer_width = "32")]
+        assert!(RLIM_INFINITY == libc::RLIM64_INFINITY);
         assert!(RLIMIT_STACK == libc::RLIMIT_STACK as c_int);
         assert!(RLIMIT_CORE == libc::RLIMIT_CORE as c_int);
         assert!(RLIMIT_NPROC == libc::RLIMIT_NPROC as c_int);
+        assert!(RLIMIT_MEMLOCK == libc::RLIMIT_MEMLOCK as c_int);
         assert!(RLIMIT_NOFILE == libc::RLIMIT_NOFILE as c_int);
         assert!(RLIMIT_AS == libc::RLIMIT_AS as c_int);
         assert!(RUSAGE_SELF == libc::RUSAGE_SELF);

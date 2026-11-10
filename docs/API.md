@@ -98,7 +98,7 @@ sys = { package = "sys-lib", version = "0.4" }
 # Without instance info and the process guard (no dependencies at all):
 # sys = { package = "sys-lib", version = "0.4", default-features = false }
 # With device identity (from 0.5):
-# sys = { package = "sys-lib", version = "0.5", features = ["device-id"] }
+# sys = { package = "sys-lib", version = "0.6", features = ["device-id"] }
 ```
 
 The package is `sys-lib` on crates.io (`sys` and `system` were taken). Cargo's rename makes it `sys` in your code, so every file writes `sys::os::name()` with no import line. Without the rename (`sys-lib = "0.4"`), add `use sys_lib as sys;` at the top of a file and the code is the same.
@@ -2371,8 +2371,9 @@ pub struct Temperature {
 | OS | Source |
 |---|---|
 | Linux | `/sys/class/hwmon/hwmon*/temp*_{input,label,max,crit}` (millidegrees); kind from the hwmon `name` (`coretemp`, `k10temp`, `zenpower`, `nvme`, `amdgpu`, `acpitz`); `/sys/class/thermal/thermal_zone*` when hwmon is absent |
-| macOS | `Unsupported`: Apple silicon sensors need private HID event APIs and Intel SMC keys are undocumented; nothing undocumented is used |
-| Windows | `Unsupported` for the CPU: the only documented source (`MSAcpi_ThermalZoneTemperature`) needs WMI and Administrator and reports ACPI zones, not the CPU; NVMe drives through `IOCTL_STORAGE_QUERY_PROPERTY` `StorageDeviceTemperatureProperty` (unprivileged) |
+| macOS, iOS | `Unsupported`: Apple silicon sensors need private HID event APIs and Intel SMC keys are undocumented; nothing undocumented is used |
+| Windows | No CPU entry: the only documented source (`MSAcpi_ThermalZoneTemperature`) needs WMI and Administrator and reports ACPI zones, not the CPU. Drives through `IOCTL_STORAGE_QUERY_PROPERTY` `StorageDeviceTemperatureProperty` on each `\\.\PhysicalDriveN` opened with no access rights (unprivileged), labelled with the product id and drive number; the warning and critical thresholds when the drive gives them (D-071) |
+| FreeBSD | `dev.cpu.N.temperature` (with `coretemp` or `amdtemp` loaded) and the ACPI thermal zones `hw.acpi.thermal.tzN.temperature` |
 
 Inside Docker and WSL, hwmon is usually absent: an empty list, not an error.
 
@@ -2398,8 +2399,9 @@ pub struct Gpu {
 | OS | Source |
 |---|---|
 | Linux | `/sys/class/drm/card*/device/{vendor,device,uevent,mem_info_vram_total}`; the name from `pci.ids` when installed (`/usr/share/hwdata/pci.ids`, `/usr/share/misc/pci.ids`; a bounded, fuzzed parser), else "Vendor GPU 0x1234" |
-| macOS | IOKit `IOPCIDevice` entries of display class, `model` property; Apple silicon from the `AGXAccelerator` service [verify property names] |
-| Windows | `EnumDisplayDevicesW` (user32) for names; dedicated memory from the adapter's registry key (`HardwareInformation.qwMemorySize`) [verify] |
+| macOS | IOKit `IOPCIDevice` entries whose `class-code` (little-endian data) has base class 0x03: `model` (data), `vendor-id`, `device-id`, `VRAM,totalMB` or `VRAM,totalsize`. With no PCI adapter (Apple silicon), the `IOAccelerator` services (`AGXAccelerator*`): `model` (a string), `CFBundleIdentifier` as the driver, else the chip from `machdep.cpu.brand_string`. An Apple adapter on PCI, or a `Paravirt` accelerator, is virtual (D-081, D-082) |
+| Windows | `EnumDisplayDevicesW` (user32, loaded at run time), one entry per adapter, mirror drivers left out; the adapter's `DeviceKey` registry key gives `HardwareInformation.qwMemorySize`, else `HardwareInformation.MemorySize` (capped near 4 GiB), and `DriverVersion`; the basic display driver and hypervisor adapters are virtual (D-072) |
+| iOS, FreeBSD | `Unsupported` (FreeBSD needs `/dev/pci`, which is root-only) |
 
 No GPU usage or memory-in-use: those need vendor libraries (NVML, ROCm SMI, DXGI COM), which sys-lib does not load.
 
@@ -2459,17 +2461,17 @@ A start-up check of the operating-system settings that decide whether a server p
 | open-file limits | `RLIMIT_NOFILE` of this process; `/proc/sys/fs/file-max`, `nr_open` | `RLIMIT_NOFILE`; `kern.maxfiles`, `kern.maxfilesperproc` | handles are unlimited: Pass | soft at least 65 536 |
 | locked-memory limit | `RLIMIT_MEMLOCK` | same | the lock-pages privilege (`SeLockMemoryPrivilege`) in the token | enough for the buffer pool when it is locked |
 | listen backlog | `/proc/sys/net/core/somaxconn`, `net/ipv4/tcp_max_syn_backlog` | `kern.ipc.somaxconn` | | at least 4 096 |
-| ephemeral ports | `/proc/sys/net/ipv4/ip_local_port_range` | `net.inet.ip.portrange.first`/`last` | dynamic port range from the registry | at least 28 000 ports |
-| CPU frequency policy | `scaling_governor` per CPU | | the active power plan (`PowerGetActiveScheme`) | `performance` / High performance |
+| ephemeral ports | `/proc/sys/net/ipv4/ip_local_port_range` | `net.inet.ip.portrange.first`/`last` | `Unknown`: no documented unprivileged source (netsh keeps the range in the NSI store, D-073) | at least 28 000 ports |
+| CPU frequency policy | the `scaling_governor` of each cpufreq policy | | the active power plan (`PowerGetActiveScheme`), High performance and Ultimate Performance matched by GUID or by the plan's personality (D-074) | `performance` / High performance |
 | clock source | `/sys/devices/system/clocksource/clocksource0/current_clocksource` | | | `tsc` (`hpet`, `xen`, `acpi_pm` are slow to read) |
 | clock synchronized | `host::clock_sync()` | same | same | synchronized |
 | swap present | `mem::swap()` | same | pagefile | some swap or zram, small |
 | I/O scheduler of the data disk | `/sys/block/<disk>/queue/scheduler` | | | `none` or `mq-deadline` on SSD and NVMe |
-| data directory filesystem | `disk::of(data_dir)`: type, mount options | `statfs` | `GetVolumeInformationW` | local; ext4 or xfs (Linux), APFS, NTFS or ReFS; `noatime` or `relatime` |
+| data directory filesystem | `disk::of(data_dir)`: type; access times from the mount's options in `/proc/self/mountinfo` | `statfs` `f_flags`: `MNT_NOATIME`, `MNT_STRICTATIME`; APFS without either updates access times relatime-style (D-083) | `GetVolumeInformationW`; on NTFS, access times from `NtfsDisableLastAccessUpdate` (D-076) | local; ext4 or xfs (Linux), APFS, NTFS or ReFS, ZFS or UFS (FreeBSD); `noatime` or `relatime` |
 | data directory space and kind | `disk::space`, `DiskKind` | same | same | SSD; at least 15% free |
 | container limits | `mem::limit()`, `cpu::quota()` | | job object | reported (Pass with the values) |
 
-Each check runs only where it applies; elsewhere it is left out (not reported as passing). A value sys-lib cannot read is `Unknown` with the reason, never a guess. Cost: 0.2 to 2 ms once, at start-up [est.].
+Each check runs only where it applies; elsewhere it is left out (not reported as passing). A value sys-lib cannot read is `Unknown` with the reason, never a guess. A check fails only where the setting loses data or breaks under load: memory overcommit mode 1 for a database, an open-file limit under 1 024 for a server, a data directory on a network filesystem for a database, or under 5% free; everything else warns (D-064). FreeBSD reads `kern.maxfiles`, `kern.maxfilesperproc`, `kern.ipc.soacceptqueue`, the port range, and the timecounter. Cost: under 2 ms on Linux; 10 to 30 ms on Windows, where the power plan, volume, and registry calls dominate (measured on a loaded machine).
 
 ```rust
 use sys_lib::readiness::{self, Profile};
@@ -2523,8 +2525,8 @@ What a benchmark result needs printed next to it so it can be trusted and repeat
 | Item | Linux | macOS | Windows |
 |---|---|---|---|
 | governor | `cpufreq/scaling_governor` | `None` (no user-visible governor) | active power plan name (`PowerGetActiveScheme`, `PowerReadFriendlyName`) |
-| turbo | `intel_pstate/no_turbo`, `cpufreq/boost` | `None` | the plan's processor maximum state [verify] |
-| SMT | `/sys/devices/system/cpu/smt/active` | `physical != logical` | `LTP_PC_SMT` flag in the core records |
+| turbo | `intel_pstate/no_turbo`, `cpufreq/boost` | `None` | the plan's PERFBOOSTMODE (not Disabled) with PROCTHROTTLEMAX at 100%, for the current power source: a policy, so `Some(true)` even on a CPU without boost (D-075) |
+| SMT | `/sys/devices/system/cpu/smt/active` | `physical != logical` (Apple silicon `Some(false)`) | `LTP_PC_SMT` flag in the core records |
 | invariant TSC | CPUID 0x80000007 EDX bit 8 (x86 only) | same on Intel Macs; Apple silicon `None` | same |
 | throttled | `thermal_throttle/{core,package}_throttle_count` per CPU | `None` | `CallNtPowerInformation` `MhzLimit < MaxMhz` |
 | isolated CPUs | `/sys/devices/system/cpu/{isolated,nohz_full}` | `None` | `None` |
@@ -2555,8 +2557,8 @@ pub struct Posture {
 #[non_exhaustive] pub struct Tpm { pub version: TpmVersion }                 // V1_2, V2_0
 #[non_exhaustive] pub enum Encryption { Enabled { kind: &'static str }, Disabled }   // "LUKS", "BitLocker", "FileVault"
 #[non_exhaustive] pub struct Mac { pub kind: &'static str, pub enforcing: bool }    // "SELinux", "AppArmor"
-#[non_exhaustive] pub enum Lockdown { None, Integrity, Confidentiality }
-#[non_exhaustive] pub struct Vulnerability { pub name: &'static str, pub status: VulnStatus, pub detail: String }
+#[non_exhaustive] pub enum Lockdown { Off, Integrity, Confidentiality }
+#[non_exhaustive] pub struct Vulnerability { pub name: String, pub status: VulnStatus, pub detail: String }
 #[non_exhaustive] pub enum VulnStatus { NotAffected, Mitigated, Vulnerable, Unknown }
 ```
 
@@ -2564,13 +2566,13 @@ The machine's security settings, read-only, for shield-sec, compliance reports, 
 
 | Item | Linux | macOS | Windows |
 |---|---|---|---|
-| Secure Boot | `/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c` (the fifth byte) | Apple silicon boots with full security by default; the policy is not readable unprivileged: `None` [verify] | `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State` `UEFISecureBootEnabled` |
+| Secure Boot | `/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c` (the fifth byte); without `/sys/firmware/efi`, false (a BIOS boot), or `None` in a container, which may hide it | `None`: no documented unprivileged API (`bputil` and the NVRAM boot-policy variables are a program and private) | `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State` `UEFISecureBootEnabled`; false on a BIOS boot |
 | TPM | `/sys/class/tpm/tpm0/tpm_version_major` | `None` (the Secure Enclave is not a TPM) | `Tbsi_GetDeviceInfo` (tbs.dll, unprivileged) |
-| disk encryption | the root filesystem's block device: `dm/uuid` starting `CRYPT-` under `/sys/dev/block/<major:minor>` | `None` unprivileged [verify] | the system drive's BitLocker state from the shell property `System.Volume.BitLockerProtection` [verify an unprivileged, non-COM source; `None` otherwise] |
+| disk encryption | the root filesystem's block device and the devices under it (LVM on LUKS): `dm/uuid` starting `CRYPT-` under `/sys/dev/block/<major:minor>` and its `slaves/` | `None`: FileVault's state comes only from `fdesetup`, a program | `None`: the only unprivileged sources are the shell property (COM) and WMI (Administrator) (D-077) |
 | SELinux / AppArmor | `/sys/fs/selinux/enforce`; `/sys/module/apparmor/parameters/enabled` | | |
 | ASLR | `/proc/sys/kernel/randomize_va_space` | always on: `Some(true)` | `GetProcessMitigationPolicy(ProcessASLRPolicy)` for this process |
-| lockdown, code integrity | `/sys/kernel/security/lockdown` | SIP through `csr_get_active_config` [verify it is callable; `None` otherwise] | `HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard` (`EnableVirtualizationBasedSecurity`, HVCI `Enabled`) |
-| firewall | `None` (nftables and iptables state is root-only) | `None` unprivileged | the active profile's `EnableFirewall` under `HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy` |
+| lockdown, code integrity | `/sys/kernel/security/lockdown` | `None`: `csr_get_active_config` is exported, but its header is private to XNU and it is undocumented (D-085) | `HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard`: `Scenarios\KeyGuard\Status` `IsSecureKernelRunning` (VBS running gives `Integrity`), else the configuration; HVCI `Enabled` while VBS runs gives `code_integrity` (D-078) |
+| firewall | `None` (nftables and iptables state is root-only) | `None`: no documented API | each profile's `EnableFirewall`, Group Policy's value first, then the local one under `...\SharedAccess\Parameters\FirewallPolicy`: true or false only when all three profiles agree, else `None` (finding the active profile needs COM, D-079) |
 | CPU vulnerabilities | `/sys/devices/system/cpu/vulnerabilities/*` (0444) | `None` | `None` (the documented source needs a driver) |
 
 ---
@@ -2794,7 +2796,7 @@ pub mod probe {
 }
 ```
 
-A monitoring agent in a container that has the host's `/proc` and `/sys` mounted (say at `/host`) reads the host's values through an explicit root. It is the feature gopsutil offers through `HOST_PROC` and `HOST_SYS` environment variables; sys-lib offers it only as a constructor in code, so no deployment can redirect a normal program's readings through its environment (threat T4). The Linux backend already reads through a root prefix (that is how fixture tests run), so the readings are the same code.
+A monitoring agent in a container that has the host's `/proc` and `/sys` mounted (say at `/host`) reads the host's values through an explicit root. It is the feature gopsutil offers through `HOST_PROC` and `HOST_SYS` environment variables; sys-lib offers it only as a constructor in code, so no deployment can redirect a normal program's readings through its environment (threat T4). The Linux backend already reads through a root prefix (that is how fixture tests run), so the readings are the same code. Mounts and network counters are read through the host's process 1 (`/proc/1/mountinfo`, `/proc/1/net/dev`), which is the host's view when the agent shares the host's process namespace (`hostPID`); otherwise they are the agent's own. CPU, memory (without any cgroup limit), disk I/O, load, and uptime are system-wide; disk space is read through the root (D-065).
 
 ## Errors by variant
 

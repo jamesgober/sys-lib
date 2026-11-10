@@ -18,6 +18,9 @@ The reference platform. Everything in the API works unprivileged except:
 - **`host::timezone()`** gets the offset from `localtime_r`, so libc reads `TZ` itself. sys-lib's own reading of `TZ` only accepts a valid name and never opens one.
 - **`host::clock_sync()`** is `Ok(None)` when a sandbox refuses `adjtimex`.
 - **musl** works throughout. glibc's two utmp layouts are read; a musl system usually has no utmp at all.
+- **32-bit.** glibc on x86 (i686) and Arm (armv7) has verified layouts and runs the whole suite in CI (armv7 under qemu). sys-lib calls the 64-bit-offset functions there (`statvfs64`, `statfs64`, `getrlimit64`, `readdir64`), so sizes and limits keep their range; `time_t` stays glibc's default 32 bits, so a local time zone offset after January 2038 is not read correctly on those targets (D-063). A 32-bit program on a 64-bit kernel reports the native machine and `cpu::is_translated() == true`, as WOW64 does. 32-bit musl and 32-bit Android have no verified layouts and answer `Unsupported`.
+- **Reports.** `readiness`, `bench`, and `security` read `/proc/sys`, `/sys/kernel`, `/sys/devices/system/cpu`, and `/sys/firmware/efi`; a container usually hides the firmware and cpufreq files, which then leave their checks out or `None`. Temperatures come from hwmon, else the thermal zones; GPUs from DRM, named from `pci.ids` when installed.
+- **`probe::Probe`** reads a host mounted elsewhere; mounts and network counters are the host's only when the agent shares the host's process namespace (`hostPID`).
 
 ## WSL
 
@@ -48,6 +51,9 @@ Everything below is checked by compiling and on CI runners, which are virtual ma
 - `device`: there is no installation id, so `Basis::Install` uses the platform UUID, and the id changes when the logic board is replaced.
 - `net::dns()` links the SystemConfiguration framework, present on every macOS.
 
+- **Reports.** Temperatures are `Unsupported` (no documented API). GPUs come from IOKit: PCI display controllers, else the Apple silicon accelerator. The readiness report reads `kern.maxfiles`, `kern.ipc.somaxconn` (128 by default, so `net.backlog` warns on a default Mac), and the port range; APFS updates access times relatime-style unless mounted `strictatime`. Secure Boot, FileVault, SIP, and the firewall are `None`: no documented unprivileged API.
+- **iOS** `mem::free()` is `os_proc_available_memory()`, the app's own budget, found at run time.
+
 ## Windows
 
 | Reading | Answer | Why |
@@ -65,7 +71,9 @@ Everything below is checked by compiling and on CI runners, which are virtual ma
 - `process::launch()` calls a process in session 0 with no console a service. A scheduled task running as SYSTEM looks the same.
 - A host with Hyper-V, WSL 2, or virtualization-based security enabled is not reported as a VM, though CPUID says "Microsoft Hv": the root-partition flag tells them apart.
 - `net::totals()` costs milliseconds here, not microseconds: sample it, do not poll it in a tight loop.
-- Nano Server: CI runs a real binary there, so the imports load.
+- Nano Server: CI runs a real binary there, so the imports load. user32, tbs, and powrprof are loaded at run time from System32 (D-070): on Nano Server `gpu::list()` is `Unsupported` and the power plan, TPM, and turbo fields are unknown.
+- **Reports.** `sensors::temperatures()` lists drives only; there is no unprivileged documented CPU temperature. The readiness report's ephemeral-port check is `Unknown` (no documented source), and the open-file check passes (handles have no per-process limit). `security::posture()` reads the registry for Secure Boot, VBS, HVCI, and the firewall (true or false only when every profile agrees); BitLocker is `None`.
+- `process::threads()` takes a process snapshot: tens of milliseconds on a host with many processes.
 
 ## Android
 
@@ -84,6 +92,23 @@ Best effort, build-checked in CI, never run.
 
 The form factor comes from `uname().machine`, or `SIMULATOR_MODEL_IDENTIFIER` on the simulator.
 
+## FreeBSD
+
+64-bit, FreeBSD 12 and later, from sysctls, `getfsstat`, `getifaddrs`, `kenv`, and `/etc/os-release`. CI runs the whole suite in a FreeBSD 14 virtual machine as an unprivileged user.
+
+| Reading | Answer | Why |
+|---|---|---|
+| `virt::container()` in a jail | `Container::Other` | jails are reported as containers without a variant of their own yet (D-095) |
+| `process::io()`, `gpu::list()`, `mem::modules()` | `Unsupported` | FreeBSD counts block operations, not bytes; `/dev/pci` and the SMBIOS table are root-only |
+| `cpu::topology()` | flat | `kern.sched.topology_spec` is XML and not parsed |
+| `cpu::quota()`, pressure, `mem::events()`, huge pages | `Ok(None)` | no such measure |
+| `mem::Memory::cached` | `None` | no page-cache figure; the ZFS ARC counts as wired |
+| `power::batteries()` | one combined entry | `hw.acpi.battery` combines them |
+| `security::Posture::firewall` | ipfw only | a pf firewall reads as unknown |
+| `host::processes()` | the user's own processes | with `security.bsd.see_other_uids=0` |
+
+Temperatures need `coretemp` or `amdtemp` loaded, and the CPU frequency needs `cpufreq`. The device id's `InstallId` is `kern.hostuuid` (from `/etc/hostid`); the SMBIOS UUID and serials come from `kenv` without privileges.
+
 ## Everything else
 
-FreeBSD and 32-bit Linux arrive in `0.6`. Until then they, and any other target, compile and answer honestly: what std knows, and `Unsupported` for the rest.
+Any other target compiles and answers honestly: what std knows, and `Unsupported` for the rest.

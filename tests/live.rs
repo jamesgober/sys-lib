@@ -36,7 +36,12 @@ fn need(program: &str, args: &[&str]) -> Option<String> {
 }
 
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos", windows)),
+    not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        windows
+    )),
     allow(dead_code)
 )]
 fn number(text: &str) -> usize {
@@ -700,7 +705,14 @@ fn test_live_windows_disks_match_cim() {
     let windows = disk::of(format!("{root}Windows")).unwrap();
     assert_eq!(windows.mount_point.to_str(), Some(root.as_str()));
     assert!(windows.device.eq_ignore_ascii_case(&drive));
-    assert!(disk::list().unwrap().contains(&windows));
+    // The same volume in the list; its free space can change between the two
+    // reads while other work writes to the disk.
+    assert!(disk::list().unwrap().iter().any(|d| {
+        d.mount_point == windows.mount_point
+            && d.device == windows.device
+            && d.filesystem == windows.filesystem
+            && d.kind == windows.kind
+    }));
     match v[0].as_str() {
         "SSD" => assert_eq!(windows.kind, DiskKind::Ssd),
         "HDD" => assert_eq!(windows.kind, DiskKind::Hdd),
@@ -893,8 +905,12 @@ fn test_live_linux_detection_matches_the_tools() {
     let root = disk::of("/").unwrap();
     assert_eq!(root.mount_point, std::path::Path::new("/"));
     assert!(root.space.is_some());
-    assert_eq!(cpu::native_arch(), cpu::arch());
-    assert!(!cpu::is_translated());
+    // A 32-bit build on a 64-bit kernel (i686 on x86_64) runs on the wider
+    // machine, and under qemu-user the machine is the host's (armv7 on
+    // x86_64): both count as translated, as WOW64 and Rosetta do.
+    let (native, built) = (cpu::native_arch(), cpu::arch());
+    assert_ne!(native, cpu::Arch::Other, "built {built:?}");
+    assert_eq!(cpu::is_translated(), native != built);
     if let Some(route) = need("ip", &["route", "show", "default"])
         && let Some(dev) = route.split_whitespace().skip_while(|w| *w != "dev").nth(1)
     {
@@ -914,4 +930,82 @@ fn test_live_linux_detection_matches_the_tools() {
             .sum::<usize>(),
         cpu::logical()
     );
+}
+
+#[cfg(target_os = "freebsd")]
+#[test]
+fn test_live_freebsd_matches_sysctl_and_the_tools() {
+    use sys_lib::{disk, mem, net};
+    let sysctl = |name: &str| need("sysctl", &["-n", name]);
+    if let Some(n) = sysctl("hw.ncpu") {
+        assert_eq!(cpu::logical(), number(&n));
+        assert_eq!(cpu::online(), number(&n));
+    }
+    if let Some(model) = sysctl("hw.model") {
+        assert_eq!(cpu::raw_name(), Some(model.as_str()));
+    }
+    if let Some(release) = sysctl("kern.osrelease") {
+        assert_eq!(os::kernel(), release);
+    }
+    if let Some(v) = need("freebsd-version", &["-u"]) {
+        // The userland version names the release; os-release says the same.
+        assert!(
+            os::name().contains(v.split("-p").next().unwrap()),
+            "{} vs {v}",
+            os::name()
+        );
+    }
+    assert_eq!(os::distro_id(), "freebsd");
+    assert_eq!(os::kind(), os::Kind::FreeBsd);
+    if let Some(n) = sysctl("hw.physmem") {
+        assert_eq!(mem::host_total().unwrap().raw(), n.parse::<u64>().unwrap());
+    }
+    if let Some(df) = need("df", &["-k", "/"]) {
+        let blocks: u64 = df
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let s = disk::space("/").unwrap();
+        assert!(
+            close(s.total.raw(), blocks * 1024, 16 * MIB),
+            "{} vs {}",
+            s.total,
+            blocks * 1024
+        );
+    }
+    if let Some(b) = sysctl("kern.boottime") {
+        // "{ sec = 1700000000, usec = 123456 } Tue Nov 14 ..."
+        let sec: u64 = b
+            .split("sec = ")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let boot = host::boot_time()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(boot.abs_diff(sec) <= 2, "{boot} vs {sec}");
+    }
+    // `route -n get default` names the default route's interface.
+    if let Some(route) = tool("route", &["-n", "get", "default"]) {
+        let name = route
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("interface:"))
+            .map(str::trim);
+        if let Some(name) = name {
+            let primary = net::primary().unwrap();
+            assert_eq!(primary.map(|i| i.name.clone()).as_deref(), Some(name));
+        }
+    }
 }

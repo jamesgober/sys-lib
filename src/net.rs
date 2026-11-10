@@ -16,7 +16,7 @@
 use core::{fmt, time::Duration};
 use std::{net::IpAddr, time::Instant};
 
-use crate::{Bytes, Error, Rate, Result};
+use crate::{Bytes, Error, Rate, Result, origin::Origin};
 
 /// One network interface.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -471,6 +471,7 @@ pub struct Sampler {
     at: Instant,
     interfaces: Vec<Counters>,
     interfaces_at: Instant,
+    origin: Origin,
 }
 
 impl Sampler {
@@ -480,12 +481,18 @@ impl Sampler {
     ///
     /// As [`totals`].
     pub fn new() -> Result<Sampler> {
+        Self::from(Origin::local())
+    }
+
+    /// [`new`](Sampler::new), reading from `origin`.
+    pub(crate) fn from(origin: Origin) -> Result<Sampler> {
         let now = Instant::now();
         Ok(Sampler {
-            total: totals()?,
+            total: origin.net_totals()?,
             at: now,
-            interfaces: counters()?,
+            interfaces: origin.net_counters()?,
             interfaces_at: now,
+            origin,
         })
     }
 
@@ -496,6 +503,7 @@ impl Sampler {
             at: now,
             interfaces: Vec::new(),
             interfaces_at: now,
+            origin: Origin::local(),
         })
     }
 
@@ -507,7 +515,7 @@ impl Sampler {
     ///
     /// `TooSoon` when no time passed since the previous sample.
     pub fn sample(&mut self) -> Result<Traffic> {
-        let now = totals()?;
+        let now = self.origin.net_totals()?;
         let at = Instant::now();
         let interval = at.duration_since(self.at);
         if interval.is_zero() {
@@ -527,7 +535,7 @@ impl Sampler {
     ///
     /// `TooSoon` when no time passed since the previous sample.
     pub fn sample_per_interface(&mut self) -> Result<Vec<InterfaceTraffic>> {
-        let now = counters()?;
+        let now = self.origin.net_counters()?;
         let at = Instant::now();
         let interval = at.duration_since(self.interfaces_at);
         if interval.is_zero() {

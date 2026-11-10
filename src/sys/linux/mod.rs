@@ -5,9 +5,7 @@
 mod detect;
 mod ffi;
 mod live;
-
-pub(crate) use detect::*;
-pub(crate) use live::*;
+mod report;
 
 use std::{
     ffi::{CStr, c_char},
@@ -15,6 +13,10 @@ use std::{
 };
 #[cfg(feature = "guard")]
 use std::{fs::OpenOptions, path::Path};
+
+pub(crate) use detect::*;
+pub(crate) use live::*;
+pub(crate) use report::*;
 
 use crate::{
     Error, Result,
