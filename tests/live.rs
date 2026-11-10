@@ -905,18 +905,11 @@ fn test_live_linux_detection_matches_the_tools() {
     let root = disk::of("/").unwrap();
     assert_eq!(root.mount_point, std::path::Path::new("/"));
     assert!(root.space.is_some());
-    // A 32-bit build on a 64-bit kernel (i686 on x86_64, armv7 on aarch64)
-    // runs natively on the wider machine.
+    // A 32-bit build on a 64-bit kernel (i686 on x86_64) runs on the wider
+    // machine, and under qemu-user the machine is the host's (armv7 on
+    // x86_64): both count as translated, as WOW64 and Rosetta do.
     let (native, built) = (cpu::native_arch(), cpu::arch());
-    assert!(
-        native == built
-            || matches!(
-                (built, native),
-                (cpu::Arch::X86, cpu::Arch::X86_64) | (cpu::Arch::Arm, cpu::Arch::Aarch64)
-            ),
-        "native {native:?}, built {built:?}"
-    );
-    // Like WOW64 on Windows, a 32-bit build on a 64-bit kernel counts.
+    assert_ne!(native, cpu::Arch::Other, "built {built:?}");
     assert_eq!(cpu::is_translated(), native != built);
     if let Some(route) = need("ip", &["route", "show", "default"])
         && let Some(dev) = route.split_whitespace().skip_while(|w| *w != "dev").nth(1)

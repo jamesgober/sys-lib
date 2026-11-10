@@ -2,7 +2,10 @@
 //! `getrlimit`, `kern.proc.nfds`, and how it was started.
 
 use core::ffi::c_int;
-use std::time::SystemTime;
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::SystemTime,
+};
 
 use super::{Key, SysctlError, ffi, last_errno, os_error};
 use crate::{
@@ -107,20 +110,34 @@ fn peak_bytes(usage: &ffi::Rusage) -> u64 {
 }
 
 /// Resident size: one sysctl into a stack buffer, no allocation.
-pub(crate) fn process_memory() -> Result<Bytes> {
-    let info = Kinfo::own(MEMORY)?;
-    Ok(Bytes::new(
-        info.resident_pages()
-            .saturating_mul(super::page_size() as u64),
-    ))
+/// The largest resident size this process has reported, so the peak is never
+/// below a reading already handed out: the kernel's `ru_maxrss` lags (it is
+/// updated on statistics-clock ticks), and the resident size can shrink
+/// between two calls (D-100).
+static HIGH_WATER: AtomicU64 = AtomicU64::new(0);
+
+/// `bytes` raised to the high-water mark, which it raises in turn.
+fn high_water(bytes: u64) -> u64 {
+    HIGH_WATER.fetch_max(bytes, Ordering::Relaxed).max(bytes)
 }
 
-/// `ru_maxrss`, at least the resident size now: the kernel updates the peak
-/// on statistics-clock ticks, so a process that just grew can read a peak
-/// below its current size.
+fn resident_now() -> Result<u64> {
+    let info = Kinfo::own(MEMORY)?;
+    Ok(info
+        .resident_pages()
+        .saturating_mul(super::page_size() as u64))
+}
+
+pub(crate) fn process_memory() -> Result<Bytes> {
+    let rss = resident_now()?;
+    high_water(rss);
+    Ok(Bytes::new(rss))
+}
+
+/// `ru_maxrss`, at least every resident size reported so far and the one now.
 pub(crate) fn peak_memory() -> Result<Bytes> {
     let peak = peak_bytes(&rusage(MEMORY)?);
-    Ok(Bytes::new(peak.max(process_memory()?.raw())))
+    Ok(Bytes::new(high_water(peak.max(resident_now()?))))
 }
 
 /// Resident and virtual size from `kern.proc.pid`, the peak from
@@ -135,7 +152,7 @@ pub(crate) fn memory_detail() -> Result<ProcessMemory> {
     Ok(ProcessMemory {
         resident: Bytes::new(resident),
         // The two counters are read at different instants (T5).
-        peak_resident: Bytes::new(peak.max(resident)),
+        peak_resident: Bytes::new(high_water(peak.max(resident))),
         virtual_size: Bytes::new(info.virtual_size().max(resident)),
         private: None,
         shared: None,
