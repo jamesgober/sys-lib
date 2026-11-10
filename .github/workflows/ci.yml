@@ -119,7 +119,8 @@ jobs:
         run: cargo clippy --target ${{ matrix.target }} --all-targets --no-default-features -- -D warnings
 
   # 32-bit glibc Linux (D-063): the layout oracles compile for each target and
-  # the whole suite runs, i686 natively with multilib, armv7 under qemu-user.
+  # the whole suite runs, i686 natively with multilib, armv7 under qemu-user
+  # (registered with binfmt, so programs the tests start run too).
   linux32:
     name: Test (${{ matrix.target }} / ${{ matrix.rust }})
     runs-on: ubuntu-24.04
@@ -131,7 +132,10 @@ jobs:
     env:
       CARGO_FEATURE_PURE: "1"
       CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
-      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUNNER: qemu-arm -L /usr/arm-linux-gnueabihf
+      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUNNER: qemu-arm
+      # Tests start Arm programs of their own (the T16 fakes): binfmt runs them
+      # through qemu too, and this prefix finds the Arm libraries for both.
+      QEMU_LD_PREFIX: /usr/arm-linux-gnueabihf
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -148,7 +152,7 @@ jobs:
           if [ "${{ matrix.target }}" = i686-unknown-linux-gnu ]; then
             sudo apt-get install -y gcc-multilib
           else
-            sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user
+            sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user qemu-user-binfmt
           fi
       - name: Clippy and layout oracles (all features)
         run: cargo clippy --target ${{ matrix.target }} --all-targets --all-features -- -D warnings
