@@ -14,8 +14,12 @@ use sysinfo::{
 fn static_facts(c: &mut Criterion) {
     let mut g = c.benchmark_group("static_fact");
     let _ = sys::os::name();
-    g.bench_function("sys-lib os::name", |b| b.iter(|| black_box(sys::os::name())));
-    g.bench_function("sysinfo System::name", |b| b.iter(|| black_box(System::name().ok())));
+    g.bench_function("sys-lib os::name", |b| {
+        b.iter(|| black_box(sys::os::name()))
+    });
+    g.bench_function("sysinfo System::name", |b| {
+        b.iter(|| black_box(System::name().ok()))
+    });
     g.finish();
 
     let mut g = c.benchmark_group("cpu_physical");
