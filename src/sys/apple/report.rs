@@ -158,9 +158,10 @@ pub(crate) fn data_dir_tuning(path: &Path, _disk: &Disk) -> DataDirTuning {
 /// turbo switch, throttle counter, clock-source choice, or CPU isolation to
 /// a user process: `None`.
 pub(crate) fn bench_facts() -> BenchFacts {
-    let cpu = super::cpu();
+    let (physical, _) = super::cpu_counts();
+    let logical = super::cpu_logical();
     BenchFacts {
-        smt: cpu.physical.map(|physical| physical != cpu.logical),
+        smt: physical.zip(logical).map(|(p, l)| p != l),
         aslr: Some(true),
         ..BenchFacts::default()
     }

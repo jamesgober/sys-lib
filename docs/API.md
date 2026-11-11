@@ -1501,7 +1501,7 @@ pub struct Memory {
     pub total: Bytes, pub used: Bytes, pub free: Bytes,
     pub host_total: Bytes, pub host_free: Bytes,
     pub unused: Option<Bytes>,       // pages doing nothing (the kernel's MemFree)
-    pub cached: Option<Bytes>,
+    pub cached: Option<Bytes>,       // Windows: None (D-102)
     pub limit: Option<MemoryLimit>, pub swap: Swap,
     pub source: MemorySource,
 }

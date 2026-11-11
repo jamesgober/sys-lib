@@ -110,11 +110,32 @@ impl Root {
         source: &'static str,
     ) -> Result<Vec<u8>> {
         let mut file = File::open(self.resolve(abs)).map_err(|e| Error::io(what, source, e))?;
-        let mut data = Vec::new();
-        file.by_ref()
-            .take(limit as u64 + 1)
-            .read_to_end(&mut data)
-            .map_err(|e| Error::io(what, source, e))?;
+        // Small files (nearly all of /proc, /sys, and /etc) in two read calls,
+        // the data and the end, through the stack: `read_to_end` on an empty
+        // Vec probes with 32 bytes and grows in steps, a call each (D-101).
+        let mut buf = [0u8; STACK_BUF];
+        let want = (limit + 1).min(STACK_BUF);
+        let mut len = 0;
+        loop {
+            match file.read(&mut buf[len..want]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    len += n;
+                    if len == want {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(Error::io(what, source, e)),
+            }
+        }
+        let mut data = buf[..len].to_vec();
+        if len == STACK_BUF && limit >= STACK_BUF {
+            file.by_ref()
+                .take((limit + 1 - len) as u64)
+                .read_to_end(&mut data)
+                .map_err(|e| Error::io(what, source, e))?;
+        }
         if data.len() > limit {
             return Err(Error::TooLarge {
                 what,
@@ -151,11 +172,28 @@ impl Root {
         f: impl FnOnce(&[u8]) -> T,
     ) -> Result<T> {
         let mut buf = [0u8; STACK_BUF];
+        // The reading is not generic, so each caller adds only its own `f`
+        // (one copy of the loop instead of one per call site, D-103).
+        match self.fill(abs, what, source, &mut buf)? {
+            Filled::Stack(len) => Ok(f(&buf[..len])),
+            Filled::Heap(data) => Ok(f(&data)),
+        }
+    }
+
+    /// Reads a file into `buf`, or whole from the heap (bounded by
+    /// [`FILE_LIMIT`]) when it does not fit.
+    fn fill(
+        &self,
+        abs: &str,
+        what: &'static str,
+        source: &'static str,
+        buf: &mut [u8; STACK_BUF],
+    ) -> Result<Filled> {
         let mut file = File::open(self.resolve(abs)).map_err(|e| Error::io(what, source, e))?;
         let mut len = 0;
         loop {
             match file.read(&mut buf[len..]) {
-                Ok(0) => return Ok(f(&buf[..len])),
+                Ok(0) => return Ok(Filled::Stack(len)),
                 Ok(n) => {
                     len += n;
                     if len == buf.len() {
@@ -167,8 +205,7 @@ impl Root {
             }
         }
         // Larger than the stack buffer: read it whole, bounded.
-        let data = self.read(abs, FILE_LIMIT, what, source)?;
-        Ok(f(&data))
+        self.read(abs, FILE_LIMIT, what, source).map(Filled::Heap)
     }
 
     /// Reads at most the first 8 KiB of a file into a stack buffer and hands
@@ -210,6 +247,18 @@ impl Root {
         what: &'static str,
         source: &'static str,
         mut f: impl FnMut(&[u8]) -> ControlFlow<()>,
+    ) -> Result<()> {
+        // One copy of the loop for every caller (D-103).
+        self.lines(abs, limit, what, source, &mut f)
+    }
+
+    fn lines(
+        &self,
+        abs: &str,
+        limit: usize,
+        what: &'static str,
+        source: &'static str,
+        f: &mut dyn FnMut(&[u8]) -> ControlFlow<()>,
     ) -> Result<()> {
         let mut buf = [0u8; STACK_BUF];
         let mut file = File::open(self.resolve(abs)).map_err(|e| Error::io(what, source, e))?;
@@ -342,6 +391,14 @@ impl Root {
         names.sort();
         names
     }
+}
+
+/// Where [`Root::fill`] put a file.
+enum Filled {
+    /// The first `n` bytes of the stack buffer.
+    Stack(usize),
+    /// A file larger than the stack buffer.
+    Heap(Vec<u8>),
 }
 
 fn strip_cr(line: &[u8]) -> &[u8] {
@@ -508,6 +565,8 @@ mod tests {
             "topology/core_cpus_list",
             "topology/thread_siblings_list",
             "topology/physical_package_id",
+            "topology/package_cpus_list",
+            "topology/core_siblings_list",
             "cpufreq/base_frequency",
             "cpufreq/cpuinfo_max_freq",
             "cpufreq/scaling_cur_freq",

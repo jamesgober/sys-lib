@@ -3,8 +3,7 @@
 use std::{mem::MaybeUninit, sync::OnceLock};
 
 use super::{
-    Owned, ffi, job_limits, memory_status, os_error, performance_info, process::memory_counters,
-    unsupported,
+    Owned, ffi, job_limits, memory_status, os_error, process::memory_counters, unsupported,
 };
 use crate::{
     Bytes, Pressure, PressureLevel, Result,
@@ -21,17 +20,19 @@ pub(crate) fn memory(want: MemWant) -> Result<MemRaw> {
         source: Some(MemorySource::Host),
         ..MemRaw::default()
     };
-    // The cache and the commit counters come from GetPerformanceInfo, which
-    // counts handles across the machine: only the full snapshot pays for it.
+    // Swap from the commit figures the same call returns, in bytes: the
+    // commit limit is the total page file, and the commit charged is the
+    // limit less what is still available. GetPerformanceInfo has the same
+    // numbers and the cache, but it counts every handle on the machine, tens
+    // of microseconds on a busy host, so the cache is not reported (D-102).
     if want.swap {
-        let info = performance_info("memory")?;
-        let page = info.page_size as u64;
-        raw.cached = Some((info.system_cache as u64).saturating_mul(page));
         raw.swap = Some(swap_from_commit(
-            info.commit_total as u64,
-            info.commit_limit as u64,
-            info.physical_total as u64,
-            page,
+            status
+                .total_page_file
+                .saturating_sub(status.avail_page_file),
+            status.total_page_file,
+            status.total_phys,
+            1,
         ));
     }
     if let Some(job) = job_limits().filter(|_| want.limit) {
@@ -60,7 +61,8 @@ pub(crate) fn memory(want: MemWant) -> Result<MemRaw> {
     Ok(raw)
 }
 
-/// Swap `(total, free)` in bytes from the commit counters, in pages. The
+/// Swap `(total, free)` in bytes from the commit counters, in units of `page`
+/// bytes (1 when they are already bytes). The
 /// commit limit beyond physical memory is the paging files' size, and commit
 /// charged beyond physical memory is the least of it that must be in use: an
 /// approximation, because Windows reports paging-file usage only through
@@ -207,7 +209,8 @@ mod tests {
     fn test_mem_windows_live_readings() {
         let m = memory(MemWant::ALL).unwrap();
         assert!(m.host_total > 0 && m.host_available <= m.host_total);
-        assert!(m.cached.is_some_and(|c| c <= m.host_total));
+        // No documented source is cheap enough for every snapshot (D-102).
+        assert!(m.cached.is_none());
         let (total, free) = m.swap.unwrap();
         assert!(free <= total);
         if let (Some(limit), Some(used)) = (m.limit, m.limited_used) {

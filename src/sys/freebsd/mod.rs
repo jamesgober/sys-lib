@@ -44,7 +44,7 @@ use crate::{
     os::Source,
     parse::os_release,
     process::User,
-    sys::{CpuFacts, OsFacts, ReleaseFacts},
+    sys::{CpuIdentity, OsFacts, ReleaseFacts},
 };
 #[cfg(feature = "guard")]
 use crate::{process::Limit, sys::FsKind};
@@ -510,19 +510,17 @@ fn count(name: &CStr) -> Option<usize> {
         .filter(|&n| n > 0)
 }
 
-pub(crate) fn cpu() -> CpuFacts {
-    let logical = count(c"hw.ncpu")
-        .or_else(|| {
-            std::thread::available_parallelism()
-                .ok()
-                .map(std::num::NonZero::get)
-        })
-        .unwrap_or(1);
+pub(crate) fn cpu_logical() -> Option<usize> {
+    count(c"hw.ncpu")
+}
+
+pub(crate) fn cpu_counts() -> (Option<usize>, Option<usize>) {
+    (count(c"kern.smp.cores"), None)
+}
+
+pub(crate) fn cpu_identity() -> CpuIdentity {
     let raw_name = sysctl_string(c"hw.model");
-    CpuFacts {
-        logical,
-        physical: count(c"kern.smp.cores"),
-        packages: None,
+    CpuIdentity {
         vendor: vendor(raw_name.as_deref()),
         raw_name,
         name: None,

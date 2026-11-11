@@ -22,7 +22,7 @@ use crate::{
     Error, Result,
     linux::{self as tree, Root},
     process::User,
-    sys::{CpuFacts, OsFacts},
+    sys::{CpuIdentity, OsFacts},
 };
 #[cfg(feature = "guard")]
 use crate::{process::Limit, sys::FsKind};
@@ -31,10 +31,31 @@ const ROOT: Root = Root::system();
 
 pub(crate) fn os() -> OsFacts {
     #[cfg_attr(not(target_os = "android"), allow(unused_mut))]
-    let mut facts = tree::os::read(&ROOT);
+    let mut facts = tree::os::read_with_kernel(&ROOT, kernel_release());
     #[cfg(target_os = "android")]
     android(&mut facts);
     facts
+}
+
+/// The kernel release from `uname`: the same text as
+/// `/proc/sys/kernel/osrelease` for a fraction of the cost.
+fn kernel_release() -> Option<String> {
+    let mut u = std::mem::MaybeUninit::<ffi::Utsname>::zeroed();
+    // SAFETY: `u` is a writable `struct utsname`.
+    if unsafe { ffi::uname(u.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: `uname` succeeded, so it filled the structure; zeroed memory is
+    // a valid `Utsname` in any case (arrays of `c_char`).
+    let u = unsafe { u.assume_init() };
+    let bytes: Vec<u8> = u
+        .release
+        .iter()
+        .take_while(|&&c| c != 0)
+        // `c_char` is `u8` on aarch64 and `i8` on x86_64.
+        .map(|&c| u8::from_ne_bytes(c.to_ne_bytes()))
+        .collect();
+    Some(crate::parse::lossy(&bytes, 64)).filter(|k| !k.is_empty())
 }
 
 /// A system property, when it is set.
@@ -72,28 +93,24 @@ fn android(facts: &mut OsFacts) {
     facts.name_source = crate::os::Source::SystemProperty;
 }
 
-pub(crate) fn cpu() -> CpuFacts {
-    let t = tree::cpu::read(&ROOT);
-    let logical = t
-        .logical
-        .or_else(|| {
-            usize::try_from(ffi::sysconf(ffi::SC_NPROCESSORS_CONF))
-                .ok()
-                .filter(|&n| n > 0)
-        })
-        .or_else(|| {
-            std::thread::available_parallelism()
-                .ok()
-                .map(std::num::NonZero::get)
-        })
-        .unwrap_or(1);
-    CpuFacts {
-        logical,
-        physical: t.physical,
-        packages: t.packages,
-        raw_name: t.raw_name,
-        name: t.arm_name,
-        vendor: t.vendor,
+pub(crate) fn cpu_logical() -> Option<usize> {
+    tree::cpu::logical(&ROOT).or_else(|| {
+        usize::try_from(ffi::sysconf(ffi::SC_NPROCESSORS_CONF))
+            .ok()
+            .filter(|&n| n > 0)
+    })
+}
+
+pub(crate) fn cpu_counts() -> (Option<usize>, Option<usize>) {
+    tree::cpu::counts(&ROOT)
+}
+
+pub(crate) fn cpu_identity() -> CpuIdentity {
+    let i = tree::cpu::identity(&ROOT);
+    CpuIdentity {
+        raw_name: i.raw_name,
+        name: i.arm_name,
+        vendor: i.vendor,
     }
 }
 

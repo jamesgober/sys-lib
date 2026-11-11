@@ -12,7 +12,7 @@ use crate::{
     cpu::Vendor,
     os::{Source, kind},
     process::User,
-    sys::{CpuFacts, OsFacts},
+    sys::{CpuIdentity, OsFacts},
 };
 #[cfg(feature = "guard")]
 use crate::{process::Limit, sys::FsKind};
@@ -50,12 +50,17 @@ pub(crate) fn os() -> OsFacts {
     }
 }
 
-pub(crate) fn cpu() -> CpuFacts {
-    let logical = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    CpuFacts {
-        logical,
-        physical: None,
-        packages: None,
+/// `crate::cpu` falls back to what std knows.
+pub(crate) fn cpu_logical() -> Option<usize> {
+    None
+}
+
+pub(crate) fn cpu_counts() -> (Option<usize>, Option<usize>) {
+    (None, None)
+}
+
+pub(crate) fn cpu_identity() -> CpuIdentity {
+    CpuIdentity {
         raw_name: None,
         name: None,
         vendor: Vendor::Unknown,

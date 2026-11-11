@@ -42,7 +42,7 @@ use crate::{
     cpu::Vendor,
     os::Source,
     process::User,
-    sys::{CpuFacts, OsFacts},
+    sys::{CpuIdentity, OsFacts},
 };
 #[cfg(feature = "guard")]
 use crate::{process::Limit, sys::FsKind};
@@ -319,30 +319,28 @@ pub(crate) fn os() -> OsFacts {
     }
 }
 
-pub(crate) fn cpu() -> CpuFacts {
-    let count = |name: &CStr| {
-        sysctl_u64(name)
-            .and_then(|n| usize::try_from(n).ok())
-            .filter(|&n| n > 0)
-    };
-    let logical = count(c"hw.logicalcpu_max")
-        .or_else(|| count(c"hw.ncpu"))
-        .or_else(|| {
-            std::thread::available_parallelism()
-                .ok()
-                .map(std::num::NonZero::get)
-        })
-        .unwrap_or(1);
+fn cpu_count(name: &CStr) -> Option<usize> {
+    sysctl_u64(name)
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|&n| n > 0)
+}
+
+pub(crate) fn cpu_logical() -> Option<usize> {
+    cpu_count(c"hw.logicalcpu_max").or_else(|| cpu_count(c"hw.ncpu"))
+}
+
+pub(crate) fn cpu_counts() -> (Option<usize>, Option<usize>) {
+    (cpu_count(c"hw.physicalcpu_max"), cpu_count(c"hw.packages"))
+}
+
+pub(crate) fn cpu_identity() -> CpuIdentity {
     let vendor = match sysctl_string(c"machdep.cpu.vendor").as_deref() {
         Some("GenuineIntel") => Vendor::Intel,
         Some("AuthenticAMD") => Vendor::Amd,
         _ if cfg!(target_arch = "aarch64") => Vendor::Apple,
         _ => Vendor::Unknown,
     };
-    CpuFacts {
-        logical,
-        physical: count(c"hw.physicalcpu_max"),
-        packages: count(c"hw.packages"),
+    CpuIdentity {
         raw_name: sysctl_string(c"machdep.cpu.brand_string"),
         name: None,
         vendor,

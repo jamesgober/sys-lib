@@ -204,15 +204,11 @@ pub(crate) struct ReleaseFacts {
     pub(crate) source: Source,
 }
 
-/// Static CPU facts as a platform reports them; `crate::cpu` cleans and caches them.
+/// The CPU's names and vendor as a platform reports them; `crate::cpu` cleans
+/// and caches them. The counts come from `cpu_logical()` and `cpu_counts()`,
+/// cached apart (D-101).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CpuFacts {
-    /// Configured logical processors, at least 1.
-    pub(crate) logical: usize,
-    /// Physical cores, when the platform can tell.
-    pub(crate) physical: Option<usize>,
-    /// Processor packages (sockets), when the platform can tell.
-    pub(crate) packages: Option<usize>,
+pub(crate) struct CpuIdentity {
     /// The brand string as reported, to be cleaned.
     pub(crate) raw_name: Option<String>,
     /// A name that needs no cleaning (ARM cores named from their part numbers).
