@@ -14,29 +14,6 @@ use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 type Case = (&'static str, &'static str, fn());
 
 const CASES: &[Case] = &[
-    ("probe", "std read /etc/os-release", || {
-        black_box(std::fs::read("/etc/os-release").ok());
-    }),
-    ("probe", "std read kernel/osrelease", || {
-        black_box(std::fs::read("/proc/sys/kernel/osrelease").ok());
-    }),
-    ("probe", "two std reads", || {
-        black_box(std::fs::read("/etc/os-release").ok());
-        black_box(std::fs::read("/proc/sys/kernel/osrelease").ok());
-    }),
-    ("probe", "sysinfo kernel_version (uname)", || {
-        black_box(System::kernel_version().ok());
-    }),
-    ("probe", "sys-lib os::kernel", || {
-        black_box(sys::os::kernel());
-    }),
-    ("probe", "sys-lib os::name then kernel", || {
-        black_box(sys::os::name());
-        black_box(sys::os::kernel());
-    }),
-    ("probe", "sys-lib os::kind", || {
-        black_box(sys::os::kind());
-    }),
     ("os name", "sys-lib os::name", || {
         black_box(sys::os::name());
     }),

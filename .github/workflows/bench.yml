@@ -1,0 +1,129 @@
+name: Bench
+
+# The performance record (dev/PLAN.md section 18): on every pull request, the
+# 5% regression gate; on release pull requests and on demand, the full report
+# on every OS, published in docs/PERFORMANCE.md.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  gate:
+    name: Regression gate (5%, 3 rounds)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: change
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.base_ref }}
+          path: base
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Gate
+        shell: bash
+        run: |
+          if [ ! -d base/bench ]; then
+            echo "The base branch has no benchmarks yet: nothing to compare." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          bash change/bench/gate.sh base change 3 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  report:
+    name: Report (${{ matrix.os }})
+    # On demand, and on release pull requests (titled "vX.Y.Z - ..."), so
+    # every version's numbers are recorded.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.pull_request.title, 'v')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-latest, macos-latest, macos-15-intel]
+    defaults:
+      run:
+        shell: bash
+        working-directory: bench
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Machine
+        run: |
+          {
+            echo "### ${{ matrix.os }}"
+            echo
+            echo '```'
+            rustc -vV | head -1
+            case "$RUNNER_OS" in
+              Linux) nproc; grep -m1 'model name' /proc/cpuinfo || true; free -h | head -2 ;;
+              macOS) sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize ;;
+              Windows) powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name; [Environment]::ProcessorCount" ;;
+            esac
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Cold (fresh process per sample, 200 samples)
+        run: |
+          cargo build -q --release --bin cold
+          { echo; echo '```'; target/release/cold 200; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          CARGO_TARGET_DIR: target
+      - name: Warm (criterion)
+        env:
+          CARGO_TARGET_DIR: target
+          CRITERION_HOME: ${{ runner.temp }}/criterion
+        run: |
+          cargo bench -q --bench readings -- --noplot > /dev/null
+          { echo; python3 report.py table "$CRITERION_HOME"; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Footprint
+        env:
+          CARGO_TARGET_DIR: target
+        run: |
+          cargo build -q --release --bin baseline --bin footprint
+          exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
+          size() { wc -c < "target/release/$1$exe"; }
+          b=$(size baseline); f=$(size footprint)
+          echo "Every module adds $(( (f - b) / 1024 )) KiB to a stripped binary ($b to $f bytes)." >> "$GITHUB_STEP_SUMMARY"
+
+  container:
+    name: Report (Docker, cgroup v2 limits)
+    # On demand, and on release pull requests (titled "vX.Y.Z - ..."), so
+    # every version's numbers are recorded.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.pull_request.title, 'v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      # Built on the runner, run inside a container with real limits: the
+      # numbers a containerised service sees, with sys-lib reading the
+      # container's memory and CPUs.
+      - name: Build
+        working-directory: bench
+        env:
+          CARGO_TARGET_DIR: target
+        run: |
+          cargo build -q --release --bin cold
+          cargo bench -q --bench readings --no-run --message-format=json 2>/dev/null \
+            | jq -r 'select(.executable != null and .target.name == "readings") | .executable' > readings-path
+      - name: Run under --memory=1g --cpus=2
+        shell: bash
+        run: |
+          r=$(cat bench/readings-path)
+          {
+            echo "### Docker, --memory=1g --cpus=2"
+            echo; echo '```'
+            docker run --rm --memory=1g --cpus=2 -v "$PWD/bench/target/release/cold:/cold:ro" ubuntu:24.04 /cold 200
+            echo '```'; echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$RUNNER_TEMP/out"
+          docker run --rm --memory=1g --cpus=2 -e CRITERION_HOME=/out -v "$r:/readings:ro" -v "$RUNNER_TEMP/out:/out" \
+            ubuntu:24.04 /readings --bench --noplot > /dev/null
+          python3 bench/report.py table "$RUNNER_TEMP/out" >> "$GITHUB_STEP_SUMMARY"
