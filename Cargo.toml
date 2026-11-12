@@ -3,7 +3,7 @@
 # =============================================================================
 [package]
 name    = "sys-lib"
-version = "0.6.0"
+version = "0.7.0"
 
 # Minimum Supported Rust Version (MSRV)
 # 1.89: `std::fs::File::lock` and `File::try_lock` are stable from 1.89.0, so
@@ -18,7 +18,7 @@ license = "Apache-2.0 OR MIT"
 readme = "README.md"
 
 # Description
-description = "System facts for Rust services: OS, CPU, memory, disks, network, host, this process, virtualization, power, and device identity, container-aware by default, plus build info, instance info, and a process guard. No subprocesses, zero third-party dependencies."
+description = "System facts for Rust services: OS, CPU, memory, disks, network, host, this process, virtualization, power, and device identity, container-aware by default, plus build info, instance info, and a process guard. No subprocesses, no third-party dependencies by default."
 
 # Keywords (5 max)
 keywords = ["system", "hardware", "cpu", "memory", "os"]
@@ -97,7 +97,9 @@ device-id = ["dep:crypt-io"]
 # #################################
 [dependencies]
 # First-party only, by published version (dev/PLAN.md section 16). No
-# third-party runtime dependencies; `default-features = false` has none at all.
+# third-party runtime dependencies by default; `device-id` brings crypt-io's
+# BLAKE3 stack (blake3 and its helpers), and `default-features = false` has
+# no dependencies at all.
 clock-lib = { version = "1.1", optional = true, default-features = false, features = ["std"] }
 crypt-io = { version = "1.2.2", optional = true, default-features = false, features = ["std", "mac-blake3", "zeroize"] }
 id-forge = { version = "1.0", optional = true, default-features = false, features = ["ulid"] }

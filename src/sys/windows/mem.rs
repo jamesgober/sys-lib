@@ -35,7 +35,8 @@ pub(crate) fn memory(want: MemWant) -> Result<MemRaw> {
             1,
         ));
     }
-    if let Some(job) = job_limits().filter(|_| want.limit) {
+    // The job object is asked only when the limit is wanted.
+    if let Some(job) = want.limit.then(job_limits).flatten() {
         let flags = job.basic_limit_information.limit_flags;
         if let Some((hard, per_process)) = job_memory_limit(
             flags,

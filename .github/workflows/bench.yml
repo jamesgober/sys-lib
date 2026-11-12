@@ -61,18 +61,18 @@ jobs:
             echo "### ${{ matrix.os }}"
             echo
             echo '```'
-            rustc -vV | head -1
+            rustc -V
             case "$RUNNER_OS" in
               Linux) nproc; grep -m1 'model name' /proc/cpuinfo || true; free -h | head -2 ;;
               macOS) sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize ;;
               Windows) powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name; [Environment]::ProcessorCount" ;;
             esac
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Cold (fresh process per sample, 200 samples)
         run: |
           cargo build -q --release --bin cold
-          { echo; echo '```'; target/release/cold 200; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo; echo '```'; target/release/cold 200; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
         env:
           CARGO_TARGET_DIR: target
       - name: Warm (criterion)
@@ -81,7 +81,7 @@ jobs:
           CRITERION_HOME: ${{ runner.temp }}/criterion
         run: |
           cargo bench -q --bench readings -- --noplot > /dev/null
-          { echo; python3 report.py table "$CRITERION_HOME"; } >> "$GITHUB_STEP_SUMMARY"
+          { echo; python3 report.py table "$CRITERION_HOME"; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Footprint
         env:
           CARGO_TARGET_DIR: target
@@ -90,7 +90,7 @@ jobs:
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
           size() { wc -c < "target/release/$1$exe"; }
           b=$(size baseline); f=$(size footprint)
-          echo "Every module adds $(( (f - b) / 1024 )) KiB to a stripped binary ($b to $f bytes)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Every module adds $(( (f - b) / 1024 )) KiB to a stripped binary ($b to $f bytes)." | tee -a "$GITHUB_STEP_SUMMARY"
 
   container:
     name: Report (Docker, cgroup v2 limits)
@@ -122,8 +122,8 @@ jobs:
             echo; echo '```'
             docker run --rm --memory=1g --cpus=2 -v "$PWD/bench/target/release/cold:/cold:ro" ubuntu:24.04 /cold 200
             echo '```'; echo
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           mkdir -p "$RUNNER_TEMP/out"
           docker run --rm --memory=1g --cpus=2 -e CRITERION_HOME=/out -v "$r:/readings:ro" -v "$RUNNER_TEMP/out:/out" \
             ubuntu:24.04 /readings --bench --noplot > /dev/null
-          python3 bench/report.py table "$RUNNER_TEMP/out" >> "$GITHUB_STEP_SUMMARY"
+          python3 bench/report.py table "$RUNNER_TEMP/out" | tee -a "$GITHUB_STEP_SUMMARY"

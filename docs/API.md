@@ -98,7 +98,7 @@ sys = { package = "sys-lib", version = "0.4" }
 # Without instance info and the process guard (no dependencies at all):
 # sys = { package = "sys-lib", version = "0.4", default-features = false }
 # With device identity (from 0.5):
-# sys = { package = "sys-lib", version = "0.6", features = ["device-id"] }
+# sys = { package = "sys-lib", version = "0.7", features = ["device-id"] }
 ```
 
 The package is `sys-lib` on crates.io (`sys` and `system` were taken). Cargo's rename makes it `sys` in your code, so every file writes `sys::os::name()` with no import line. Without the rename (`sys-lib = "0.4"`), add `use sys_lib as sys;` at the top of a file and the code is the same.
@@ -688,7 +688,7 @@ pub struct InfoOptions { pub with_threads: bool }   // Windows: the thread count
 | PRC-04 | `peak_memory()` | 0.4 | `VmHWM` | `getrusage` `ru_maxrss` (bytes on macOS, KiB on Linux) | `PeakWorkingSetSize` | 3 µs / 0.5 µs / 0.5 µs |
 | PRC-05 | `memory_detail()` | 0.4 | `/proc/self/status` | `task_info` + `proc_pid_rusage` | `PROCESS_MEMORY_COUNTERS_EX` | 4 µs / 2 µs / 1 µs |
 | PRC-06 | `cpu_time()` | 0.4 | `getrusage` | `getrusage` | `GetProcessTimes` | 0.3 µs |
-| PRC-07 | `threads()` | 0.4 | `Threads` in `/proc/self/status` | `proc_pidinfo(PROC_PIDTASKINFO)` | toolhelp thread snapshot, filtered | 3 µs / 2 µs / 0.2 to 5 ms |
+| PRC-07 | `threads()` | 0.4 | `Threads` in `/proc/self/status` | `proc_pidinfo(PROC_PIDTASKINFO)` | toolhelp process snapshot (every process on the machine), this process's thread count | 3 µs / 2 µs / 5 to 60 ms |
 | PRC-08 | `open_files()` | 0.4 | entries of `/proc/self/fd` | `proc_pidinfo(PROC_PIDLISTFDS)` | `GetProcessHandleCount` | 1 µs per 100 / 2 µs / 0.3 µs |
 | PRC-09 | `limits()` | 0.4 | `getrlimit` × 5 | `getrlimit` × 5 | job-object limits when present; otherwise `None` | 1 µs |
 | PRC-10 | `started_at()` | 0.4 | `/proc/self/stat` field 22 + boot time | `proc_pidinfo(PROC_PIDTBSDINFO)` | `GetProcessTimes` creation time | 4 µs / 2 µs / 0.3 µs |
@@ -851,6 +851,7 @@ impl Guard {
     pub fn builder(name: &str) -> GuardBuilder;
     pub fn report(&self) -> &GuardReport;
     pub fn lock_file(&self) -> Option<&Path>;
+    pub fn is_held(&self) -> bool;     // since 0.7: the file at the lock path is still the one locked
 }
 impl fmt::Debug for Guard;
 // Dropping the guard closes the lock file, which releases the lock; it never deletes the file.
@@ -858,7 +859,7 @@ impl fmt::Debug for Guard;
 #[derive(Clone, Debug)]
 pub struct GuardBuilder { /* private */ }
 impl GuardBuilder {
-    pub fn lock_dir(self, dir: impl Into<PathBuf>) -> Self;   // default: path-lib's runtime directory for `name`
+    pub fn lock_dir(self, dir: impl Into<PathBuf>) -> Self;   // default: from the user alone, see below
     pub fn lock(self, on: bool) -> Self;                      // default true; false when a supervisor holds the lock
     pub fn allow_network_lock(self, on: bool) -> Self;        // default false
     pub fn umask(self, mask: u32) -> Self;                    // default 0o027; Unix only
@@ -899,25 +900,37 @@ pub enum GuardWarning {
 | PRC-21 | `Guard::builder` and options | 2 | same |
 | PRC-22 | `Guard::report`, `GuardReport` | 1 | 0 |
 | PRC-23 | lock directory hardening | 1 | one `stat` and one `statfs` |
+| PRC-24 | `Guard::is_held` (0.7) | 1 | one `fstat` and one `lstat` |
+
+The default lock directory depends only on the user the process runs as, never on environment variables (D-106), so a copy started by systemd or launchd and one started from a shell, `sudo`, or cron find the same lock:
+
+| Platform | root | other users |
+|---|---|---|
+| Linux | `/run/<name>` (`/var/run/<name>` without `/run`) | `<home>/.local/state/<name>/run` |
+| macOS | `/var/run/<name>` | `<home>/Library/Application Support/<name>/run` |
+| FreeBSD | `/var/run/<name>` | `<home>/.local/state/<name>/run` |
+| Windows | the user's local application data known folder, `<name>\run` | the same |
+
+`<home>` is the account database's home directory (`getpwuid_r`), not `$HOME`; a user without one gets `RunDirUnavailable`, telling it to pass `lock_dir`. The lock is per user: copies running as different users do not exclude each other, so **a program guarding shared data passes its data directory** with `lock_dir`, and every copy that could touch the data finds the same lock. Before 0.7 the default followed `$XDG_RUNTIME_DIR`, `$XDG_STATE_HOME`, and `$HOME`, so two copies started with different environments could both run.
 
 What the guard does, in order:
 
 | Step | Linux and macOS | Windows |
 |---|---|---|
 | 1. open-file limit, checked | `OpenFilesTooLow` if the hard `RLIMIT_NOFILE` is below the minimum, before anything else, so a refusal changes nothing (a second copy started under a low limit gets this error, not `AlreadyRunning`) | not applicable |
-| 2. lock directory | the default, path-lib's runtime directory, through path-lib; an explicit `lock_dir` created with mode 0700 if missing; refused if it is a symlink, group- or world-writable, owned by another user, or on a network filesystem (`nfs`, `cifs`, `smb2`, `fuse.sshfs`, WSL's `drvfs` and `9p`) unless `allow_network_lock(true)` | the same; refused if it is a reparse point or on a remote drive unless allowed |
-| 3. single-instance lock | `<dir>/<name>.lock` opened with `O_NOFOLLOW`, then checked (the opened file must be the one inspected, by device and inode, and owned by this user), locked with `File::try_lock`; the OS releases the lock when the process dies, even after `kill -9` | the same file, `File::try_lock`, reparse points refused |
+| 2. lock directory | the default (above), or an explicit `lock_dir`, created with mode 0700 if missing; refused if it is a symlink, group- or world-writable, owned by another user, or on a network filesystem (`nfs`, `cifs`, `smb2`, `fuse.sshfs`, WSL's `drvfs` and `9p`) unless `allow_network_lock(true)` | refused if it is a reparse point or on a remote drive unless allowed; a missing directory inherits its parent's permissions, and ownership is not checked, so choose a parent other users cannot write to (not `C:\ProgramData` itself) |
+| 3. single-instance lock | `<dir>/<name>.lock` opened with `O_NOFOLLOW`, then checked (the opened file must be the one inspected, by device and inode, and owned by this user), locked with `File::try_lock`, then checked again, so a file deleted or replaced between the open and the lock is never the one held (three tries); the OS releases the lock when the process dies, even after `kill -9` | the same file, `File::try_lock`, reparse points refused, opened without delete sharing, so the held file cannot be deleted or renamed |
 | 4. pid file | `<dir>/<name>.pid` written after the lock is held, with `path_lib::write_atomic` | same (the locked file cannot be read by another process, so the pid lives beside it) |
 | 5. open-file limit, raised | soft limit raised to the target, capped at the hard limit, on Linux at `/proc/sys/fs/nr_open`, and on macOS at `kern.maxfilesperproc` | not applicable (no per-process descriptor count for sockets); reported as unlimited |
 | 6. umask | `umask(0o027)`: owner read and write, group read, others nothing | not applicable; `umask_after` is `None` |
 
-The lock file is **never deleted**, not even on a clean exit: deleting it would let a waiting process lock the unlinked file while a third creates a new one, and two copies would run. The name must be 1 to 64 characters of ASCII letters, digits, `-`, `_`, `.`, not starting with `.`. The umask is process-wide, so call the guard before starting threads; on Unix, if other threads already run, the report says so. Privileges are not dropped here: that is shield-sec's job, after the listening sockets are bound.
+The lock file is **never deleted**, not even on a clean exit: deleting it would let a waiting process lock the unlinked file while a third creates a new one, and two copies would run. On Unix something else can still delete it while it is held (a temporary-file cleaner, an operator's `rm`, the removal of a directory above it), and a copy started afterwards would lock a new file; a service that runs for long checks `guard.is_held()` periodically and stops when it is false. On Windows the held file cannot be deleted. The name must be 1 to 64 characters of ASCII letters, digits, `-`, `_`, `.`, not starting with `.`. The umask is process-wide, so call the guard before starting threads; on Unix, if other threads already run, the report says so. Privileges are not dropped here: that is shield-sec's job, after the listening sockets are bound.
 
 Errors, each saying what to do:
 
 | Error | When | The message tells the operator |
 |---|---|---|
-| `AlreadyRunning { pid, lock_file }` | another copy holds the lock | the pid when the pid file is readable, and the lock file |
+| `AlreadyRunning { pid, lock_file }` | another copy holds the lock | the lock file, and the pid when the pid file is readable: a hint to check, not proof (just after a copy starts the file can still hold the previous run's pid, which may since belong to another program) |
 | `RunDirUnavailable { path, source }` | the directory cannot be created or written, is a symlink, is writable by others, or is on a network filesystem | the path, the reason, and the fix (`chmod 700`, a local directory, `allow_network_lock`) |
 | `OpenFilesTooLow { have, need }` | the hard limit is below the minimum | what to raise: `LimitNOFILE=` in the systemd unit, `ulimit -Hn`, or launchd's limits |
 | `InvalidInput` | the name failed validation | the rule |
@@ -2105,7 +2118,7 @@ pub struct Model { pub vendor: Option<&'static str>, pub name: &'static str, pub
 
 | Id | Item | Since | Cost [est.] |
 |---|---|---|---|
-| HST-01 | `name()` | 0.3 | 2 µs / 0.5 µs / 1 µs |
+| HST-01 | `name()` | 0.3 | 2 µs / 0.5 µs / 100 µs once (a new Windows name takes effect at restart), then 0.1 µs |
 | HST-02 | `uptime()` | 0.4 | 0.05 to 2 µs |
 | HST-03 | `boot_time()` | 0.4 | 2 to 4 µs / 0.5 µs / 0.1 µs |
 | HST-05 | `timezone()` | 0.5 | 5 to 15 µs |

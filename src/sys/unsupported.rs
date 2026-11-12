@@ -92,6 +92,11 @@ pub(crate) fn effective_uid() -> Option<u32> {
     None
 }
 
+#[cfg(all(feature = "guard", unix))]
+pub(crate) fn home_dir(_uid: u32) -> Option<std::path::PathBuf> {
+    None
+}
+
 #[cfg(feature = "guard")]
 pub(crate) fn swap_umask(_mask: u32) -> Option<u32> {
     None

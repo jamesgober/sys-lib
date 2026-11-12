@@ -184,6 +184,10 @@ fn host(c: &mut Criterion) {
 }
 
 fn device_id(c: &mut Criterion) {
+    // A minimal container image has no machine id: nothing to compare there.
+    if sys::device::id("com.example.bench").is_err() || machine_uid::get().is_err() {
+        return;
+    }
     let mut g = c.benchmark_group("device_id");
     g.bench_function("sys-lib device::id", |b| {
         b.iter(|| black_box(sys::device::id("com.example.bench").unwrap()))

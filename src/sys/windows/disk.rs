@@ -562,6 +562,14 @@ pub(crate) fn disk_of(path: &Path) -> Result<Disk> {
             None => path.to_path_buf(),
         },
     };
+    // The device namespace (`\\.\NUL`, `\\.\pipe\`) holds no disk, though
+    // GetVolumePathNameW answers for it.
+    if real.as_os_str().as_encoded_bytes().starts_with(br"\\.\") {
+        return Err(Error::NotFound {
+            what: "disk of a path",
+            source: "the device namespace",
+        });
+    }
     with_wide_path(&real, |p| {
         let mut root = vec![0u16; p.len() + 1];
         // SAFETY: `p` is NUL-terminated; `root` is writable for its length in
@@ -771,6 +779,14 @@ pub(crate) fn disk_pressure() -> Result<Option<Pressure>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_windows_disk_of_device_namespace_is_not_found() {
+        for path in [r"\\.\NUL", r"\\.\pipe\", r"\\.\PhysicalDrive0"] {
+            let e = disk_of(Path::new(path)).unwrap_err();
+            assert!(matches!(e, Error::NotFound { .. }), "{path}: {e:?}");
+        }
+    }
 
     fn units(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()

@@ -565,6 +565,32 @@ pub(crate) fn is_elevated() -> Result<bool> {
 }
 
 fn user_name(uid: u32) -> Result<String> {
+    let name = passwd_field(uid, "user name", |p| p.name)?
+        .map(|b| crate::parse::lossy(&b, 256))
+        .unwrap_or_default();
+    Ok(if name.is_empty() {
+        uid.to_string()
+    } else {
+        name
+    })
+}
+
+/// The home directory in the account database for `uid`, not `$HOME`, so it
+/// does not change with the environment; `None` without an entry.
+#[cfg(feature = "guard")]
+pub(crate) fn home_dir(uid: u32) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let dir = passwd_field(uid, "home directory", |p| p.dir).ok()??;
+    (!dir.is_empty()).then(|| std::ffi::OsString::from_vec(dir).into())
+}
+
+/// One field of `uid`'s account entry through `getpwuid_r`, growing the buffer
+/// on `ERANGE` up to 64 KiB; `None` without an entry or with a null field.
+fn passwd_field(
+    uid: u32,
+    what: &'static str,
+    pick: fn(&ffi::Passwd) -> *mut c_char,
+) -> Result<Option<Vec<u8>>> {
     let mut size = 1024;
     loop {
         let mut buf = vec![0 as c_char; size];
@@ -587,28 +613,24 @@ fn user_name(uid: u32) -> Result<String> {
         }
         if rc != 0 {
             return Err(Error::Os {
-                what: "user name",
+                what,
                 call: "getpwuid_r",
                 code: rc,
             });
         }
         if result.is_null() {
-            return Ok(uid.to_string());
+            return Ok(None);
         }
         // SAFETY: on success with a non-null result, `result` points to `pwd`,
         // which the call initialised.
-        let name_ptr = unsafe { (*result).name };
-        if name_ptr.is_null() {
-            return Ok(uid.to_string());
+        let ptr = pick(unsafe { &*result });
+        if ptr.is_null() {
+            return Ok(None);
         }
-        // SAFETY: `pw_name` points into `buf`, NUL-terminated, alive here.
-        let name = unsafe { CStr::from_ptr(name_ptr) };
-        let name = crate::parse::lossy(name.to_bytes(), 256);
-        return Ok(if name.is_empty() {
-            uid.to_string()
-        } else {
-            name
-        });
+        // SAFETY: the field points into `buf`, NUL-terminated, and `buf` is
+        // alive for this statement.
+        let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
+        return Ok(Some(bytes));
     }
 }
 

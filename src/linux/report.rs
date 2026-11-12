@@ -8,7 +8,6 @@ use super::{Root, disk::MountEntry};
 use crate::{
     Bytes, Error, Result,
     bench::BenchFacts,
-    disk::ListOptions,
     gpu::{self, Gpu, GpuKind, GpuVendor},
     parse::pci_ids,
     readiness::{DataDirTuning, Dirty, Fact, Governor, Tuning},
@@ -225,13 +224,7 @@ fn block_file(root: &Root, dev: &str, file: &str) -> Option<String> {
 
 /// The mount holding `path`.
 fn mount_of(root: &Root, path: &Path) -> Option<MountEntry> {
-    let options = ListOptions {
-        include_network: true,
-        include_pseudo: true,
-        include_duplicates: true,
-        ..ListOptions::default()
-    };
-    super::disk::holding(path, super::disk::mounts(root, &options).ok()?)
+    super::disk::holding(root, path).ok().flatten()
 }
 
 pub(crate) fn data_dir_tuning(root: &Root, path: &Path) -> DataDirTuning {
@@ -249,7 +242,7 @@ pub(crate) fn data_dir_tuning(root: &Root, path: &Path) -> DataDirTuning {
             None if !text.is_empty() && !text.contains(' ') => Fact::Value(text),
             None => Fact::Unknown("no selection in queue/scheduler".to_owned()),
         },
-        None => Fact::Unknown(format!("no block device for {}", mount.device)),
+        None => Fact::Unknown("no block device found for the mount".to_owned()),
     };
     DataDirTuning {
         atime: Fact::Value(atime(mount.options()).to_owned()),

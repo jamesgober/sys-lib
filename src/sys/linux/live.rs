@@ -5,7 +5,7 @@
 
 use core::time::Duration;
 use std::{
-    ffi::CStr,
+    ffi::{CStr, c_char},
     mem::MaybeUninit,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::Path,
@@ -228,15 +228,9 @@ pub(crate) fn disks(options: &ListOptions) -> Result<Vec<Disk>> {
 pub(crate) fn disk_of(path: &Path) -> Result<Disk> {
     let path =
         std::fs::canonicalize(path).map_err(|e| Error::io("disk of a path", "the path", e))?;
-    let options = ListOptions {
-        include_network: true,
-        include_pseudo: true,
-        include_duplicates: true,
-        ..ListOptions::default()
-    };
     // Only the mount found is asked for its space, so a dead one elsewhere
     // cannot block this call.
-    tree::disk::holding(&path, tree::disk::mounts(&ROOT, &options)?)
+    tree::disk::holding(&ROOT, &path)?
         .map(disk_from)
         .ok_or(Error::NotFound {
             what: "disk of a path",
@@ -341,6 +335,9 @@ pub(crate) fn interfaces(options: &InterfaceOptions) -> Result<Vec<Interface>> {
     }
     let list = IfAddrs(head);
     let mut out: Vec<(Interface, Option<u16>)> = Vec::new();
+    // Each entry's interface by its raw name: a name that is not UTF-8 still
+    // matches itself, and thousands of veth pairs merge in linear time.
+    let mut by_name: std::collections::HashMap<&[u8], usize> = std::collections::HashMap::new();
     let mut cursor = list.0;
     while !cursor.is_null() {
         // SAFETY: `cursor` is a node of the live list `list` owns.
@@ -351,8 +348,8 @@ pub(crate) fn interfaces(options: &InterfaceOptions) -> Result<Vec<Interface>> {
         }
         // SAFETY: `ifa_name` is a NUL-terminated string inside the list.
         let raw_name = unsafe { CStr::from_ptr(entry.name) }.to_bytes();
-        let i = match out.iter().position(|(i, _)| i.name.as_bytes() == raw_name) {
-            Some(i) => i,
+        let i = match by_name.get(raw_name) {
+            Some(&i) => i,
             None => {
                 if out.len() >= options.max_interfaces {
                     return Err(Error::TooLarge {
@@ -382,6 +379,7 @@ pub(crate) fn interfaces(options: &InterfaceOptions) -> Result<Vec<Interface>> {
                     },
                     None,
                 ));
+                by_name.insert(raw_name, out.len() - 1);
                 out.len() - 1
             }
         };
@@ -414,6 +412,8 @@ pub(crate) fn interfaces(options: &InterfaceOptions) -> Result<Vec<Interface>> {
             }
         }
     }
+    // The names point into the list: forget them before it is freed.
+    drop(by_name);
     drop(list);
     Ok(out
         .into_iter()
@@ -490,10 +490,14 @@ fn count_entries(dir: &CStr, max: u64, keep: impl Fn(&[u8]) -> bool) -> Result<u
         if entry.is_null() {
             return Ok(n);
         }
-        // SAFETY: a non-null entry is valid until the next `readdir` call.
-        let entry = unsafe { &*entry };
-        // SAFETY: the name is NUL-terminated within `d_name`.
-        let name = unsafe { CStr::from_ptr(entry.name.as_ptr()) }.to_bytes();
+        // Read through the raw pointer, never a `&Dirent`: glibc packs
+        // records at `d_reclen`, often shorter than the struct, so a
+        // reference to the whole struct could reach past the buffer.
+        // SAFETY: a non-null entry is valid until the next `readdir` call, and
+        // `d_name` lies within the record.
+        let name_ptr = unsafe { &raw const (*entry).name }.cast::<c_char>();
+        // SAFETY: the name is NUL-terminated within the record.
+        let name = unsafe { CStr::from_ptr(name_ptr) }.to_bytes();
         if name == b"." || name == b".." || !keep(name) {
             continue;
         }

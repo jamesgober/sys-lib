@@ -41,7 +41,7 @@ pub(crate) mod virt;
 use core::ops::ControlFlow;
 use std::{
     borrow::Cow,
-    fs::File,
+    fs::{File, OpenOptions},
     io::{self, Read},
     path::{Path, PathBuf},
 };
@@ -52,6 +52,14 @@ use crate::{Error, Result};
 pub(crate) const FILE_LIMIT: usize = 1 << 20;
 /// Files that fit here are read without touching the heap.
 const STACK_BUF: usize = 8 << 10;
+/// The longest line [`Root::for_each_line`] passes on; a longer one is
+/// `TooLarge`, never dropped (a skipped mountinfo line would make `disk::of`
+/// answer with the parent mount).
+const LONG_LINE: usize = 64 << 10;
+/// `O_NONBLOCK | O_NOCTTY` (fcntl.h), the same on every supported Linux
+/// architecture.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const OPEN_NONBLOCK: i32 = 0o4000 | 0o400;
 
 /// Where the Linux file tree is: the real `/`, or a fixture directory.
 #[derive(Clone, Debug)]
@@ -90,6 +98,33 @@ impl Root {
         (self, log)
     }
 
+    /// Opens a file to read. Files outside `/proc` and `/sys` are opened
+    /// without blocking and must be regular files, so a FIFO or device
+    /// planted at `/etc/os-release` or `/run/utmp` cannot hang the caller
+    /// (threat T7).
+    fn open(&self, abs: &str) -> io::Result<File> {
+        let path = self.resolve(abs);
+        if abs.starts_with("/proc/") || abs.starts_with("/sys/") {
+            return File::open(path);
+        }
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(OPEN_NONBLOCK);
+        }
+        let file = options.open(path)?;
+        if file.metadata()?.is_file() {
+            Ok(file)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a regular file",
+            ))
+        }
+    }
+
     fn resolve<'a>(&self, abs: &'a str) -> Cow<'a, Path> {
         #[cfg(test)]
         if let Some(log) = &self.log {
@@ -109,7 +144,7 @@ impl Root {
         what: &'static str,
         source: &'static str,
     ) -> Result<Vec<u8>> {
-        let mut file = File::open(self.resolve(abs)).map_err(|e| Error::io(what, source, e))?;
+        let mut file = self.open(abs).map_err(|e| Error::io(what, source, e))?;
         // Small files (nearly all of /proc, /sys, and /etc) in two read calls,
         // the data and the end, through the stack: `read_to_end` on an empty
         // Vec probes with 32 bytes and grows in steps, a call each (D-101).
@@ -154,7 +189,7 @@ impl Root {
         what: &'static str,
         source: &'static str,
     ) -> Result<Vec<u8>> {
-        let file = File::open(self.resolve(abs)).map_err(|e| Error::io(what, source, e))?;
+        let file = self.open(abs).map_err(|e| Error::io(what, source, e))?;
         let mut data = Vec::new();
         file.take(limit as u64)
             .read_to_end(&mut data)
@@ -189,7 +224,7 @@ impl Root {
         source: &'static str,
         buf: &mut [u8; STACK_BUF],
     ) -> Result<Filled> {
-        let mut file = File::open(self.resolve(abs)).map_err(|e| Error::io(what, source, e))?;
+        let mut file = self.open(abs).map_err(|e| Error::io(what, source, e))?;
         let mut len = 0;
         loop {
             match file.read(&mut buf[len..]) {
@@ -219,7 +254,7 @@ impl Root {
         f: impl FnOnce(&[u8]) -> T,
     ) -> Result<T> {
         let mut buf = [0u8; STACK_BUF];
-        let mut file = File::open(self.resolve(abs)).map_err(|e| Error::io(what, source, e))?;
+        let mut file = self.open(abs).map_err(|e| Error::io(what, source, e))?;
         let mut len = 0;
         while len < buf.len() {
             match file.read(&mut buf[len..]) {
@@ -261,9 +296,14 @@ impl Root {
         f: &mut dyn FnMut(&[u8]) -> ControlFlow<()>,
     ) -> Result<()> {
         let mut buf = [0u8; STACK_BUF];
-        let mut file = File::open(self.resolve(abs)).map_err(|e| Error::io(what, source, e))?;
+        let mut file = self.open(abs).map_err(|e| Error::io(what, source, e))?;
         let (mut start, mut end, mut total) = (0usize, 0usize, 0usize);
-        let mut skipping = false;
+        // The start of a line longer than `buf`, carried on the heap.
+        let mut long: Vec<u8> = Vec::new();
+        let too_long = || Error::TooLarge {
+            what,
+            limit: LONG_LINE as u64,
+        };
         loop {
             if start > 0 {
                 buf.copy_within(start..end, 0);
@@ -271,8 +311,10 @@ impl Root {
                 start = 0;
             }
             if end == buf.len() {
-                // A line that fills the whole buffer: drop it, up to its newline.
-                skipping = true;
+                if long.len() + end > LONG_LINE {
+                    return Err(too_long());
+                }
+                long.extend_from_slice(&buf[..end]);
                 end = 0;
             }
             let n = match file.read(&mut buf[end..]) {
@@ -288,7 +330,13 @@ impl Root {
                 });
             }
             if n == 0 {
-                if end > start && !skipping {
+                if !long.is_empty() {
+                    if long.len() + end > LONG_LINE {
+                        return Err(too_long());
+                    }
+                    long.extend_from_slice(&buf[..end]);
+                    let _ = f(strip_cr(&long));
+                } else if end > start {
                     let _ = f(strip_cr(&buf[start..end]));
                 }
                 return Ok(());
@@ -297,9 +345,19 @@ impl Root {
             end += n;
             while let Some(pos) = buf[search..end].iter().position(|&b| b == b'\n') {
                 let line_end = search + pos;
-                if skipping {
-                    skipping = false;
-                } else if f(strip_cr(&buf[start..line_end])).is_break() {
+                let flow = if long.is_empty() {
+                    f(strip_cr(&buf[start..line_end]))
+                } else {
+                    // `start` is 0: the rest of the long line.
+                    if long.len() + line_end > LONG_LINE {
+                        return Err(too_long());
+                    }
+                    long.extend_from_slice(&buf[..line_end]);
+                    let flow = f(strip_cr(&long));
+                    long.clear();
+                    flow
+                };
+                if flow.is_break() {
                     return Ok(());
                 }
                 start = line_end + 1;
@@ -312,7 +370,7 @@ impl Root {
     /// for identifiers, which go only into a buffer that is wiped (threat T1).
     #[cfg_attr(not(feature = "device-id"), allow(dead_code))]
     pub(crate) fn read_into(&self, abs: &str, out: &mut [u8]) -> Result<usize, io::ErrorKind> {
-        let mut file = File::open(self.resolve(abs)).map_err(|e| e.kind())?;
+        let mut file = self.open(abs).map_err(|e| e.kind())?;
         let mut len = 0;
         while len < out.len() {
             match file.read(&mut out[len..]) {
@@ -473,6 +531,66 @@ pub(crate) mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sys-lib-root-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("etc")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_root_long_lines_are_passed_whole_or_refused() {
+        let dir = scratch("long");
+        let long = "x".repeat(STACK_BUF * 3 + 17);
+        std::fs::write(
+            dir.join("etc/lines"),
+            format!("short\n{long}\nafter\n{long}"),
+        )
+        .unwrap();
+        let root = Root::at(&dir);
+        let mut seen = Vec::new();
+        root.for_each_line("/etc/lines", FILE_LIMIT, "t", "t", |l| {
+            seen.push(l.len());
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert_eq!(seen, [5, long.len(), 5, long.len()]);
+        std::fs::write(dir.join("etc/lines"), "y".repeat(LONG_LINE + 1)).unwrap();
+        let e = root
+            .for_each_line("/etc/lines", FILE_LIMIT, "t", "t", |_| {
+                ControlFlow::Continue(())
+            })
+            .unwrap_err();
+        assert!(matches!(e, Error::TooLarge { .. }), "{e:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_root_refuses_what_is_not_a_regular_file() {
+        let dir = scratch("dir");
+        std::fs::create_dir_all(dir.join("etc/os-release")).unwrap();
+        assert!(Root::at(&dir).text("/etc/os-release").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn test_root_fifo_does_not_block() {
+        // T7: a FIFO with no writer at a file path returns at once.
+        assert_eq!(OPEN_NONBLOCK, libc::O_NONBLOCK | libc::O_NOCTTY);
+        let dir = scratch("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(dir.join("etc/os-release"))
+            .status();
+        if !made.is_ok_and(|s| s.success()) {
+            return; // No mkfifo here.
+        }
+        let start = std::time::Instant::now();
+        assert!(Root::at(&dir).text("/etc/os-release").is_none());
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The files the 0.3 readings may open. A new read shows up here as a test
     /// failure, so it gets reviewed (threat T4; PLAN.md section 22).

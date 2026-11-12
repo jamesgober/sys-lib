@@ -21,7 +21,7 @@
         <strong>sys-lib</strong> answers the questions a program asks about the machine it runs on, with one plain function call each, on Linux, macOS, and Windows: the operating system, the CPU, memory, disks, network interfaces, the host, this process, virtualization and containers, power, and an application-scoped device id. It also carries the boot kit a long-running service needs in its first milliseconds: build info, instance info, and a process guard (single-instance lock, safe file permissions, open-file limit).
     </p>
     <p>
-        It is container-aware: inside Docker or Kubernetes, the memory total is the container's limit and the CPU count respects the quota, with the host values one call away. It is honest: a fact that cannot be known is reported as unknown, never guessed. Every reading is a file read or a system call; sys-lib never runs another program, never starts a thread, and has no third-party runtime dependencies.
+        It is container-aware: inside Docker or Kubernetes, the memory total is the container's limit and the CPU count respects the quota, with the host values one call away. It is honest: a fact that cannot be known is reported as unknown, never guessed. Every reading is a file read or a system call; sys-lib never runs another program, never starts a thread, and has no third-party runtime dependencies by default (the `device-id` feature brings crypt-io's BLAKE3 stack).
     </p>
     <br>
     <hr>
@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>unsafe</code> is denied at the crate root and allowed only in one OS module per platform.
     </p>
     <blockquote>
-        <strong>Status: <code>0.6.0</code>, feature complete.</strong> The boot kit, the live readings (memory, CPU, disks, network, pressure, this process), detection and identity (virtualization, form factor, topology, power, DNS, the time zone, firmware, launch context, <code>summary()</code>, an application-scoped device id), and now the server readiness, benchmark environment, and security posture reports, temperatures, graphics adapters, and explicit roots for monitoring agents. Linux (64-bit, and 32-bit glibc on x86 and Arm), macOS, Windows, and FreeBSD; Android and iOS best effort. 0.7 to 1.0 optimise and harden; the API is in <a href="./docs/API.md"><code>docs/API.md</code></a>. Design: <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a>; schedule: <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
+        <strong>Status: <code>0.7.0</code>, feature complete and measured.</strong> The boot kit, the live readings (memory, CPU, disks, network, pressure, this process), detection and identity (virtualization, form factor, topology, power, DNS, the time zone, firmware, launch context, <code>summary()</code>, an application-scoped device id), and now the server readiness, benchmark environment, and security posture reports, temperatures, graphics adapters, and explicit roots for monitoring agents. Linux (64-bit, and 32-bit glibc on x86 and Arm), macOS, Windows, and FreeBSD; Android and iOS best effort. 0.7 measured every reading against the crates people use for it (<a href="./docs/PERFORMANCE.md"><code>docs/PERFORMANCE.md</code></a>); 0.8 to 1.0 harden; the API is in <a href="./docs/API.md"><code>docs/API.md</code></a>. Design: <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a>; schedule: <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -38,7 +38,7 @@
 
 ## Scope
 
-Static facts read once and cached (OS name and version, CPU model, core counts, CPU features, caches, topology, virtualization, form factor); live readings read fresh on every call with no allocation for single values (memory, swap, uptime, load, disk space, this process's memory and CPU time); caller-owned samplers for values that need two readings (CPU usage, network rates); the boot kit (build info, instance info, process guard); and an opt-in device id derived with a keyed hash, so raw hardware identifiers never leave the library. It does not inspect other processes, change system settings, or run in the background.
+Static facts read once and cached (OS name and version, CPU model, core counts, CPU features, caches, topology, virtualization, form factor); live readings read fresh on every call with no allocation for single values (memory, swap, uptime, load, disk space, this process's memory and CPU time); caller-owned samplers for values that need two readings (CPU usage, network rates); the boot kit (build info, instance info, process guard); and an opt-in device id derived with a keyed hash, so raw hardware identifiers never leave the library. It does not read other processes' details, change system settings, or run in the background; the few readings that walk the process table (`host::processes()` on macOS and FreeBSD, `process::threads()` on Windows) say so and their cost.
 
 ## Quick start
 
@@ -46,7 +46,7 @@ Cargo's rename makes the crate `sys` in your code:
 
 ```toml
 [dependencies]
-sys = { package = "sys-lib", version = "0.6" }
+sys = { package = "sys-lib", version = "0.7" }
 ```
 
 Tier 1 is one plain call per fact. Static facts are read once and cached, so
