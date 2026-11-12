@@ -824,7 +824,7 @@ fn test_live_windows_device_sources_are_read() {
         state(Anchor::PlatformUuid),
         Some(SourceState::Present | SourceState::Placeholder)
     ));
-    assert!(device::id("com.hivedb.sys-lib.live").is_ok());
+    assert!(device::id("com.example.sys-lib.live").is_ok());
 }
 
 #[test]

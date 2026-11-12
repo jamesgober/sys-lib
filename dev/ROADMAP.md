@@ -24,9 +24,9 @@ Exit: James approves `docs/API.md`; layout tests pass on every target; every ope
 - [x] Open decisions OD-4 to OD-6, OD-9, OD-11 to OD-17 accepted by James as recommended (D-021); his API additions recorded (D-022 to D-026).
 - [x] One new defence idea recorded (`PLAN.md` section 22: the layout oracle).
 
-## v0.3.0 - Core: the boot kit (WASP boot phase 0) (DONE, 2026-10-23)
+## v0.3.0 - Core: the boot kit (boot phase 0) (DONE, 2026-10-23)
 API: ROOT-02, ROOT-03, ROOT-04 · BLD-01 to BLD-06 (BLD-06 from 0.4, D-032) · INS-01 to INS-06 · PRC-01, PRC-11, PRC-12, PRC-20 to PRC-23 · OS-01 to OS-07 · CPU-01 to CPU-06 · HST-01.
-Exit: WASP's phase 0 can be written against 0.3 (build info first line, instance id in every log line, guard before any file is opened, worker pool sized by `cpu::available()`); every 0.3 item has unit, fixture, live, and edge-case tests; the guard tests pass on all three OSes including `kill -9` recovery.
+Exit: a service's boot phase 0 can be written against 0.3 (build info first line, instance id in every log line, guard before any file is opened, worker pool sized by `cpu::available()`); every 0.3 item has unit, fixture, live, and edge-case tests; the guard tests pass on all three OSes including `kill -9` recovery.
 - [x] Bounded reader (`Root` in `src/linux/mod.rs`, 1 MiB per file, small files on the stack); parser layer: `os_release` (and the legacy release files), `cpu_list`, `cpuinfo`, `cpu_name`, `proc_status`, `mountinfo`, `cgroup` (CPU side), `pid_file`, `version`.
 - [x] Fixture moved from 0.2 (D-027): `docker-cgroup1-limited`, captured on a real cgroup v1 host in a VM (D-038).
 - Moved to 0.4 (D-039): `ubuntu-24.04-desktop-amd`, which needs a bare-metal Linux desktop.
@@ -93,7 +93,7 @@ Exit: no open finding; every threat has a passing attack test.
 
 ## v0.9.0 - Alpha and beta
 Exit: both integrations run on every listed environment; two weeks without an API change; every document checked against the build.
-- [ ] 0.9.0 (alpha): integrated in WASP's boot phase 0 and in a Hive DB start-up (guard beside the data directory, cache sizing from `mem::total()`, the Database readiness report) on Windows 11, WSL 2 Ubuntu, a Linux server, macOS on Apple silicon, FreeBSD, a Docker container with limits, and a Kubernetes pod if available.
+- [ ] 0.9.0 (alpha): integrated in a service's boot phase 0 and in a database start-up (guard beside the data directory, cache sizing from `mem::total()`, the Database readiness report) on Windows 11, WSL 2 Ubuntu, a Linux server, macOS on Apple silicon, FreeBSD, a Docker container with limits, and a Kubernetes pod if available.
 - [ ] API review against real use; changes made in 0.9.0, not later.
 - [ ] 0.9.x (beta): API frozen; only fixes. Documentation complete; `docs/STABILITY-1.0.md` drafted with the requirement-to-test map.
 - [ ] Release candidates `1.0.0-rc.N` as needed.
@@ -106,7 +106,7 @@ Exit: the audit passes; the definition of done in `DIRECTIVES.md` and the 1.0 ch
 - [ ] Benchmarks published; zero third-party runtime dependencies with default features; `cargo deny` and `cargo audit` clean.
 - [ ] `unsafe` only in `src/sys/`, every block documented, layout assertions on every target, Miri clean on the parser layer; no subprocess at run time.
 - [ ] CI green on every platform and target, the container and FreeBSD jobs included; every document in `PLAN.md` section 20 complete and matching the build.
-- [ ] WASP boot phase 0 and a Hive DB start-up run on sys-lib on every 0.9 environment.
+- [ ] A service's boot phase 0 and a database start-up run on sys-lib on every 0.9 environment.
 - [ ] Full audit recorded in `docs/STABILITY-1.0.md`; API frozen until 2.0; an MSRV raise is a major change; the device id derivation `sys-lib/device/v1` frozen for 1.x.
 
 ## Carried items

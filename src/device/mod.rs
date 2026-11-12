@@ -19,7 +19,7 @@
 //! ```no_run
 //! use sys_lib as sys;
 //!
-//! let id = sys::device::id("com.hivedb.server")?;
+//! let id = sys::device::id("com.example.server")?;
 //! println!("device {id}");
 //! let again: sys::device::DeviceId = id.to_string().parse()?;
 //! assert!(id.ct_eq(&again));

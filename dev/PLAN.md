@@ -84,11 +84,11 @@ The engineering promises:
 
 | User | Uses | When |
 |---|---|---|
-| WASP kernel (service-suite) | build info, instance info, process guard, `process::is_elevated`, `os::name`, `cpu::available` | boot phase 0 |
-| WASP runtime and task-io | `cpu::available()` to size worker pools, `cpu::topology()` for placement | phases 1 to 3 |
+| a service framework's kernel (system-suite) | build info, instance info, process guard, `process::is_elevated`, `os::name`, `cpu::available` | boot phase 0 |
+| a service runtime and task-io | `cpu::available()` to size worker pools, `cpu::topology()` for placement | phases 1 to 3 |
 | tower (watchdog) | `mem::snapshot()`, `process::memory()`, `mem::pressure()`, `host::uptime()` | memory watermark and "memory critical" signal |
 | metrics-lib exporters | live readings and samplers | each scrape |
-| Hive DB | process guard (lock beside the data directory), `disk::space()`, `mem::total()` for cache sizing | start-up and before compaction |
+| a database server | process guard (lock beside the data directory), `disk::space()`, `mem::total()` for cache sizing | start-up and before compaction |
 | shield-sec | `process::is_elevated()`, `process::user()` | verifying the privilege drop |
 | CLI tools, installers, support bundles | `summary()`, `os::info()`, `device::report()` | diagnostics |
 | licensing or "new device" logic | `device::id(app)` | sign-in and activation (as a hint, not proof) |
@@ -167,7 +167,7 @@ The lock comes before any data file is touched, the umask before any file is cre
 | Not here | Why | Where |
 |---|---|---|
 | dropping privileges, disabling core dumps | a security control that must be verified | `shield-sec` (sys-lib only reports `is_elevated`) |
-| signal handling | lifecycle | `signal-mod`, the WASP kernel |
+| signal handling | lifecycle | `signal-mod`, the service kernel |
 | application and OS directories, `exe()`, `temp()` | already solved | `path-lib` |
 | environment variables, `.env` files | already solved | `env-lib` |
 | time readings, calendars, time zone arithmetic | already solved; arithmetic belongs to calendar crates | `clock-lib`; sys-lib returns the zone **name** only |
@@ -865,7 +865,7 @@ Each dependency is added with the first code that needs it. `crypt-io` brings `b
 
 ### 16.3 Talks to
 
-shield-sec (privilege drop verification), tower (memory watermark), metrics-lib (system collector), the WASP kernel (boot phase 0), Hive DB (guard and cache sizing).
+shield-sec (privilege drop verification), tower (memory watermark), metrics-lib (system collector), a service kernel (boot phase 0), a database server (guard and cache sizing).
 
 ---
 

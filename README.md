@@ -66,7 +66,7 @@ println!("{} of {} used", sys::mem::used()?, sys::mem::total()?);   // "41.2 GiB
 println!("{}", sys::cpu::used()?);        // "12.4%" (blocks for 100 ms)
 let t = sys::net::traffic()?;             // blocks 1 s
 println!("down {} up {}", t.download, t.upload);   // "down 12.5 MiB/s up 1.2 MiB/s"
-println!("{} free", sys::disk::space("/var/lib/hive")?.available);
+println!("{} free", sys::disk::space("/var/lib/myapp")?.available);
 ```
 
 A monitor keeps samplers instead of blocking: each is owned by the caller,

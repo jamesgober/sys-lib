@@ -936,8 +936,8 @@ use sys_lib::process::Guard;
 
 // A database locks beside its data, so two copies under different users or run
 // directories still exclude each other.
-let guard = Guard::builder("hive")
-    .lock_dir("/var/lib/hive")
+let guard = Guard::builder("myapp")
+    .lock_dir("/var/lib/myapp")
     .open_files_target(1_048_576)
     .open_files_minimum(65_536)
     .build()?;
@@ -1738,7 +1738,7 @@ impl Default for ListOptions;
 ```rust
 use sys_lib as sys;
 
-let s = sys::disk::space("/var/lib/hive")?;
+let s = sys::disk::space("/var/lib/myapp")?;
 println!("{} available of {} ({} used)", s.available, s.total, s.used_percent());
 if s.available < sys::Bytes::from_gib(10) { /* refuse compaction */ }
 
@@ -2476,7 +2476,7 @@ Each check runs only where it applies; elsewhere it is left out (not reported as
 ```rust
 use sys_lib::readiness::{self, Profile};
 
-let report = readiness::report_for(Profile::Database, "/var/lib/hive");
+let report = readiness::report_for(Profile::Database, "/var/lib/myapp");
 println!("{report}");
 // WARN  linux.thp        Transparent huge pages   always    madvise or never
 //       echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
@@ -2590,7 +2590,7 @@ The machine's security settings, read-only, for shield-sec, compliance reports, 
 ```rust
 pub mod device {
     /// An application-specific device id. `app` is a stable, application-unique string
-    /// such as a reverse domain name ("com.hivedb.server"), 1 to 255 bytes.
+    /// such as a reverse domain name ("com.example.server"), 1 to 255 bytes.
     pub fn id(app: &str) -> Result<DeviceId>;
     pub fn fingerprint(app: &str) -> Result<Fingerprint>;
     pub fn report() -> StabilityReport;               // sources only, no application needed
@@ -2624,7 +2624,7 @@ The id is a keyed BLAKE3 hash of **one** identifier the OS keeps (by default the
 ```rust
 use sys_lib as sys;
 
-let id = sys::device::id("com.hivedb.server")?;
+let id = sys::device::id("com.example.server")?;
 println!("device {id}");                                   // 6f1c2a4e-9b3d-8e21-a7c4-...
 let again: sys::device::DeviceId = id.to_string().parse()?;
 assert!(id.ct_eq(&again));
