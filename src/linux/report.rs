@@ -979,7 +979,7 @@ mod tests {
             "/sys/dev/block/259:3/../queue/scheduler",
             "[none] mq-deadline\n",
         );
-        let d = data_dir_tuning(&t.root(), Path::new("/var/lib/hive"));
+        let d = data_dir_tuning(&t.root(), Path::new("/var/lib/myapp"));
         assert_eq!(d.atime, Fact::Value("noatime".into()));
         let d = data_dir_tuning(&t.root(), Path::new("/home"));
         assert_eq!(d.atime, Fact::Value("relatime".into()));

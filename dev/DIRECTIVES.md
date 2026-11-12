@@ -6,7 +6,7 @@
 
 ## 0. Philosophy
 
-This library is built and maintained to a production standard and treated as a flagship piece of work. Plan the full path, then build one verified step at a time. "Good enough" is treated as a defect. It is a `-lib`: a toolbox of functions and plain values, with no background threads, no timers, and no daemons. It is the foundation the service platform and Hive DB stand on in their first milliseconds, so every answer it gives must be true, cheap, and safe to ask from any thread at any time. A security component that cannot name the attack it stops, and prove it with a test, does not ship.
+This library is built and maintained to a production standard and treated as a flagship piece of work. Plan the full path, then build one verified step at a time. "Good enough" is treated as a defect. It is a `-lib`: a toolbox of functions and plain values, with no background threads, no timers, and no daemons. It is the foundation services and databases stand on in their first milliseconds, so every answer it gives must be true, cheap, and safe to ask from any thread at any time. A security component that cannot name the attack it stops, and prove it with a test, does not ship.
 
 ---
 

@@ -63,8 +63,8 @@ impl Guard {
     ///
     /// // A database locks beside its data, so two copies under different users
     /// // or run directories still exclude each other.
-    /// let guard = Guard::builder("hive")
-    ///     .lock_dir("/var/lib/hive")
+    /// let guard = Guard::builder("myapp")
+    ///     .lock_dir("/var/lib/myapp")
     ///     .open_files_target(1_048_576)
     ///     .open_files_minimum(65_536)
     ///     .build()?;
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_guard_name_validation() {
-        for good in ["site", "hive-db", "a.b_c", "x"] {
+        for good in ["site", "my-app", "a.b_c", "x"] {
             assert!(validate_name(good).is_ok(), "{good}");
         }
         for bad in [
