@@ -12,8 +12,9 @@ use std::{sync::OnceLock, time::SystemTime};
 
 use crate::{Result, os::keep, parse, sys::HardwareFacts};
 
-/// The host name. A live reading: DHCP and `hostnamectl` change it while
-/// processes run. A name that is not UTF-8 is converted lossily, and one
+/// The host name. A live reading on Unix: DHCP and `hostnamectl` change it
+/// while processes run. On Windows a new name takes effect only at restart, so
+/// it is read once. A name that is not UTF-8 is converted lossily, and one
 /// longer than 255 bytes is truncated (E-95).
 ///
 /// The host name is an identifying value: keep it out of output that leaves

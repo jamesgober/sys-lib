@@ -35,10 +35,33 @@ impl CpuSet {
     /// Every CPU below `n` (`n` capped at [`MAX_CPUS`]).
     pub(crate) fn first(n: usize) -> Self {
         let mut s = Self::empty();
-        for cpu in 0..n.min(MAX_CPUS) {
-            s.insert(cpu);
+        if n > 0 {
+            s.insert_range(0, n.min(MAX_CPUS) - 1);
         }
         s
+    }
+
+    /// Adds `lo..=hi`, a word at a time, so a hostile list of many wide
+    /// ranges costs microseconds, not seconds (threat T7). Indexes at or
+    /// above [`MAX_CPUS`] are ignored.
+    fn insert_range(&mut self, lo: usize, hi: usize) {
+        let hi = hi.min(MAX_CPUS - 1);
+        if lo > hi {
+            return;
+        }
+        let (first, last) = (lo / 64, hi / 64);
+        // The bits from `lo % 64` up, and up to `hi % 64`.
+        let low_mask = u64::MAX << (lo % 64);
+        let high_mask = u64::MAX >> (63 - hi % 64);
+        if first == last {
+            self.bits[first] |= low_mask & high_mask;
+            return;
+        }
+        self.bits[first] |= low_mask;
+        for word in &mut self.bits[first + 1..last] {
+            *word = u64::MAX;
+        }
+        self.bits[last] |= high_mask;
     }
 
     /// Adds `cpu`; an index at or above [`MAX_CPUS`] is ignored.
@@ -95,9 +118,7 @@ impl CpuSet {
             if hi >= MAX_CPUS {
                 return Err(ListError::TooLarge);
             }
-            for cpu in lo..=hi {
-                set.insert(cpu);
-            }
+            set.insert_range(lo, hi);
         }
         Ok(set)
     }
@@ -120,6 +141,42 @@ mod tests {
         assert_eq!(
             s.iter().collect::<Vec<_>>(),
             vec![0, 1, 2, 3, 8, 9, 10, 11, 64]
+        );
+    }
+
+    #[test]
+    fn test_cpu_list_ranges_match_single_inserts() {
+        for (lo, hi) in [
+            (0, 0),
+            (0, 63),
+            (1, 62),
+            (63, 64),
+            (5, 200),
+            (64, 127),
+            (100, 16_383),
+        ] {
+            let mut want = CpuSet::empty();
+            for cpu in lo..=hi {
+                want.insert(cpu);
+            }
+            let text = format!("{lo}-{hi}");
+            assert_eq!(CpuSet::parse(text.as_bytes()).unwrap(), want, "{text}");
+        }
+        assert_eq!(CpuSet::first(0).count(), 0);
+        assert_eq!(CpuSet::first(65).count(), 65);
+        assert_eq!(CpuSet::first(1 << 20).count(), MAX_CPUS);
+    }
+
+    #[test]
+    fn test_cpu_list_hostile_wide_ranges_are_cheap() {
+        // T7: a 1 MiB list of full-width ranges (seconds bit by bit).
+        let list = vec!["0-16383"; (1 << 20) / 8].join(",");
+        let start = std::time::Instant::now();
+        assert_eq!(CpuSet::parse(list.as_bytes()).unwrap().count(), MAX_CPUS);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
         );
     }
 

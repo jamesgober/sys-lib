@@ -9,9 +9,17 @@ use crate::{
 };
 
 /// Reads the OS identity from a Linux tree.
+#[cfg(test)]
 pub(crate) fn read(root: &Root) -> OsFacts {
-    let kernel = root
-        .text("/proc/sys/kernel/osrelease")
+    read_with_kernel(root, None)
+}
+
+/// [`read`], with the kernel release already known (from `uname`, one call
+/// instead of a file); `None` reads `/proc/sys/kernel/osrelease`.
+pub(crate) fn read_with_kernel(root: &Root, kernel: Option<String>) -> OsFacts {
+    let kernel = kernel
+        .filter(|k| !k.is_empty())
+        .or_else(|| root.text("/proc/sys/kernel/osrelease"))
         .filter(|k| !k.is_empty())
         .unwrap_or_default();
     let release = from_os_release(root).or_else(|| from_legacy(root));

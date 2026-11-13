@@ -207,6 +207,18 @@ layout!(Tm, size = 56, align = 8);
 #[cfg(target_pointer_width = "32")]
 layout!(Tm, size = 44, align = 4);
 
+/// `struct utsname` (sys/utsname.h): six 65-byte fields on Linux.
+#[repr(C)]
+pub(crate) struct Utsname {
+    pub(crate) sysname: [c_char; 65],
+    pub(crate) nodename: [c_char; 65],
+    pub(crate) release: [c_char; 65],
+    pub(crate) version: [c_char; 65],
+    pub(crate) machine: [c_char; 65],
+    pub(crate) domainname: [c_char; 65],
+}
+layout!(Utsname, size = 390, align = 1);
+
 /// `struct sockaddr` (sys/socket.h).
 #[repr(C)]
 pub(crate) struct Sockaddr {
@@ -400,6 +412,8 @@ unsafe extern "C" {
         buflen: usize,
         result: *mut *mut Passwd,
     ) -> c_int;
+    // sys/utsname.h
+    pub(crate) fn uname(buf: *mut Utsname) -> c_int;
     // time.h
     pub(crate) fn localtime_r(time: *const Time, result: *mut Tm) -> *mut Tm;
     pub(crate) fn clock_gettime(clock: ClockId, tp: *mut Timespec) -> c_int;
@@ -473,6 +487,9 @@ mod tests {
         sec => tm_sec, min => tm_min, hour => tm_hour, mday => tm_mday, mon => tm_mon,
         year => tm_year, wday => tm_wday, yday => tm_yday, isdst => tm_isdst,
         gmtoff => tm_gmtoff, zone => tm_zone);
+    same_layout!(Utsname, libc::utsname,
+        sysname => sysname, nodename => nodename, release => release,
+        version => version, machine => machine, domainname => domainname);
     same_layout!(Sockaddr, libc::sockaddr, family => sa_family, data => sa_data);
     same_layout!(SockaddrIn, libc::sockaddr_in,
         family => sin_family, port => sin_port, addr => sin_addr, zero => sin_zero);

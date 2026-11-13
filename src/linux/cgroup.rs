@@ -160,21 +160,18 @@ fn find(tables: &Tables, hierarchy: Hierarchy) -> Option<Dir> {
         }
         // Inside a cgroup namespace the mount root is the process's own
         // cgroup ("/"); outside it is the hierarchy root. The membership
-        // path must lie under it.
-        let rel = membership
-            .path
-            .strip_prefix(&*m.root)
-            .or_else(|| (&*m.root == b"/").then_some(membership.path))?;
+        // path must lie under it by whole components: `/docker/abc` is not
+        // under `/docker/ab`.
+        let mount_root = m.root.strip_suffix(b"/").unwrap_or(&m.root);
+        let rel = membership.path.strip_prefix(mount_root)?;
+        if !(rel.is_empty() || (rel.starts_with(b"/") && cgroup::valid_path(rel))) {
+            return None;
+        }
         let rel = std::str::from_utf8(rel).ok()?.trim_end_matches('/');
         let mount = std::str::from_utf8(&m.mount_point)
             .ok()?
             .trim_end_matches('/')
             .to_owned();
-        let rel = if rel.is_empty() || rel.starts_with('/') {
-            rel.to_owned()
-        } else {
-            format!("/{rel}")
-        };
         Some(Dir {
             leaf: format!("{mount}{rel}"),
             mount,
@@ -192,6 +189,31 @@ fn matches(m: &Membership<'_>, hierarchy: Hierarchy) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{super::fixtures, *};
+
+    #[test]
+    fn test_cgroup_mount_root_matches_whole_components() {
+        let tables = |path: &str, mount_root: &str| Tables {
+            memberships: format!("0::{path}\n").into_bytes(),
+            mounts: format!("30 1 0:26 {mount_root} /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n")
+                .into_bytes(),
+        };
+        let leaf =
+            |path, mount_root| find(&tables(path, mount_root), Hierarchy::Unified).map(|d| d.leaf);
+        assert_eq!(
+            leaf("/docker/abc", "/docker"),
+            Some("/sys/fs/cgroup/abc".into())
+        );
+        assert_eq!(
+            leaf("/docker/abc", "/docker/abc"),
+            Some("/sys/fs/cgroup".into())
+        );
+        assert_eq!(
+            leaf("/docker/abc", "/"),
+            Some("/sys/fs/cgroup/docker/abc".into())
+        );
+        assert_eq!(leaf("/docker/abc", "/docker/ab"), None);
+        assert_eq!(leaf("/ab../c", "/ab"), None);
+    }
 
     #[test]
     fn test_cgroup_dir_without_a_namespace_walks_to_the_mount() {

@@ -229,25 +229,60 @@ impl Vendor {
     }
 }
 
-struct Static {
-    logical: usize,
+// The static facts are cached apart, so a call reads only its own source: the
+// count is one small file or call, the cores a topology walk, the name the
+// brand string (D-101). One cache for all three made `logical()` pay for
+// `/proc/cpuinfo` on its first call.
+
+/// Cores and packages, held between 1 and the count.
+struct Layout {
     physical: usize,
     physical_exact: bool,
     packages: usize,
+}
+
+/// The names and the vendor.
+struct Identity {
     name: &'static str,
     raw_name: Option<&'static str>,
     vendor: Vendor,
 }
 
-fn facts() -> &'static Static {
-    static FACTS: OnceLock<Static> = OnceLock::new();
-    FACTS.get_or_init(|| build(crate::sys::cpu()))
+fn layout() -> &'static Layout {
+    static LAYOUT: OnceLock<Layout> = OnceLock::new();
+    LAYOUT.get_or_init(|| {
+        let (physical, packages) = crate::sys::cpu_counts();
+        layout_of(logical(), physical, packages)
+    })
 }
 
-fn build(f: crate::sys::CpuFacts) -> Static {
-    let logical = f.logical.max(1);
-    let physical = f.physical.unwrap_or(logical).clamp(1, logical);
-    let packages = f.packages.unwrap_or(1).clamp(1, physical);
+fn identity() -> &'static Identity {
+    static IDENTITY: OnceLock<Identity> = OnceLock::new();
+    IDENTITY.get_or_init(|| identity_of(crate::sys::cpu_identity()))
+}
+
+fn logical_of(reported: Option<usize>) -> usize {
+    reported
+        .filter(|&n| n > 0)
+        .or_else(|| {
+            std::thread::available_parallelism()
+                .ok()
+                .map(std::num::NonZero::get)
+        })
+        .unwrap_or(1)
+}
+
+fn layout_of(logical: usize, physical: Option<usize>, packages: Option<usize>) -> Layout {
+    let logical = logical.max(1);
+    let cores = physical.unwrap_or(logical).clamp(1, logical);
+    Layout {
+        physical: cores,
+        physical_exact: physical.is_some(),
+        packages: packages.unwrap_or(1).clamp(1, cores),
+    }
+}
+
+fn identity_of(f: crate::sys::CpuIdentity) -> Identity {
     let name = f
         .name
         .or_else(|| f.raw_name.as_deref().map(cpu_name::clean))
@@ -256,11 +291,7 @@ fn build(f: crate::sys::CpuFacts) -> Static {
             Vendor::Unknown => "unknown".to_owned(),
             v => format!("{} {}", v.name(), arch().name()),
         });
-    Static {
-        logical,
-        physical,
-        physical_exact: f.physical.is_some(),
-        packages,
+    Identity {
         name: keep(name),
         raw_name: f.raw_name.filter(|n| !n.trim().is_empty()).map(keep),
         vendor: f.vendor,
@@ -272,14 +303,15 @@ fn build(f: crate::sys::CpuFacts) -> Static {
 /// counts every processor group (FR-12). At least 1.
 #[must_use]
 pub fn logical() -> usize {
-    facts().logical
+    static LOGICAL: OnceLock<usize> = OnceLock::new();
+    *LOGICAL.get_or_init(|| logical_of(crate::sys::cpu_logical()))
 }
 
 /// Physical cores; [`logical`] when the topology is hidden (E-18). Always
 /// between 1 and `logical()`.
 #[must_use]
 pub fn physical() -> usize {
-    facts().physical
+    layout().physical
 }
 
 /// The CPUs this process may use right now: the affinity mask, intersected
@@ -297,27 +329,27 @@ pub fn available() -> usize {
 /// architecture ("ARM aarch64"), then "unknown".
 #[must_use]
 pub fn name() -> &'static str {
-    facts().name
+    identity().name
 }
 
 /// The name exactly as the OS reports it, for support output; `None` where the
 /// OS reports no brand string (most ARM Linux systems).
 #[must_use]
 pub fn raw_name() -> Option<&'static str> {
-    facts().raw_name
+    identity().raw_name
 }
 
 /// The vendor.
 #[must_use]
 pub fn vendor() -> Vendor {
-    facts().vendor
+    identity().vendor
 }
 
 /// Processor packages (sockets): a static fact, 1 when the OS does not say.
 /// Always between 1 and `physical()`.
 #[must_use]
 pub fn packages() -> usize {
-    facts().packages
+    layout().packages
 }
 
 /// The CPUs online now, which hot-plug changes; between 1 and `logical()`.
@@ -355,14 +387,14 @@ pub struct Counts {
 /// ```
 #[must_use]
 pub fn count() -> Counts {
-    let f = facts();
+    let l = layout();
     Counts {
-        logical: f.logical,
-        physical: f.physical,
-        packages: f.packages,
+        logical: logical(),
+        physical: l.physical,
+        packages: l.packages,
         available: available(),
         online: online(),
-        physical_exact: f.physical_exact,
+        physical_exact: l.physical_exact,
     }
 }
 
@@ -515,6 +547,35 @@ pub fn pressure() -> Result<Option<Pressure>> {
 mod tests {
     use super::*;
 
+    /// Every static fact for one set of platform answers.
+    struct Static {
+        logical: usize,
+        physical: usize,
+        physical_exact: bool,
+        packages: usize,
+        name: &'static str,
+        raw_name: Option<&'static str>,
+    }
+
+    fn build(
+        logical: Option<usize>,
+        physical: Option<usize>,
+        packages: Option<usize>,
+        ident: crate::sys::CpuIdentity,
+    ) -> Static {
+        let logical = logical_of(logical);
+        let l = layout_of(logical, physical, packages);
+        let i = identity_of(ident);
+        Static {
+            logical,
+            physical: l.physical,
+            physical_exact: l.physical_exact,
+            packages: l.packages,
+            name: i.name,
+            raw_name: i.raw_name,
+        }
+    }
+
     fn facts_with(
         logical: usize,
         physical: Option<usize>,
@@ -522,14 +583,18 @@ mod tests {
         name: Option<&str>,
         vendor: Vendor,
     ) -> Static {
-        build(crate::sys::CpuFacts {
+        // 0 stands for "the OS did not say" in these tests.
+        let logical = (logical > 0).then_some(logical);
+        build(
             logical,
             physical,
-            packages: None,
-            raw_name: raw.map(str::to_owned),
-            name: name.map(str::to_owned),
-            vendor,
-        })
+            None,
+            crate::sys::CpuIdentity {
+                raw_name: raw.map(str::to_owned),
+                name: name.map(str::to_owned),
+                vendor,
+            },
+        )
     }
 
     #[test]
@@ -558,7 +623,16 @@ mod tests {
             (8, 4, "Intel Core i7-8700")
         );
         assert_eq!(s.raw_name, Some("Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz"));
-        let s = facts_with(0, Some(99), None, None, Vendor::Arm);
+        let s = build(
+            Some(1),
+            Some(99),
+            None,
+            crate::sys::CpuIdentity {
+                raw_name: None,
+                name: None,
+                vendor: Vendor::Arm,
+            },
+        );
         assert_eq!((s.logical, s.physical), (1, 1));
         assert_eq!(s.name, format!("ARM {}", arch().name()));
         assert_eq!(
@@ -597,14 +671,16 @@ mod tests {
 
     #[test]
     fn test_cpu_packages_clamped() {
-        let s = build(crate::sys::CpuFacts {
-            logical: 8,
-            physical: Some(4),
-            packages: Some(9),
-            raw_name: None,
-            name: None,
-            vendor: Vendor::Amd,
-        });
+        let s = build(
+            Some(8),
+            Some(4),
+            Some(9),
+            crate::sys::CpuIdentity {
+                raw_name: None,
+                name: None,
+                vendor: Vendor::Amd,
+            },
+        );
         assert_eq!((s.packages, s.physical_exact), (4, true));
         assert!(!facts_with(8, None, None, None, Vendor::Amd).physical_exact);
     }

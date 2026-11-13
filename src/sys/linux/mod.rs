@@ -22,7 +22,7 @@ use crate::{
     Error, Result,
     linux::{self as tree, Root},
     process::User,
-    sys::{CpuFacts, OsFacts},
+    sys::{CpuIdentity, OsFacts},
 };
 #[cfg(feature = "guard")]
 use crate::{process::Limit, sys::FsKind};
@@ -31,10 +31,35 @@ const ROOT: Root = Root::system();
 
 pub(crate) fn os() -> OsFacts {
     #[cfg_attr(not(target_os = "android"), allow(unused_mut))]
-    let mut facts = tree::os::read(&ROOT);
+    let mut facts = tree::os::read_with_kernel(&ROOT, kernel_release());
     #[cfg(target_os = "android")]
     android(&mut facts);
     facts
+}
+
+/// The kernel release from `uname`: the same text as
+/// `/proc/sys/kernel/osrelease` for a fraction of the cost.
+fn kernel_release() -> Option<String> {
+    uname_text(|u| &u.release)
+}
+
+/// One `uname` field as text.
+fn uname_text(pick: fn(&ffi::Utsname) -> &[c_char; 65]) -> Option<String> {
+    let mut u = std::mem::MaybeUninit::<ffi::Utsname>::zeroed();
+    // SAFETY: `u` is a writable `struct utsname`.
+    if unsafe { ffi::uname(u.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: `uname` succeeded, so it filled the structure; zeroed memory is
+    // a valid `Utsname` in any case (arrays of `c_char`).
+    let u = unsafe { u.assume_init() };
+    let bytes: Vec<u8> = pick(&u)
+        .iter()
+        .take_while(|&&c| c != 0)
+        // `c_char` is `u8` on aarch64 and `i8` on x86_64.
+        .map(|&c| u8::from_ne_bytes(c.to_ne_bytes()))
+        .collect();
+    Some(crate::parse::lossy(&bytes, 64)).filter(|k| !k.is_empty())
 }
 
 /// A system property, when it is set.
@@ -72,28 +97,24 @@ fn android(facts: &mut OsFacts) {
     facts.name_source = crate::os::Source::SystemProperty;
 }
 
-pub(crate) fn cpu() -> CpuFacts {
-    let t = tree::cpu::read(&ROOT);
-    let logical = t
-        .logical
-        .or_else(|| {
-            usize::try_from(ffi::sysconf(ffi::SC_NPROCESSORS_CONF))
-                .ok()
-                .filter(|&n| n > 0)
-        })
-        .or_else(|| {
-            std::thread::available_parallelism()
-                .ok()
-                .map(std::num::NonZero::get)
-        })
-        .unwrap_or(1);
-    CpuFacts {
-        logical,
-        physical: t.physical,
-        packages: t.packages,
-        raw_name: t.raw_name,
-        name: t.arm_name,
-        vendor: t.vendor,
+pub(crate) fn cpu_logical() -> Option<usize> {
+    tree::cpu::logical(&ROOT).or_else(|| {
+        usize::try_from(ffi::sysconf(ffi::SC_NPROCESSORS_CONF))
+            .ok()
+            .filter(|&n| n > 0)
+    })
+}
+
+pub(crate) fn cpu_counts() -> (Option<usize>, Option<usize>) {
+    tree::cpu::counts(&ROOT)
+}
+
+pub(crate) fn cpu_identity() -> CpuIdentity {
+    let i = tree::cpu::identity(&ROOT);
+    CpuIdentity {
+        raw_name: i.raw_name,
+        name: i.arm_name,
+        vendor: i.vendor,
     }
 }
 
@@ -101,10 +122,16 @@ pub(crate) fn cpu_available(logical: usize) -> usize {
     live::available(logical)
 }
 
-/// A 64-bit build runs only on a 64-bit processor; 32-bit Linux has no
-/// implementation yet (D-013).
+/// A 64-bit build runs only on a 64-bit processor. A 32-bit build asks
+/// `/proc/cpuinfo` (the x86 `lm` flag, the ARM architecture), then the kernel:
+/// a 64-bit kernel, or an ARMv8 one in 32-bit mode, means a 64-bit processor.
 pub(crate) fn processor_is_64bit() -> bool {
-    true
+    if cfg!(target_pointer_width = "64") {
+        return true;
+    }
+    tree::cpu::identity(&ROOT).is_64bit.unwrap_or_else(|| {
+        uname_text(|u| &u.machine).is_some_and(|m| m.contains("64") || m.starts_with("armv8"))
+    })
 }
 
 pub(crate) fn host_name() -> Result<String> {
@@ -127,6 +154,32 @@ pub(crate) fn is_elevated() -> Result<bool> {
 /// The account name for `uid` through `getpwuid_r`, growing the buffer on
 /// `ERANGE` up to 64 KiB; a uid without an entry gives its number.
 fn user_name(uid: u32) -> Result<String> {
+    let name = passwd_field(uid, "user name", |p| p.name)?
+        .map(|b| crate::parse::lossy(&b, 256))
+        .unwrap_or_default();
+    Ok(if name.is_empty() {
+        uid.to_string()
+    } else {
+        name
+    })
+}
+
+/// The home directory in the account database for `uid`, not `$HOME`, so it
+/// does not change with the environment; `None` without an entry.
+#[cfg(feature = "guard")]
+pub(crate) fn home_dir(uid: u32) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let dir = passwd_field(uid, "home directory", |p| p.dir).ok()??;
+    (!dir.is_empty()).then(|| std::ffi::OsString::from_vec(dir).into())
+}
+
+/// One field of `uid`'s account entry through `getpwuid_r`, growing the buffer
+/// on `ERANGE` up to 64 KiB; `None` without an entry or with a null field.
+fn passwd_field(
+    uid: u32,
+    what: &'static str,
+    pick: fn(&ffi::Passwd) -> *mut c_char,
+) -> Result<Option<Vec<u8>>> {
     let mut size = 1024;
     loop {
         let mut buf = vec![0 as c_char; size];
@@ -149,29 +202,24 @@ fn user_name(uid: u32) -> Result<String> {
         }
         if rc != 0 {
             return Err(Error::Os {
-                what: "user name",
+                what,
                 call: "getpwuid_r",
                 code: rc,
             });
         }
         if result.is_null() {
-            return Ok(uid.to_string());
+            return Ok(None);
         }
         // SAFETY: on success with a non-null result, `result` points to `pwd`,
         // which the call initialised.
-        let name_ptr = unsafe { (*result).name };
-        if name_ptr.is_null() {
-            return Ok(uid.to_string());
+        let ptr = pick(unsafe { &*result });
+        if ptr.is_null() {
+            return Ok(None);
         }
-        // SAFETY: `pw_name` points into `buf`, NUL-terminated, and `buf` is
+        // SAFETY: the field points into `buf`, NUL-terminated, and `buf` is
         // alive for this statement.
-        let name = unsafe { CStr::from_ptr(name_ptr) };
-        let name = crate::parse::lossy(name.to_bytes(), 256);
-        return Ok(if name.is_empty() {
-            uid.to_string()
-        } else {
-            name
-        });
+        let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
+        return Ok(Some(bytes));
     }
 }
 

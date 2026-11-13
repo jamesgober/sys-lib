@@ -13,6 +13,82 @@
 
 ---
 
+## [0.7.0] - 2026-11-11
+
+Optimisation: every reading measured against the crates people use for it, the
+slow ones made faster, and the numbers published in `docs/PERFORMANCE.md`. The
+fixes from the independent review of 0.6.0 are in this release too.
+
+### Added
+
+- `docs/PERFORMANCE.md`: warm and cold numbers against sysinfo, num_cpus,
+  os_info, raw-cpuid, and machine-uid on Linux (x86-64, Arm64, and a container
+  with limits), Windows, and macOS (Apple silicon and Intel), the footprint,
+  and the reason for each reading that is not 20% ahead.
+- `bench/`: the benchmarks (criterion warm, a fresh-process cold harness,
+  footprint binaries) and a 5% regression gate that runs on every pull request.
+- `Guard::is_held()`: whether the lock file at its path is still the one the
+  guard locked, for a long-running service to check.
+- A test that no reading keeps a file descriptor or handle open.
+
+### Changed
+
+- **The guard's default lock directory depends only on the user**, never on
+  `$XDG_RUNTIME_DIR`, `$XDG_STATE_HOME`, or `$HOME`: `/run/<name>` for root on
+  Linux (`/var/run/<name>` on macOS and FreeBSD), and under the account
+  database's home directory for other users. Before, a copy started by a
+  service manager and one started from a shell could take different locks and
+  both run. A user without a home directory now gets `RunDirUnavailable`
+  unless `lock_dir` is passed (D-106).
+- The guard checks the lock file again after locking it, so a file replaced in
+  between is never the one held, and on Windows opens it without delete
+  sharing, so the held file cannot be deleted (D-107).
+- `cpu::logical()`, `cpu::physical()`, and the CPU identity are cached apart:
+  the first `cpu::logical()` on Linux reads one small file (271 µs to 13 µs
+  cold on 32 CPUs) (D-101).
+- Windows `mem::snapshot()` takes swap from `GlobalMemoryStatusEx` (53 µs to
+  1.6 µs); **`Memory::cached` is now `None` on Windows**, whose only source
+  counted every handle on the machine (D-102).
+- Windows remembers each fixed volume's SSD or HDD kind (D-104), and reads the
+  host name once (a new name takes effect at restart): `host::name()` from
+  about 100 µs to a copy.
+- The Linux file helpers share one non-generic read loop, and the kernel
+  release comes from `uname` (D-101, D-103).
+- The readiness report shows the data directory's filesystem without its mount
+  source, which can name a server, an account, or a volume, and prints control
+  characters in found values as `?` (D-110).
+- The documented Windows costs of `process::threads()` and `host::name()`, and
+  the dependency claim: no third-party dependencies by default, while
+  `device-id` brings crypt-io's BLAKE3 stack.
+
+### Fixed
+
+- 32-bit Linux read the utmp database with the 64-bit record layout, so
+  `host::sessions()` lost users and login times.
+- `cpu::is_32bit()` was false on 32-bit processors running 32-bit Linux.
+- Past 4 096 mounts, `disk::of()`, the readiness data-directory checks, and the
+  posture's disk encryption failed; `disk::of()` now streams the mount table
+  and keeps only the best match (D-109).
+- A mountinfo line longer than 8 KiB was skipped, so `disk::of()` reported the
+  parent mount; lines up to 64 KiB are read whole, longer ones are `TooLarge`
+  (D-108).
+- A FIFO or device at a file path such as `/etc/os-release` blocked the caller,
+  and every later `os::*` caller, forever (D-108).
+- A hostile CPU list of many wide ranges took seconds to parse; ranges are now
+  set a word at a time.
+- A cgroup membership matched a mount root by byte prefix, so `/docker/abc`
+  read limits under `/docker/ab`.
+- The Linux directory walk formed a reference to a whole `dirent` from a record
+  that may be shorter.
+- macOS `host::processes()` and `process::open_files()` returned a full buffer
+  as the count when the table outgrew three reads; they are now `TooLarge`.
+- Windows `disk::of()` described a disk for device-namespace paths
+  (`\\.\NUL`); they are now `NotFound`.
+- `AlreadyRunning`'s message calls the pid from the pid file a hint to check,
+  not a process to stop.
+
+---
+
 ## [0.6.0] - 2026-11-08
 
 Environment and reports: feature complete. The settings that decide whether a
@@ -330,7 +406,8 @@ The scaffold and the plan. No functional code yet.
   `dev/ROADMAP.md`.
 - `tests/fixtures/` and `fuzz/` skeletons.
 
-[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/jamesgober/sys-lib/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jamesgober/sys-lib/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jamesgober/sys-lib/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/jamesgober/sys-lib/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jamesgober/sys-lib/compare/v0.4.0...v0.5.0

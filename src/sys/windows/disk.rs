@@ -366,6 +366,34 @@ fn volume_device(device: &str) -> Vec<u16> {
 /// `IOCTL_STORAGE_QUERY_PROPERTY` for the seek penalty, on the volume opened
 /// with no access rights (the control is `FILE_ANY_ACCESS`). `Unknown` for what
 /// does not answer: a spanned volume, a virtual disk driver.
+/// The most volumes whose kind is remembered.
+const KIND_CACHE: usize = 64;
+
+/// [`fixed_kind`], remembered per volume: whether a volume rotates does not
+/// change, and asking opens the volume, the costliest step of a listing
+/// (D-104). Keyed by the device and the volume serial, so a drive letter
+/// given to another volume is asked again; an unknown answer is not kept.
+fn cached_fixed_kind(device: &str, serial: Option<u32>) -> DiskKind {
+    static KINDS: std::sync::Mutex<Vec<(String, u32, DiskKind)>> =
+        std::sync::Mutex::new(Vec::new());
+    let Some(serial) = serial else {
+        return fixed_kind(device);
+    };
+    if let Ok(kinds) = KINDS.lock()
+        && let Some(&(_, _, kind)) = kinds.iter().find(|(d, s, _)| *s == serial && d == device)
+    {
+        return kind;
+    }
+    let kind = fixed_kind(device);
+    if kind != DiskKind::Unknown
+        && let Ok(mut kinds) = KINDS.lock()
+        && kinds.len() < KIND_CACHE
+    {
+        kinds.push((device.to_owned(), serial, kind));
+    }
+    kind
+}
+
 fn fixed_kind(device: &str) -> DiskKind {
     let path = volume_device(device);
     // SAFETY: `path` is NUL-terminated; no security attributes or template.
@@ -459,7 +487,7 @@ fn describe(root: &Root, options: &ListOptions) -> Option<(Disk, Option<u32>)> {
         label: Some(from_wide(&label)).filter(|l| ok && !l.is_empty()),
         filesystem,
         kind: if drive == ffi::DRIVE_FIXED {
-            fixed_kind(&root.device)
+            cached_fixed_kind(&root.device, ok.then_some(serial))
         } else {
             drive_kind(drive)
         },
@@ -534,6 +562,14 @@ pub(crate) fn disk_of(path: &Path) -> Result<Disk> {
             None => path.to_path_buf(),
         },
     };
+    // The device namespace (`\\.\NUL`, `\\.\pipe\`) holds no disk, though
+    // GetVolumePathNameW answers for it.
+    if real.as_os_str().as_encoded_bytes().starts_with(br"\\.\") {
+        return Err(Error::NotFound {
+            what: "disk of a path",
+            source: "the device namespace",
+        });
+    }
     with_wide_path(&real, |p| {
         let mut root = vec![0u16; p.len() + 1];
         // SAFETY: `p` is NUL-terminated; `root` is writable for its length in
@@ -743,6 +779,14 @@ pub(crate) fn disk_pressure() -> Result<Option<Pressure>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_windows_disk_of_device_namespace_is_not_found() {
+        for path in [r"\\.\NUL", r"\\.\pipe\", r"\\.\PhysicalDrive0"] {
+            let e = disk_of(Path::new(path)).unwrap_err();
+            assert!(matches!(e, Error::NotFound { .. }), "{path}: {e:?}");
+        }
+    }
 
     fn units(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()
