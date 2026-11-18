@@ -79,13 +79,15 @@ Exit: every item in `docs/API.md` implemented and tested; FreeBSD and 32-bit Lin
 
 ## v0.7.0 - Optimisation
 Exit: every target in `PLAN.md` section 18 measured and published; at least 20% faster than the best competitor for each reading at equal correctness, or a recorded, reviewed reason.
-- [ ] Benchmarks for every row against sysinfo, num_cpus, os_info, raw-cpuid, machine-uid; warm and cold; bare metal and container; the new readings included (disk I/O against sysinfo's disk usage, counts, reports).
-- [ ] Footprint measurements (dependencies, build time, binary size, descriptors held).
-- [ ] Optimise until every bar is met or the reason it cannot be is recorded.
-- [ ] `docs/PERFORMANCE.md` published; criterion baselines stored; the 5% regression gate active.
+- [x] Benchmarks for every row against sysinfo, num_cpus, os_info, raw-cpuid, machine-uid; warm and cold; runners for Linux x86-64 and Arm64, Windows, macOS Apple silicon and Intel, and Docker with cgroup v2 limits; the new readings included (disk I/O against sysinfo's disk usage, counts, reports) (D-105).
+- [x] Footprint measurements (dependencies, build time, binary size, descriptors held).
+- [ ] Optimise until every bar is met or the reason it cannot be is recorded: done for the cold CPU count, Windows memory and disks, and the Linux file reads (D-101 to D-104); the readings still below the bar are listed in `docs/PERFORMANCE.md`, those marked open carried into the pre-1.0 pass.
+- [x] `docs/PERFORMANCE.md` published; the 5% regression gate active, measuring the base in the same job instead of a stored baseline (D-105).
 
 ## v0.8.0 - Hardening
 Exit: no open finding; every threat has a passing attack test.
+- [ ] The remaining items of the independent review of 0.6.0 (tracked with the review).
+- [ ] The readings marked open in `docs/PERFORMANCE.md`, macOS `device::id` and `mem::snapshot` first.
 - [ ] Fuzzing: 24 hours per target with no finding open (the new parsers included: diskstats, vmstat, PSI, resolv.conf, utmp, sysctl text, SMBIOS types 0, 2, 17).
 - [ ] Attack tests for T1 to T16 complete; `docs/SECURITY.md` with the cost of each defence.
 - [ ] Soak: 8 hours, no growth in memory, descriptors, handles, CF references.

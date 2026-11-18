@@ -59,7 +59,7 @@ const LONG_LINE: usize = 64 << 10;
 /// `O_NONBLOCK | O_NOCTTY` (fcntl.h), the same on every supported Linux
 /// architecture.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-const OPEN_NONBLOCK: i32 = 0o4000 | 0o400;
+pub(crate) const OPEN_NONBLOCK: i32 = 0o4000 | 0o400;
 
 /// Where the Linux file tree is: the real `/`, or a fixture directory.
 #[derive(Clone, Debug)]
@@ -574,23 +574,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    #[test]
-    fn test_root_fifo_does_not_block() {
-        // T7: a FIFO with no writer at a file path returns at once.
-        assert_eq!(OPEN_NONBLOCK, libc::O_NONBLOCK | libc::O_NOCTTY);
-        let dir = scratch("fifo");
-        let made = std::process::Command::new("mkfifo")
-            .arg(dir.join("etc/os-release"))
-            .status();
-        if !made.is_ok_and(|s| s.success()) {
-            return; // No mkfifo here.
-        }
-        let start = std::time::Instant::now();
-        assert!(Root::at(&dir).text("/etc/os-release").is_none());
-        assert!(start.elapsed() < std::time::Duration::from_secs(2));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+    // The FIFO test is in `sys::linux`, where `mkfifo` can be called.
 
     /// The files the 0.3 readings may open. A new read shows up here as a test
     /// failure, so it gets reviewed (threat T4; PLAN.md section 22).

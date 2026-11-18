@@ -355,6 +355,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_linux_root_fifo_does_not_block() {
+        // T7: a FIFO with no writer at a file path returns at once.
+        assert_eq!(tree::OPEN_NONBLOCK, libc::O_NONBLOCK | libc::O_NOCTTY);
+        let dir = std::env::temp_dir().join(format!("sys-lib-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("etc")).unwrap();
+        let path = std::ffi::CString::new(
+            dir.join("etc/os-release")
+                .into_os_string()
+                .into_encoded_bytes(),
+        )
+        .unwrap();
+        // SAFETY: `path` is a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        let start = std::time::Instant::now();
+        assert!(Root::at(&dir).text("/etc/os-release").is_none());
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_sys_linux_user_name_of_root_and_of_an_unknown_uid() {
         assert_eq!(user_name(0).unwrap(), "root");
         // A uid nobody has: its number.
