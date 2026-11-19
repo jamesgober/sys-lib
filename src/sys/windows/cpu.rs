@@ -15,7 +15,7 @@ use crate::{
     Error, Mhz, Pressure, Result,
     cpu::{CpuQuota, Frequency, Load, States, Times, Vendor},
     mem::LimitSource,
-    sys::CpuFacts,
+    sys::CpuIdentity,
 };
 
 /// The registry key of the first processor.
@@ -39,16 +39,21 @@ pub(crate) const CPU_STATES: States = States {
     irq: false,
 };
 
-pub(crate) fn cpu() -> CpuFacts {
-    let logical = usize::try_from(ffi::GetActiveProcessorCount(ffi::ALL_PROCESSOR_GROUPS))
+/// Every processor group's active processors: one call.
+pub(crate) fn cpu_logical() -> Option<usize> {
+    usize::try_from(ffi::GetActiveProcessorCount(ffi::ALL_PROCESSOR_GROUPS))
         .ok()
         .filter(|&n| n > 0)
-        .or_else(|| {
-            std::thread::available_parallelism()
-                .ok()
-                .map(std::num::NonZero::get)
-        })
-        .unwrap_or(1);
+}
+
+pub(crate) fn cpu_counts() -> (Option<usize>, Option<usize>) {
+    (
+        count_relations(ffi::lpi::RELATION_PROCESSOR_CORE),
+        count_relations(ffi::lpi::RELATION_PROCESSOR_PACKAGE),
+    )
+}
+
+pub(crate) fn cpu_identity() -> CpuIdentity {
     let key = Key::local_machine(CPU0);
     let raw_name = key.as_ref().and_then(|k| k.string("ProcessorNameString"));
     let vendor_id = key
@@ -70,10 +75,7 @@ pub(crate) fn cpu() -> CpuFacts {
     } else {
         Vendor::Unknown
     };
-    CpuFacts {
-        logical,
-        physical: count_relations(ffi::lpi::RELATION_PROCESSOR_CORE),
-        packages: count_relations(ffi::lpi::RELATION_PROCESSOR_PACKAGE),
+    CpuIdentity {
         raw_name,
         name: None,
         vendor,
@@ -462,22 +464,22 @@ mod tests {
 
     #[test]
     fn test_cpu_windows_live_counts_times_and_frequency() {
-        let facts = cpu();
-        let physical = facts.physical.unwrap();
-        let packages = facts.packages.unwrap();
-        assert!(physical >= 1 && physical <= facts.logical);
+        let logical = cpu_logical().unwrap();
+        let (physical, packages) = cpu_counts();
+        let (physical, packages) = (physical.unwrap(), packages.unwrap());
+        assert!(physical >= 1 && physical <= logical);
         assert!(packages >= 1 && packages <= physical);
-        let a = cpu_available(facts.logical);
-        assert!(a >= 1 && a <= facts.logical);
-        assert_eq!(cpu_online(facts.logical), facts.logical);
+        let a = cpu_available(logical);
+        assert!(a >= 1 && a <= logical);
+        assert_eq!(cpu_online(logical), logical);
         assert!(processor_is_64bit() || cfg!(target_pointer_width = "32"));
 
         let t = cpu_times().unwrap();
         assert!(t.idle > Duration::ZERO && t.user > Duration::ZERO);
-        let mut out = vec![Times::default(); facts.logical];
+        let mut out = vec![Times::default(); logical];
         match cpu_times_per_core(&mut out) {
             Ok((total, n)) => {
-                assert_eq!(n, facts.logical);
+                assert_eq!(n, logical);
                 assert!(total.idle >= t.idle);
                 // The cores add up to about the total (read a moment apart).
                 let idle: Duration = out[..n].iter().map(|c| c.idle).sum();
@@ -488,7 +490,7 @@ mod tests {
                     Err(Error::TooLarge { .. })
                 ));
             }
-            Err(Error::Unsupported { .. }) => assert!(facts.logical > GROUP),
+            Err(Error::Unsupported { .. }) => assert!(logical > GROUP),
             Err(e) => panic!("{e}"),
         }
 

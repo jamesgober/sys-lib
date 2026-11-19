@@ -1,0 +1,36 @@
+[package]
+name = "sys-lib-bench"
+version = "0.0.0"
+publish = false
+edition = "2024"
+description = "sys-lib's benchmarks against the crates people use instead (dev/PLAN.md section 18)."
+
+# Its own crate, like fuzz/: the competitors need newer toolchains than
+# sys-lib's MSRV (sysinfo 0.40 needs 1.95), so they never enter sys-lib's
+# dev-dependencies, and this crate is not part of the published package.
+
+[dependencies]
+sys-lib = { path = "..", features = ["device-id"] }
+sysinfo = "0.40"
+num_cpus = "1.17"
+os_info = { version = "3.15", default-features = false }
+machine-uid = "0.6"
+blake3 = "1.8"
+
+[target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dependencies]
+raw-cpuid = "11.6"
+
+[dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "readings"
+harness = false
+
+# Keeps this crate out of any parent workspace.
+[workspace]
+members = ["."]
+
+# The footprint binaries are measured stripped, as a service ships.
+[profile.release]
+strip = true

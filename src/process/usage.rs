@@ -101,8 +101,8 @@ pub fn cpu_time() -> Result<CpuTime> {
 }
 
 /// This process's threads. Linux and macOS: one read, no allocation. Windows:
-/// a system-wide thread snapshot, whose cost grows with the machine's thread
-/// count.
+/// a snapshot of every process on the machine, 5 to 60 ms on a busy host:
+/// call it rarely there, never per request.
 ///
 /// # Errors
 ///

@@ -21,10 +21,27 @@ const DEFAULT_OPEN_FILES_TARGET: u64 = 65_536;
 const DEFAULT_OPEN_FILES_MINIMUM: u64 = 1_024;
 
 /// Starts the process guard with secure defaults: a single-instance lock in
-/// path-lib's runtime directory for `name`, `umask(0o027)`, and the soft
+/// the default lock directory for `name`, `umask(0o027)`, and the soft
 /// open-file limit raised to 65 536 (at least 1 024 required). Call it before
 /// any file is opened and before threads start, and keep the [`Guard`] for the
 /// life of the process.
+///
+/// The default lock directory depends only on the user the process runs as,
+/// never on environment variables, so a copy started by a service manager and
+/// one started from a shell find the same lock (D-106):
+///
+/// | Platform | root | other users |
+/// |---|---|---|
+/// | Linux | `/run/<name>` | `<home>/.local/state/<name>/run` |
+/// | macOS | `/var/run/<name>` | `<home>/Library/Application Support/<name>/run` |
+/// | FreeBSD | `/var/run/<name>` | `<home>/.local/state/<name>/run` |
+/// | Windows | the user's local application data folder, `<name>\run` | the same |
+///
+/// `<home>` is the home directory in the account database, not `$HOME`. The
+/// lock is per user: copies running as different users do not exclude each
+/// other. A program guarding shared data (a database) passes its data
+/// directory with [`GuardBuilder::lock_dir`], so every copy that could touch
+/// the data finds the same lock.
 ///
 /// ```no_run
 /// use sys_lib as sys;
@@ -39,8 +56,9 @@ const DEFAULT_OPEN_FILES_MINIMUM: u64 = 1_024;
 ///
 /// [`Error::AlreadyRunning`] when another copy holds the lock,
 /// [`Error::RunDirUnavailable`] when the lock directory cannot be created or
-/// trusted, [`Error::OpenFilesTooLow`] when the hard open-file limit is below
-/// the minimum, and [`Error::InvalidInput`] for an invalid name.
+/// trusted (or, for a user other than root, the account has no home
+/// directory), [`Error::OpenFilesTooLow`] when the hard open-file limit is
+/// below the minimum, and [`Error::InvalidInput`] for an invalid name.
 pub fn guard(name: &str) -> Result<Guard> {
     Guard::builder(name).build()
 }
@@ -48,10 +66,16 @@ pub fn guard(name: &str) -> Result<Guard> {
 /// The running guard. Dropping it closes the lock file, which releases the
 /// lock; the lock file itself is never deleted (deleting it would let two
 /// copies run, see the plan's guard section).
+///
+/// The lock belongs to the file, not to its path. On Windows the file cannot
+/// be deleted or renamed while the guard holds it. On Unix it can (a temporary
+/// file cleaner, an operator's `rm`), and a copy started afterwards would
+/// create a new lock file and run; [`Guard::is_held`] tells a long-running
+/// service when that has happened.
 #[must_use = "dropping the guard releases the single-instance lock"]
 pub struct Guard {
-    // Held for its lock; read by nothing.
-    _lock: Option<File>,
+    // Held for its lock.
+    lock: Option<File>,
     report: GuardReport,
 }
 
@@ -93,6 +117,29 @@ impl Guard {
     pub fn lock_file(&self) -> Option<&Path> {
         self.report.lock_file.as_deref()
     }
+
+    /// Whether the lock file at its path is still the one this guard locked.
+    /// False when the file was deleted or replaced since (only possible on
+    /// Unix), so another copy could now start, or when no lock was taken.
+    /// A service that runs for long can check it periodically and stop.
+    ///
+    /// ```no_run
+    /// use sys_lib as sys;
+    ///
+    /// let guard = sys::process::guard("site")?;
+    /// // ... later, on a timer:
+    /// if !guard.is_held() {
+    ///     eprintln!("the lock file was removed; stopping so only one copy runs");
+    /// }
+    /// # Ok::<(), sys_lib::Error>(())
+    /// ```
+    #[must_use]
+    pub fn is_held(&self) -> bool {
+        match (&self.lock, &self.report.lock_file) {
+            (Some(file), Some(path)) => same_file(file, path),
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Debug for Guard {
@@ -116,9 +163,11 @@ pub struct GuardBuilder {
 }
 
 impl GuardBuilder {
-    /// The directory for the lock and pid files. The default is path-lib's
-    /// runtime directory for the name; a database should pass its data
-    /// directory. Created owner-only (0700) when missing.
+    /// The directory for the lock and pid files. The default depends only on
+    /// the user (see [`guard`]); a database should pass its data directory.
+    /// Created owner-only (0700) on Unix when missing; on Windows it inherits
+    /// its parent's permissions, so choose a parent other users cannot write
+    /// to (not `C:\ProgramData` itself).
     #[must_use]
     pub fn lock_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.lock_dir = Some(dir.into());
@@ -191,7 +240,7 @@ impl GuardBuilder {
                     create_owner_only(d)?;
                     d.clone()
                 }
-                None => runtime_dir(&self.name)?,
+                None => default_dir(&self.name)?,
             };
             check_dir(&dir)?;
             let fs_kind = sys::filesystem(&dir);
@@ -213,22 +262,7 @@ impl GuardBuilder {
             }
             let lock_path = dir.join(format!("{}.lock", self.name));
             let pid_path = dir.join(format!("{}.pid", self.name));
-            let file = open_lock_file(&dir, &lock_path)?;
-            match file.try_lock() {
-                Ok(()) => {}
-                Err(fs::TryLockError::WouldBlock) => {
-                    return Err(Error::AlreadyRunning {
-                        pid: read_pid(&pid_path),
-                        lock_file: lock_path,
-                    });
-                }
-                Err(fs::TryLockError::Error(e)) => {
-                    return Err(Error::Io {
-                        what: "the process guard's lock",
-                        source: e,
-                    });
-                }
-            }
+            let file = lock_file(&dir, &lock_path, &pid_path)?;
             path_lib::write_atomic(&pid_path, format!("{}\n", std::process::id())).map_err(
                 |e| {
                     unavailable(
@@ -276,7 +310,7 @@ impl GuardBuilder {
         }
 
         Ok(Guard {
-            _lock: lock,
+            lock,
             report: GuardReport {
                 lock_file,
                 lock_filesystem,
@@ -376,6 +410,112 @@ fn unavailable(dir: &Path, kind: io::ErrorKind, reason: &str) -> Error {
     Error::RunDirUnavailable {
         path: dir.to_path_buf(),
         source: io::Error::new(kind, reason.to_owned()),
+    }
+}
+
+/// Opens and locks the lock file, then checks that the locked file is still
+/// the one at the path: a file deleted or replaced between the open and the
+/// lock would hold a lock no other copy can see. Bounded retries.
+fn lock_file(dir: &Path, lock_path: &Path, pid_path: &Path) -> Result<File> {
+    for _ in 0..LOCK_ATTEMPTS {
+        let file = open_lock_file(dir, lock_path)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(Error::AlreadyRunning {
+                    pid: read_pid(pid_path),
+                    lock_file: lock_path.to_path_buf(),
+                });
+            }
+            Err(fs::TryLockError::Error(e)) => {
+                return Err(Error::Io {
+                    what: "the process guard's lock",
+                    source: e,
+                });
+            }
+        }
+        if same_file(&file, lock_path) {
+            return Ok(file);
+        }
+    }
+    Err(unavailable(
+        dir,
+        io::ErrorKind::Interrupted,
+        "the lock file keeps being replaced while it is locked; find what removes it",
+    ))
+}
+
+/// How many times [`lock_file`] opens and locks before giving up.
+const LOCK_ATTEMPTS: usize = 3;
+
+/// Whether `path` names the open `file`.
+fn same_file(file: &File, path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (file.metadata(), fs::symlink_metadata(path)) {
+            (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Opened without delete sharing, so the file cannot be deleted or
+        // renamed while it is open; the path only has to exist.
+        let _ = file;
+        fs::symlink_metadata(path).is_ok()
+    }
+}
+
+/// The default lock directory, from the user alone (D-106).
+#[cfg(unix)]
+fn default_dir(name: &str) -> Result<PathBuf> {
+    let Some(uid) = sys::effective_uid() else {
+        return runtime_dir(name);
+    };
+    let dir = if uid == 0 {
+        system_run_dir().join(name)
+    } else {
+        let home = sys::home_dir(uid).ok_or_else(|| {
+            unavailable(
+                Path::new(name),
+                io::ErrorKind::NotFound,
+                &format!(
+                    "user {uid} has no home directory in the account database for the default lock;                      pass lock_dir"
+                ),
+            )
+        })?;
+        user_run_dir(&home, name)
+    };
+    create_owner_only(&dir)?;
+    Ok(dir)
+}
+
+#[cfg(not(unix))]
+fn default_dir(name: &str) -> Result<PathBuf> {
+    // The known-folder path, which does not follow environment variables.
+    runtime_dir(name)
+}
+
+/// The system run directory for root.
+#[cfg(unix)]
+fn system_run_dir() -> &'static Path {
+    if cfg!(any(target_os = "linux", target_os = "android")) && Path::new("/run").is_dir() {
+        Path::new("/run")
+    } else {
+        Path::new("/var/run")
+    }
+}
+
+/// The per-user run directory under `home`.
+#[cfg(unix)]
+fn user_run_dir(home: &Path, name: &str) -> PathBuf {
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
+        home.join("Library/Application Support")
+            .join(name)
+            .join("run")
+    } else {
+        home.join(".local/state").join(name).join("run")
     }
 }
 
@@ -645,6 +785,69 @@ mod tests {
         assert!(again.is_ok());
         drop(again);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_guard_is_held_until_the_lock_file_is_replaced() {
+        // A lock file deleted while held: the guard notices, and a later copy
+        // gets a new lock (Unix); Windows refuses the delete instead.
+        let dir = temp_dir("held");
+        let g = Guard::builder("held")
+            .lock_dir(&dir)
+            .keep_umask()
+            .open_files_target(0)
+            .open_files_minimum(0)
+            .build()
+            .unwrap();
+        assert!(g.is_held());
+        let lock = g.lock_file().unwrap().to_path_buf();
+        let removed = fs::remove_file(&lock);
+        if cfg!(windows) {
+            assert!(removed.is_err(), "a held lock file was deleted");
+            assert!(g.is_held());
+        } else {
+            removed.unwrap();
+            assert!(!g.is_held());
+            fs::write(&lock, b"").unwrap();
+            assert!(!g.is_held(), "a new file at the path is not the locked one");
+        }
+        drop(g);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_guard_without_lock_is_not_held() {
+        let g = Guard::builder("unheld")
+            .lock(false)
+            .keep_umask()
+            .open_files_target(0)
+            .open_files_minimum(0)
+            .build()
+            .unwrap();
+        assert!(!g.is_held());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_guard_default_dir_ignores_the_environment() {
+        // D-106: the default comes from the uid and the account database.
+        let uid = sys::effective_uid().unwrap();
+        if uid == 0 {
+            assert!(system_run_dir().is_dir());
+            return;
+        }
+        let Some(home) = sys::home_dir(uid) else {
+            return;
+        };
+        let dir = user_run_dir(&home, "probe");
+        assert!(dir.starts_with(&home));
+        assert!(dir.ends_with("probe/run"));
+        let dir = user_run_dir(Path::new("/h"), "site");
+        if cfg!(target_os = "macos") {
+            assert_eq!(dir, Path::new("/h/Library/Application Support/site/run"));
+        } else {
+            assert_eq!(dir, Path::new("/h/.local/state/site/run"));
+        }
     }
 
     #[test]

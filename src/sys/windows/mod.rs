@@ -402,7 +402,18 @@ fn windows_name(
     }
 }
 
+/// The host name, read once: a new Windows computer name takes effect only at
+/// restart, and each read is a registry read (about 100 µs on a busy host).
 pub(crate) fn host_name() -> Result<String> {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(name) = NAME.get() {
+        return Ok(name.clone());
+    }
+    let name = read_host_name()?;
+    Ok(NAME.get_or_init(|| name).clone())
+}
+
+fn read_host_name() -> Result<String> {
     let mut len = 0u32;
     // SAFETY: a null buffer with size 0 asks for the size needed.
     unsafe {
@@ -503,7 +514,11 @@ pub(crate) fn open_files_ceiling() -> Option<u64> {
 #[cfg(feature = "guard")]
 pub(crate) fn lock_open_options(options: &mut OpenOptions) {
     use std::os::windows::fs::OpenOptionsExt;
-    options.custom_flags(ffi::FILE_FLAG_OPEN_REPARSE_POINT);
+    // No FILE_SHARE_DELETE: nobody can delete or rename the lock file while
+    // the guard holds it, which would let a second copy create a new one.
+    options
+        .custom_flags(ffi::FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(ffi::FILE_SHARE_READ | ffi::FILE_SHARE_WRITE);
 }
 
 #[cfg(feature = "guard")]

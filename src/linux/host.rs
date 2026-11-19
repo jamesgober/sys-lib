@@ -57,9 +57,10 @@ pub(crate) fn zone_name(root: &Root, env: Option<&str>) -> Option<String> {
     .flatten()
 }
 
-/// The record layout of this target's utmp file.
+/// The record layout of this target's utmp file: x86-64 keeps the 32-bit
+/// layout for compatibility, and 32-bit targets have it natively.
 const fn layout() -> utmp::Layout {
-    if cfg!(target_arch = "x86_64") {
+    if cfg!(any(target_arch = "x86_64", target_pointer_width = "32")) {
         utmp::COMPAT32
     } else {
         utmp::NATIVE64
@@ -93,6 +94,24 @@ pub(crate) fn sessions(root: &Root) -> Result<Vec<Session>> {
 #[cfg(test)]
 mod tests {
     use super::{super::fixtures, *};
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn test_linux_host_utmp_layout_is_glibcs() {
+        // The record size glibc writes on this target: 384 bytes on x86-64
+        // and 32-bit targets, 400 on other 64-bit ones.
+        assert_eq!(layout().size(), std::mem::size_of::<libc::utmpx>());
+    }
+
+    #[test]
+    fn test_linux_host_utmp_layout_by_target() {
+        let expect = if cfg!(any(target_arch = "x86_64", target_pointer_width = "32")) {
+            384
+        } else {
+            400
+        };
+        assert_eq!(layout().size(), expect);
+    }
 
     #[test]
     fn test_linux_host_open_files_from_a_fixture() {

@@ -31,47 +31,88 @@ pub(crate) struct Facts {
     pub(crate) is_64bit: Option<bool>,
 }
 
-/// Reads the static CPU facts.
-pub(crate) fn read(root: &Root) -> Facts {
-    let info = root
-        .read_prefix(
-            "/proc/cpuinfo",
-            super::FILE_LIMIT,
-            "cpuinfo",
-            "/proc/cpuinfo",
-        )
-        .map(|d| cpuinfo::parse(&d))
-        .unwrap_or_default();
-    let present = root
-        .with(
-            "/sys/devices/system/cpu/present",
-            "cpus",
-            "/sys/devices/system/cpu/present",
-            CpuSet::parse,
-        )
-        .ok()
-        .and_then(Result::ok)
-        .filter(|s| s.count() > 0);
-    let logical = present
-        .as_ref()
-        .map(CpuSet::count)
-        .or((info.processors > 0).then_some(info.processors));
+/// The prefix of `/proc/cpuinfo` that holds the first CPU's block on x86:
+/// the kernel formats the file as it is read, so a prefix costs a fraction of
+/// the whole on a machine with many CPUs.
+const CPUINFO_PREFIX: usize = 8 << 10;
+
+fn present(root: &Root) -> Option<CpuSet> {
+    root.with(
+        "/sys/devices/system/cpu/present",
+        "cpus",
+        "/sys/devices/system/cpu/present",
+        CpuSet::parse,
+    )
+    .ok()
+    .and_then(Result::ok)
+    .filter(|s| s.count() > 0)
+}
+
+fn cpuinfo_whole(root: &Root) -> cpuinfo::CpuInfo {
+    root.read_prefix(
+        "/proc/cpuinfo",
+        super::FILE_LIMIT,
+        "cpuinfo",
+        "/proc/cpuinfo",
+    )
+    .map(|d| cpuinfo::parse(&d))
+    .unwrap_or_default()
+}
+
+/// Present CPUs (E-15: not `possible`, which VMs inflate): one small file.
+pub(crate) fn logical(root: &Root) -> Option<usize> {
+    present(root).as_ref().map(CpuSet::count)
+}
+
+/// Physical cores and packages from the topology files, else the cores
+/// `/proc/cpuinfo` lists.
+pub(crate) fn counts(root: &Root) -> (Option<usize>, Option<usize>) {
+    let present = present(root);
+    let logical = present.as_ref().map(CpuSet::count);
     let topology = present.as_ref().and_then(|p| cores_from_topology(root, p));
-    let physical = topology.map(|(cores, _)| cores).or(info.cores);
-    let packages = topology.and_then(|(_, packages)| packages);
+    let physical = topology
+        .map(|(cores, _)| cores)
+        .or_else(|| cpuinfo_whole(root).cores);
+    (
+        physical.map(|p| p.min(logical.unwrap_or(p)).max(1)),
+        topology.and_then(|(_, packages)| packages),
+    )
+}
+
+/// The brand string, the ARM core name, and the vendor. x86 names the CPU in
+/// the first block, so only a prefix is read; ARM lists each core's part, so a
+/// big.LITTLE name needs the whole file.
+pub(crate) fn identity(root: &Root) -> Facts {
+    let prefix = root
+        .read_prefix("/proc/cpuinfo", CPUINFO_PREFIX, "cpuinfo", "/proc/cpuinfo")
+        .unwrap_or_default();
+    let mut info = cpuinfo::parse(&prefix);
+    if !info.arm_parts.is_empty() && prefix.len() >= CPUINFO_PREFIX {
+        info = cpuinfo_whole(root);
+    }
     let vendor = match (&info.vendor_id, info.arm_parts.first()) {
         (Some(v), _) => x86_vendor(v),
         (None, Some(&(implementer, _))) => arm_vendor(implementer),
         (None, None) => Vendor::Unknown,
     };
     Facts {
-        logical,
-        physical: physical.map(|p| p.min(logical.unwrap_or(p)).max(1)),
-        packages,
         raw_name: info.model_name.clone(),
         arm_name: cpu_name::arm_name(&info.arm_parts),
         vendor,
         is_64bit: info.is_64bit,
+        ..Facts::default()
+    }
+}
+
+/// Every static CPU fact at once, as the three readers above give them.
+#[cfg(test)]
+pub(crate) fn read(root: &Root) -> Facts {
+    let (physical, packages) = counts(root);
+    Facts {
+        logical: logical(root),
+        physical,
+        packages,
+        ..identity(root)
     }
 }
 
@@ -82,6 +123,9 @@ pub(crate) fn read(root: &Root) -> Facts {
 /// container); the package count is `None` when no `physical_package_id`
 /// reads.
 fn cores_from_topology(root: &Root, present: &CpuSet) -> Option<(usize, Option<usize>)> {
+    // One list per package where the kernel has them (5.3 and later, or the
+    // older `core_siblings_list`): a read per package instead of one per core.
+    let package_groups = groups(root, present, &["package_cpus_list", "core_siblings_list"]);
     let mut covered = CpuSet::empty();
     let mut cores = 0;
     let mut packages: Vec<u64> = Vec::new();
@@ -90,23 +134,14 @@ fn cores_from_topology(root: &Root, present: &CpuSet) -> Option<(usize, Option<u
             continue;
         }
         let base = format!("/sys/devices/system/cpu/cpu{cpu}/topology");
-        let group = ["core_cpus_list", "thread_siblings_list"]
-            .iter()
-            .find_map(|file| {
-                let path = format!("{base}/{file}");
-                root.with(
-                    &path,
-                    "cpu topology",
-                    "/sys/devices/system/cpu",
-                    CpuSet::parse,
-                )
-                .ok()?
-                .ok()
-            })?;
+        let group = group_of(root, &base, &["core_cpus_list", "thread_siblings_list"])?;
         covered.union(&group);
         // A group that does not list its own CPU still counts that CPU once.
         covered.insert(cpu);
         cores += 1;
+        if package_groups.is_some() {
+            continue;
+        }
         let package = root
             .text(&format!("{base}/physical_package_id"))
             .and_then(|t| parse_u64(t.as_bytes()));
@@ -117,7 +152,44 @@ fn cores_from_topology(root: &Root, present: &CpuSet) -> Option<(usize, Option<u
             packages.push(id);
         }
     }
-    (cores > 0).then_some((cores, (!packages.is_empty()).then_some(packages.len())))
+    let packages = package_groups.or((!packages.is_empty()).then_some(packages.len()));
+    (cores > 0).then_some((cores, packages))
+}
+
+/// The first of `files` that parses, under a CPU's topology directory.
+fn group_of(root: &Root, base: &str, files: &[&str]) -> Option<CpuSet> {
+    files.iter().find_map(|file| {
+        let path = format!("{base}/{file}");
+        root.with(
+            &path,
+            "cpu topology",
+            "/sys/devices/system/cpu",
+            CpuSet::parse,
+        )
+        .ok()?
+        .ok()
+    })
+}
+
+/// How many distinct groups `files` divide the present CPUs into, reading one
+/// file per group; `None` when a CPU has none of them.
+fn groups(root: &Root, present: &CpuSet, files: &[&str]) -> Option<usize> {
+    let mut covered = CpuSet::empty();
+    let mut n = 0;
+    for cpu in present.iter() {
+        if covered.contains(cpu) {
+            continue;
+        }
+        let group = group_of(
+            root,
+            &format!("/sys/devices/system/cpu/cpu{cpu}/topology"),
+            files,
+        )?;
+        covered.union(&group);
+        covered.insert(cpu);
+        n += 1;
+    }
+    (n > 0).then_some(n)
 }
 
 /// The CPUs this process may use now: the affinity mask, intersected with the

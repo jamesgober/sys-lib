@@ -140,7 +140,6 @@ const MAX_PIDS: usize = 4 << 20;
 #[cfg(target_os = "macos")]
 fn pid_count(what: &'static str) -> Result<u64> {
     let mut pids: Vec<c_int> = Vec::new();
-    let mut count = 0;
     for _ in 0..3 {
         // SAFETY: a null buffer asks for the estimate only.
         let estimate = unsafe { ffi::proc_listallpids(core::ptr::null_mut(), 0) };
@@ -161,13 +160,18 @@ fn pid_count(what: &'static str) -> Result<u64> {
         // most `bytes`.
         let n =
             unsafe { ffi::proc_listallpids(pids.as_mut_ptr().cast::<core::ffi::c_void>(), bytes) };
-        count = usize::try_from(n)
+        let count = usize::try_from(n)
             .map_err(|_| super::os_error(what, "proc_listallpids", super::last_errno()))?;
         if count < room {
-            break;
+            return Ok(count as u64);
         }
     }
-    Ok(count as u64)
+    // Still full after three tries: the table grows faster than it is read,
+    // and a filled buffer is not the count (a fork storm, when it matters).
+    Err(Error::TooLarge {
+        what,
+        limit: MAX_PIDS as u64,
+    })
 }
 
 /// `kern.num_files` (open now) and `kern.maxfiles`.

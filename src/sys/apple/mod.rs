@@ -42,7 +42,7 @@ use crate::{
     cpu::Vendor,
     os::Source,
     process::User,
-    sys::{CpuFacts, OsFacts},
+    sys::{CpuIdentity, OsFacts},
 };
 #[cfg(feature = "guard")]
 use crate::{process::Limit, sys::FsKind};
@@ -319,30 +319,28 @@ pub(crate) fn os() -> OsFacts {
     }
 }
 
-pub(crate) fn cpu() -> CpuFacts {
-    let count = |name: &CStr| {
-        sysctl_u64(name)
-            .and_then(|n| usize::try_from(n).ok())
-            .filter(|&n| n > 0)
-    };
-    let logical = count(c"hw.logicalcpu_max")
-        .or_else(|| count(c"hw.ncpu"))
-        .or_else(|| {
-            std::thread::available_parallelism()
-                .ok()
-                .map(std::num::NonZero::get)
-        })
-        .unwrap_or(1);
+fn cpu_count(name: &CStr) -> Option<usize> {
+    sysctl_u64(name)
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|&n| n > 0)
+}
+
+pub(crate) fn cpu_logical() -> Option<usize> {
+    cpu_count(c"hw.logicalcpu_max").or_else(|| cpu_count(c"hw.ncpu"))
+}
+
+pub(crate) fn cpu_counts() -> (Option<usize>, Option<usize>) {
+    (cpu_count(c"hw.physicalcpu_max"), cpu_count(c"hw.packages"))
+}
+
+pub(crate) fn cpu_identity() -> CpuIdentity {
     let vendor = match sysctl_string(c"machdep.cpu.vendor").as_deref() {
         Some("GenuineIntel") => Vendor::Intel,
         Some("AuthenticAMD") => Vendor::Amd,
         _ if cfg!(target_arch = "aarch64") => Vendor::Apple,
         _ => Vendor::Unknown,
     };
-    CpuFacts {
-        logical,
-        physical: count(c"hw.physicalcpu_max"),
-        packages: count(c"hw.packages"),
+    CpuIdentity {
         raw_name: sysctl_string(c"machdep.cpu.brand_string"),
         name: None,
         vendor,
@@ -396,6 +394,32 @@ pub(crate) fn is_elevated() -> Result<bool> {
 }
 
 fn user_name(uid: u32) -> Result<String> {
+    let name = passwd_field(uid, "user name", |p| p.name)?
+        .map(|b| crate::parse::lossy(&b, 256))
+        .unwrap_or_default();
+    Ok(if name.is_empty() {
+        uid.to_string()
+    } else {
+        name
+    })
+}
+
+/// The home directory in the account database for `uid`, not `$HOME`, so it
+/// does not change with the environment; `None` without an entry.
+#[cfg(feature = "guard")]
+pub(crate) fn home_dir(uid: u32) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let dir = passwd_field(uid, "home directory", |p| p.dir).ok()??;
+    (!dir.is_empty()).then(|| std::ffi::OsString::from_vec(dir).into())
+}
+
+/// One field of `uid`'s account entry through `getpwuid_r`, growing the buffer
+/// on `ERANGE` up to 64 KiB; `None` without an entry or with a null field.
+fn passwd_field(
+    uid: u32,
+    what: &'static str,
+    pick: fn(&ffi::Passwd) -> *mut c_char,
+) -> Result<Option<Vec<u8>>> {
     let mut size = 1024;
     loop {
         let mut buf = vec![0 as c_char; size];
@@ -418,28 +442,24 @@ fn user_name(uid: u32) -> Result<String> {
         }
         if rc != 0 {
             return Err(Error::Os {
-                what: "user name",
+                what,
                 call: "getpwuid_r",
                 code: rc,
             });
         }
         if result.is_null() {
-            return Ok(uid.to_string());
+            return Ok(None);
         }
         // SAFETY: on success with a non-null result, `result` points to `pwd`,
         // which the call initialised.
-        let name_ptr = unsafe { (*result).name };
-        if name_ptr.is_null() {
-            return Ok(uid.to_string());
+        let ptr = pick(unsafe { &*result });
+        if ptr.is_null() {
+            return Ok(None);
         }
-        // SAFETY: `pw_name` points into `buf`, NUL-terminated, alive here.
-        let name = unsafe { CStr::from_ptr(name_ptr) };
-        let name = crate::parse::lossy(name.to_bytes(), 256);
-        return Ok(if name.is_empty() {
-            uid.to_string()
-        } else {
-            name
-        });
+        // SAFETY: the field points into `buf`, NUL-terminated, and `buf` is
+        // alive for this statement.
+        let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
+        return Ok(Some(bytes));
     }
 }
 

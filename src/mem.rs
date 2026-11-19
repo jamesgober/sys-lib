@@ -35,7 +35,9 @@ pub struct Memory {
     pub host_free: Bytes,
     /// Pages doing nothing at all (the kernel's `MemFree`), when reported.
     pub unused: Option<Bytes>,
-    /// File cache that can be reclaimed, when reported.
+    /// File cache that can be reclaimed, when reported. Windows: `None`, as
+    /// the only documented source counts every handle on the machine; its
+    /// available memory already includes the standby cache.
     pub cached: Option<Bytes>,
     /// The limit applied to `total`, when there is one.
     pub limit: Option<MemoryLimit>,

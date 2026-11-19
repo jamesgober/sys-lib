@@ -217,7 +217,6 @@ pub(crate) fn open_files() -> Result<usize> {
     // `proc_fdinfo` is two 32-bit integers: one `u64` per entry holds it.
     let mut stack = [0u64; FD_STACK];
     let mut heap: Vec<u64> = Vec::new();
-    let mut count = 0;
     for _ in 0..3 {
         // SAFETY: a null buffer asks for the size the list may need.
         let need =
@@ -253,13 +252,17 @@ pub(crate) fn open_files() -> Result<usize> {
             )
         };
         let got = usize::try_from(got).map_err(|_| os_error(WHAT, "proc_pidinfo", last_errno()))?;
-        count = got / ENTRY;
         // A full buffer may have cut the list short: ask again.
         if got.saturating_add(ENTRY) <= core::mem::size_of_val(buf) {
-            break;
+            return Ok(got / ENTRY);
         }
     }
-    Ok(count)
+    // Still full after three tries: a filled buffer is not the count (a
+    // descriptor leak, when it matters).
+    Err(Error::TooLarge {
+        what: WHAT,
+        limit: FD_MAX as u64,
+    })
 }
 
 /// libproc is not public on iOS.

@@ -94,7 +94,10 @@ pub enum Error {
     },
     /// The process guard found another copy holding the lock.
     AlreadyRunning {
-        /// The other copy's process id, when its pid file is readable.
+        /// The other copy's process id from its pid file, when readable. A
+        /// hint, not proof: the file can still hold an earlier run's pid
+        /// for a moment after a copy starts, and that pid may since belong
+        /// to another program. Check it before stopping it.
         pid: Option<u32>,
         /// The lock file.
         lock_file: PathBuf,
@@ -212,14 +215,14 @@ impl fmt::Display for Error {
             Self::InvalidInput { what, reason } => write!(f, "invalid {what}: {reason}"),
             Self::AlreadyRunning { pid, lock_file } => {
                 write!(f, "another copy is already running")?;
+                write!(f, " and holds {}", lock_file.display())?;
                 if let Some(pid) = pid {
-                    write!(f, " as process {pid}")?;
+                    write!(
+                        f,
+                        " (its pid file names process {pid}; check that it is this program)"
+                    )?;
                 }
-                write!(
-                    f,
-                    " and holds {}; stop it, or give this copy another lock directory",
-                    lock_file.display()
-                )
+                write!(f, "; stop it, or give this copy another lock directory")
             }
             Self::RunDirUnavailable { path, source } => write!(
                 f,

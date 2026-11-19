@@ -6,11 +6,12 @@
 //!
 //! Every reading is a file read or a system call. sys-lib never starts a
 //! thread or a timer, never runs another program, and has no third-party
-//! runtime dependencies.
+//! runtime dependencies by default (the `device-id` feature brings crypt-io's
+//! BLAKE3 stack).
 //!
 //! ## Tier 1
 //!
-//! Add it with Cargo's rename, `sys = { package = "sys-lib", version = "0.6" }`,
+//! Add it with Cargo's rename, `sys = { package = "sys-lib", version = "0.7" }`,
 //! and every file writes `sys::`; without the rename, `use sys_lib as sys;`
 //! does the same (the examples use that form so they compile either way).
 //! One plain call per fact; static facts are read once and cached:
@@ -48,12 +49,13 @@
 //!
 //! ## Status
 //!
-//! `0.5.0`, detection and identity: the boot kit ([`os`], [`cpu`], [`host`],
-//! [`process`], [`build`], and instance info), the live readings ([`mem`],
-//! [`disk`], [`net`]), [`virt`], [`power`], [`summary()`], and device identity
-//! behind the `device-id` feature. The environment reports, FreeBSD, and 32-bit
-//! Linux arrive in `0.6`; the complete approved API, each item with the version
-//! it arrives in, is `docs/API.md` in the
+//! `0.7.0`, optimisation: every reading measured against the crates people
+//! use for it, with the numbers in `docs/PERFORMANCE.md`. Feature complete
+//! since `0.6`: the boot kit ([`os`], [`cpu`], [`host`], [`process`],
+//! [`build`], and instance info), the live readings ([`mem`], [`disk`],
+//! [`net`]), [`virt`], [`power`], [`summary()`], the environment reports,
+//! device identity behind the `device-id` feature, on Linux (64- and 32-bit),
+//! macOS, Windows, and FreeBSD. The complete API is `docs/API.md` in the
 //! [repository](https://github.com/jamesgober/sys-lib).
 
 #![doc(html_root_url = "https://docs.rs/sys-lib")]

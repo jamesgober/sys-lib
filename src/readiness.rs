@@ -210,7 +210,7 @@ impl fmt::Display for Report {
                 c.status.name(),
                 c.id,
                 c.title,
-                c.found,
+                printable(&c.found),
                 c.recommended
             )?;
             if c.status != Status::Pass && !c.fix.is_empty() {
@@ -218,6 +218,20 @@ impl fmt::Display for Report {
             }
         }
         Ok(())
+    }
+}
+
+/// `text` with each control character as `?`: values read from the system (a
+/// mount source can hold a line break) cannot add rows to the table, one
+/// character for one, so the columns still line up.
+fn printable(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.chars().any(char::is_control) {
+        text.chars()
+            .map(|c| if c.is_control() { '?' } else { c })
+            .collect::<String>()
+            .into()
+    } else {
+        text.into()
     }
 }
 
@@ -932,7 +946,9 @@ fn data_dir_checks(out: &mut Vec<Check>, profile: Profile, dir: &DataDir) {
         "fs.type",
         "Data directory filesystem",
         status,
-        format!("{} on {}", disk.filesystem, disk.device),
+        // The filesystem only: the mount source can name a server, an
+        // account, or a volume, and a report is made to be logged.
+        disk.filesystem.clone(),
         RECOMMENDED_FS,
         FS_WHY,
         "move the data directory to a local disk with a recommended filesystem",
@@ -1258,6 +1274,27 @@ mod tests {
             read_only: false,
             removable: false,
         }
+    }
+
+    #[test]
+    fn test_readiness_display_cannot_be_forged_and_names_no_source() {
+        // A mount source with a line break, naming a server and an account.
+        let mut i = inputs(tuned());
+        let mut d = disk("ext4", DiskKind::Ssd, 50);
+        d.device = "user@server:/x\nFAIL    fake.check  Injected".into();
+        d.filesystem = "ext4\nFAIL    forged".into();
+        i.data_dir = Some(DataDir {
+            disk: Fact::Value(d),
+            tuning: DataDirTuning::default(),
+        });
+        let r = evaluate(Profile::Database, &i);
+        let text = r.to_string();
+        assert!(!text.contains("server"), "{text}");
+        assert!(
+            !text.lines().any(|l| l.starts_with("FAIL    forged")),
+            "{text}"
+        );
+        assert_eq!(text.lines().filter(|l| l.contains("forged")).count(), 1);
     }
 
     #[test]

@@ -31,6 +31,14 @@ pub(crate) const NATIVE64: Layout = Layout {
     seconds_len: 8,
 };
 
+impl Layout {
+    /// The record size.
+    #[cfg(test)]
+    pub(crate) const fn size(self) -> usize {
+        self.size
+    }
+}
+
 const LINE_AT: usize = 8;
 const LINE_LEN: usize = 32;
 const USER_AT: usize = 44;

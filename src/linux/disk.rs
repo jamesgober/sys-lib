@@ -2,7 +2,7 @@
 //! (E-36, E-37) and the whole-disk I/O counters from `/proc/diskstats`.
 
 use core::{ops::ControlFlow, time::Duration};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{Root, join_name};
 use crate::{
@@ -146,13 +146,51 @@ fn medium(root: &Root, source: &[u8]) -> DiskKind {
     }
 }
 
-/// The entry holding `path`: the longest mount point that is a prefix of it,
-/// the last such mount when several stack. `path` is absolute and resolved.
-pub(crate) fn holding(path: &std::path::Path, entries: Vec<MountEntry>) -> Option<MountEntry> {
-    entries
-        .into_iter()
-        .filter(|m| path.starts_with(&m.mount_point))
-        .max_by_key(|m| m.mount_point.as_os_str().len())
+/// The mount holding `path` (absolute and resolved): the longest mount point
+/// that contains it, the last such mount when several stack. The table is
+/// streamed and only the best match kept, so a host with more mounts than a
+/// `disk::list` budget still answers; only the bytes read are bounded.
+pub(crate) fn holding(root: &Root, path: &Path) -> Result<Option<MountEntry>> {
+    holding_at(root, "/proc/self/mountinfo", path)
+}
+
+/// The bytes [`holding`] reads at most: the default `disk::list` budget.
+const HOLDING_BYTES: usize = 16 << 20;
+
+fn holding_at(root: &Root, file: &str, path: &Path) -> Result<Option<MountEntry>> {
+    let want = path.as_os_str().as_encoded_bytes();
+    let all = ListOptions {
+        include_network: true,
+        include_pseudo: true,
+        include_duplicates: true,
+        ..ListOptions::default()
+    };
+    let mut best: Option<(usize, MountEntry)> = None;
+    root.for_each_line(
+        file,
+        HOLDING_BYTES,
+        "disk of a path",
+        "/proc/self/mountinfo",
+        |line| {
+            if let Some(m) = mountinfo::parse_line(line) {
+                let at = &*m.mount_point;
+                let better = best.as_ref().is_none_or(|(len, _)| at.len() >= *len);
+                if better
+                    && contains(at, want)
+                    && let Some(e) = entry(root, &m, &all)
+                {
+                    best = Some((at.len(), e));
+                }
+            }
+            ControlFlow::Continue(())
+        },
+    )?;
+    Ok(best.map(|(_, e)| e))
+}
+
+/// Whether the mount point `at` contains `path`, by whole components.
+fn contains(at: &[u8], path: &[u8]) -> bool {
+    at == b"/" || (path.starts_with(at) && matches!(path.get(at.len()), None | Some(b'/')))
 }
 
 /// The filesystems `options` selects, each once (by device number) unless
@@ -182,41 +220,10 @@ pub(crate) fn mounts_at(root: &Root, path: &str, options: &ListOptions) -> Resul
             let Some(m) = mountinfo::parse_line(line) else {
                 return ControlFlow::Continue(());
             };
-            let is_root = &*m.mount_point == b"/";
-            let network = NETWORK.contains(&m.fstype);
-            let pseudo = PSEUDO.contains(&m.fstype)
-                && !(is_root && matches!(m.fstype, b"overlay" | b"rootfs"));
-            if (network && !options.include_network) || (pseudo && !options.include_pseudo) {
+            let Some(entry) = entry(root, &m, options) else {
                 return ControlFlow::Continue(());
-            }
-            let removable = removable(root, &m.source);
-            let kind = if network {
-                DiskKind::Network
-            } else if m.fstype == b"tmpfs" || m.fstype == b"ramfs" {
-                DiskKind::Ram
-            } else if m.fstype == b"overlay" || m.fstype.starts_with(b"fuse") {
-                DiskKind::Virtual
-            } else if m.source.starts_with(b"/dev/sr")
-                || m.fstype == b"iso9660"
-                || m.fstype == b"udf"
-            {
-                DiskKind::Optical
-            } else if removable {
-                DiskKind::Removable
-            } else {
-                medium(root, &m.source)
             };
-            let entry = MountEntry {
-                mount_point: PathBuf::from(lossy(&m.mount_point, 4096)),
-                device: lossy(&m.source, 4096),
-                filesystem: lossy(m.fstype, 64),
-                kind,
-                read_only: is_ro(m.options),
-                removable,
-                network,
-                dev: m.device.to_vec(),
-                options: lossy(m.options, 4096),
-            };
+            let network = entry.network;
             let duplicate = if options.include_duplicates || network {
                 None
             } else {
@@ -242,6 +249,42 @@ pub(crate) fn mounts_at(root: &Root, path: &str, options: &ListOptions) -> Resul
         });
     }
     Ok(out)
+}
+
+/// The entry for one mountinfo line, or `None` when `options` skips it.
+fn entry(root: &Root, m: &mountinfo::Mount<'_>, options: &ListOptions) -> Option<MountEntry> {
+    let is_root = &*m.mount_point == b"/";
+    let network = NETWORK.contains(&m.fstype);
+    let pseudo =
+        PSEUDO.contains(&m.fstype) && !(is_root && matches!(m.fstype, b"overlay" | b"rootfs"));
+    if (network && !options.include_network) || (pseudo && !options.include_pseudo) {
+        return None;
+    }
+    let removable = removable(root, &m.source);
+    let kind = if network {
+        DiskKind::Network
+    } else if m.fstype == b"tmpfs" || m.fstype == b"ramfs" {
+        DiskKind::Ram
+    } else if m.fstype == b"overlay" || m.fstype.starts_with(b"fuse") {
+        DiskKind::Virtual
+    } else if m.source.starts_with(b"/dev/sr") || m.fstype == b"iso9660" || m.fstype == b"udf" {
+        DiskKind::Optical
+    } else if removable {
+        DiskKind::Removable
+    } else {
+        medium(root, &m.source)
+    };
+    Some(MountEntry {
+        mount_point: PathBuf::from(lossy(&m.mount_point, 4096)),
+        device: lossy(&m.source, 4096),
+        filesystem: lossy(m.fstype, 64),
+        kind,
+        read_only: is_ro(m.options),
+        removable,
+        network,
+        dev: m.device.to_vec(),
+        options: lossy(m.options, 4096),
+    })
 }
 
 /// Whether a `/proc/diskstats` name is a whole physical disk: listed in
@@ -317,6 +360,53 @@ pub(crate) fn io_counters(root: &Root) -> Result<Vec<(String, DiskRaw)>> {
 #[cfg(test)]
 mod tests {
     use super::{super::fixtures, *};
+
+    #[test]
+    fn test_linux_disk_of_answers_past_the_list_budget() {
+        // A node with more mounts than `disk::list` accepts still answers for
+        // one path, and matches whole path components.
+        let dir = std::env::temp_dir().join(format!("sys-lib-mounts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("proc/self")).unwrap();
+        let mut table = String::from("1 0 8:1 / / rw - ext4 /dev/sda1 rw\n");
+        for i in 0..5000 {
+            table.push_str(&format!("{} 1 0:{i} / /m/{i} rw - tmpfs tmpfs rw\n", i + 2));
+        }
+        table.push_str("9000 1 8:17 / /data rw - xfs /dev/sdb1 rw\n");
+        std::fs::write(dir.join("proc/self/mountinfo"), table).unwrap();
+        let root = Root::at(&dir);
+        assert!(matches!(
+            mounts(&root, &ListOptions::default()),
+            Err(Error::TooLarge { .. })
+        ));
+        let m = holding(&root, Path::new("/data/db")).unwrap().unwrap();
+        assert_eq!(
+            (m.mount_point.as_path(), &*m.filesystem),
+            (Path::new("/data"), "xfs")
+        );
+        let m = holding(&root, Path::new("/database")).unwrap().unwrap();
+        assert_eq!(m.mount_point, Path::new("/"));
+        let m = holding(&root, Path::new("/m/12/x")).unwrap().unwrap();
+        assert_eq!(m.mount_point, Path::new("/m/12"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_linux_disk_of_long_mount_line_is_not_skipped() {
+        // A mountinfo line longer than the 8 KiB line buffer.
+        let dir = std::env::temp_dir().join(format!("sys-lib-longmount-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("proc/self")).unwrap();
+        // Each space in a mount point is written as `\040`.
+        let deep = format!("/{}", r"a\040b".repeat(2000));
+        let table =
+            format!("1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 0:50 / {deep} rw - tmpfs tmpfs rw\n");
+        std::fs::write(dir.join("proc/self/mountinfo"), table).unwrap();
+        let want = format!("/{}/f", "a b".repeat(2000));
+        let m = holding(&Root::at(&dir), Path::new(&want)).unwrap().unwrap();
+        assert_eq!(&*m.filesystem, "tmpfs");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_linux_disk_mounts_skip_pseudo_network_and_duplicates() {
